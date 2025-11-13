@@ -137,7 +137,7 @@ for k = 1:nWrite
     EEG.event(idx0(k)).trial_num = Ts.(trialCol)(k);
 end
 
-    EEG = save_eeg_set(EEG, save_path2, [sub(subi,:) '_26ByBiosemi.set'], [strtrim(sub(subi,:)) '_filter']);
+    save_eeg_set(EEG, save_path2, [sub(subi,:) '_26ByBiosemi.set'], [strtrim(sub(subi,:)) '_filter']);
 
 %% ======================
 % Stage 2: ICA (Optional)
@@ -223,7 +223,7 @@ if doICA
     EEG = pop_runica(EEG, 'icatype', 'runica', 'extended', 1, 'pca', rnk, 'interrupt', 'on');
 
     % ---- Save ICA dataset to ica/ ----
-    EEG = save_eeg_set(EEG, [P.ICA filesep], [sub(subi,:) '_26ByBiosemi.set'], [strtrim(sub(subi,:)) '_ica']);
+    save_eeg_set(EEG, [P.ICA filesep], [sub(subi,:) '_26ByBiosemi.set'], [strtrim(sub(subi,:)) '_ica']);
 end
 
 %% ================================================
@@ -262,7 +262,7 @@ if doPost
     EEG = save_eeg_set(EEG, [P.REFILTER_30 filesep], file_name, [strtrim(sub(subi,:)) '_refilter30']);
 
     EEG = pop_reref(EEG, []);
-    EEG = save_eeg_set(EEG, [P.REREFER filesep], file_name, [strtrim(sub(subi,:)) '_reref']);
+    save_eeg_set(EEG, [P.REREFER filesep], file_name, [strtrim(sub(subi,:)) '_reref']);
 end
 
 end
