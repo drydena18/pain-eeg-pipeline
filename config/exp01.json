@@ -1,0 +1,69 @@
+{
+  "experiment_id": "26ByBiosemi",
+  "description": "26ByBiosemi: Citation - ",
+
+  "paths": {
+    "raw_dir": "/path/to/raw/",
+    "preproc_dir": "/path/to/preproc/",
+    "figures_dir": "/path/to/preproc/figures/",
+    "logs_dir": "/path/to/logs/"
+  },
+
+  "data": {
+    "file_extension": ".set",
+    "sampling_rate": SAMPLE_RATE_HZ,
+    "channel_locations": "/path/to/cap_layout.elp/",
+    "cap_type": "32",
+
+    "event_markers": {
+      "pain_stimulus": ["condition 54"],
+      "optional_secondary_markers": "",
+    }
+  },
+
+  "preprocessing": {
+    "line_noise_removal": {
+      "apply_notch": false,
+      "lowpass_alternative": true,
+      "lowpass_cutoff": 40
+    },
+
+    "filters": {
+      "highpass": 0.5,
+      "lowpass": 40,
+      "filter_order": 2,
+      "apply_fir": true
+    },
+
+    "epoching": {
+      "apply_epoching": true,
+      "event_code": "pain_stimulus",
+      "tmin": -1.0,
+      "tmax": 2.0,
+      "baseline": [-0.5, 0]
+    },
+
+    "bad_channel_detection": {
+      "auto_detect": true,
+      "z-threshold": 4.0,
+      "interpolate_before_ica": true
+    },
+
+    "reference": {
+      "reference_type": "average",
+    },
+
+    "ica": {
+      "run_ica": true,
+      "method": "extended_infomax",
+      "reject_by_iclabel": true,
+      "iclabel_threshold": 0.8
+    }
+  },
+
+  "export": {
+    "save_cleaned_epochs": true,
+    "save_continuous_cleaned": true,
+    "output_format": "set"
+  }
+} 
