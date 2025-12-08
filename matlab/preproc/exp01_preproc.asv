@@ -1,0 +1,15 @@
+function exp01_preproc(only_sub, doICA, doPost, interactiveClean)
+% EXP01_PREPROC Wrapper for the 26ByBiosemi experiment (exp01)
+%
+% exp01_preproc(sonly_sub, doICA, doPost, interactiveClean)
+%
+% only_sub : 'all' deault, or specific ID (e.g., 'sub-01')
+% doICA : true/false (default: false)
+% doPost: true/false (default: false)
+% interactiveClean : true/false (default: false)
+%
+% This calls the generic preproc_default() with experiment specific
+% identifiers and configuration
+
+% Set default values for optional parameters
+    if nargin

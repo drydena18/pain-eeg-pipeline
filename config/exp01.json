@@ -1,6 +1,6 @@
 {
   "experiment_id": "26ByBiosemi",
-  "description": "26ByBiosemi: Citation - ",
+  "description": "26ByBiosemi: Citation - Zhao Xiangyue, Zhou Jingyao, Zhang Libo, Duan Haoqing, Wei Shiyu, Bi Yanzhi, and Hu Li (2024). 26 By Biosemi. OpenNeuro. [Dataset] doi: doi:10.18112/openneuro.ds005284.v1.0.0",
 
   "paths": {
     "raw_dir": "/path/to/raw/",
@@ -11,13 +11,13 @@
 
   "data": {
     "file_extension": ".set",
-    "sampling_rate": SAMPLE_RATE_HZ,
+    "sampling_rate": 1000,
     "channel_locations": "/path/to/cap_layout.elp/",
     "cap_type": "32",
 
     "event_markers": {
       "pain_stimulus": ["condition 54"],
-      "optional_secondary_markers": "",
+      "optional_secondary_markers": ""
     }
   },
 

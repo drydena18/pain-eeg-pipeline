@@ -1,0 +1,58 @@
+function preproc_default(exp_id, cfg_file, only_sub, doICA, doPost, interactiveClean)
+% PREPROC_DEFAULT High-level wrapper for an EEG experiment
+%
+% preproc_default(exp_id, cfg_file, only_sub, doICA, doPost,
+% interactiveClean)
+%
+% exp_id : e.g., '26ByBiosemi'
+% cfg_file : config JSON filename. e.g., 'exp01.json'
+% only_sub : 'all'  or a specific BIDS subject ID. e.g., 'sub-01'
+% doICA, doPost, interactiveClean : logical flags passed to preproc_core
+%
+% This function:
+% - Loads paths (config_paths)
+% - Loads JSON config (load_cfg)
+% - Reads participants.tsv
+% - Reads single-trial CSV
+% - Loops over subject(s) and calls preproc_core()
+
+    if nargin < 3 || isempty(only_sub), only_sub = 'all'; end
+    if nargin < 4 || isempty(doICA), doICA = false; end
+    if nargin < 5 || isempty(doPost), doPost = false; end
+    if nargin < 6 || isempty(interactiveClean), interactiveClean = doICA; end
+
+    clearvars -except exp_id cfg_file only_sub doICA doPost interactiveClean;
+    clc; eeglab;
+
+    % --- Paths & Config ---
+    P = config_paths(exp_id);
+    cfg = load_cfg(fullfile(P.PROJ_ROOT, 'config', cfg_file));
+
+    % --- Participants Table ---
+    behav_data = tdfread(P.PARTICPANTS_TSV);
+    sub_char = behav_data.participant_id;
+    sub_names = strtrim(cellstr(sub_char));
+
+    % Resolve within subjects to run
+    if strcmpi(only_sub, 'all')
+        idx = 1:numel(sub_names);
+    else
+        idx = find(strcmpi(sub_names, only_sub), 1);
+        if isempty(idx)
+            error('Participant %s not found in %s', only_sub, P.PARTICIPANTS_TSV);
+        end
+    end
+
+    % --- Single-trial CSV (laser power, rating, etc.) ---
+    infoT = readtable(P.CSV_SINGLETRIAL, FileType = 'text');
+    vnames = lower(infoT.Properties.VariableNames);
+
+    idCol = infoT.Properties.VariableNames{ find(vnames == 'id', 1, 'first') };
+    trialCol = infoT.Properties.VariableNames{ find(contains(vnames, 'trial') & contains(vnames, 'num'), 1, 'first') };
+    powerCol = infoT.Properties.VariableNames{ find(contains(vnames, 'laser') & contains(vnames, 'power'), 1, 'first') };
+    ratingCol = infoT.Properties.VariableNames{ find(contains(vnames, 'pain') & contains(vnames, 'rat'), 1, 'first') };
+
+    % --- Loop over subjects ---
+    for k = idx
+        subjid = sub_names{k};
+        
