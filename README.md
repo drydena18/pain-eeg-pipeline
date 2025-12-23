@@ -226,7 +226,7 @@ Please open an issue or submit a pull request via GitHub.
 
 ## **Contact**
 
-**Dryden Arseneau**
-Email: darsenea@uwo.ca
-Website: drydena18.github.io 
+**Dryden Arseneau**  
+Email: darsenea@uwo.ca  
+Website: drydena18.github.io   
 LinkedIn: https://www.linkedin.com/in/dryden-arseneau/**
