@@ -1,25 +1,51 @@
-function exp01_preproc(only_sub, doICA, doPost, interactiveClean)
-% EXP01_PREPROC Wrapper for the 26ByBiosemi experiment (exp01)
+function exp01_preproc(subjects_override)
+% EXP01_PREPROC Entrypoint for preprocessing experiment 01.
+% V 1.0.2
 %
-% exp01_preproc(sonly_sub, doICA, doPost, interactiveClean)
-%
-% only_sub : 'all' deault, or specific ID (e.g., 'sub-01')
-% doICA : true/false (default: false)
-% doPost: true/false (default: false)
-% interactiveClean : true/false (default: same as doICA)
-%
-% This calls the generic preproc_default() with experiment specific
-% identifiers and configuration
+% Call chain:
+%   exp01_preproc.m -> preproc_default.m -> preproc_core.m
 
-% Set default values for optional parameters
-    if nargin < 1 || isempty(only_sub), only_sub = 'all'; end
-    if nargin < 2 || isempty(doICA), doICA = false; end
-    if nargin < 3 || isempty(doPost), doPost = false; end
-    if nargin < 4 || isempty(interactiveClean), interactiveClean = doICA; end
+exp_id = "exp01";
 
-    % Experiment ID is used by config_paths (BIDS folder name)
-    exp_id = '26ByBiosemi';
-    cfg_file = 'exp01.json';
+% Paths
+P = config_paths(exp_id);
 
-    preproc_default(exp_id, cfg_file, only_sub, doICA, doPost, interactiveClean);
+% ----------------------------------
+% EEGLAB init (EDIT ON EACH MACHINE)
+% ----------------------------------
+% If EEGLAB is already on the path, this will just no-op
+try
+    if exist('eeglab', 'file') ~= 2
+        % EDIT if needed
+        %addpath('/path/to/eeglab');
+    end
+    if exist('eeglab', 'file') ~= 2
+        error('EEGLAB not on path. Add EEGLAB folder to MATLAB path.');
+    end
+    eeglab nogui;
+catch ME
+    error('exp01_preproc:EEGLABInitFail', 'EEGLAB init failed: %s', ME.message);
+end
+
+% ------------------------
+% Load experiment JSON cfg
+% ------------------------
+cfg_path = fullfile(P.RESOURCE, sprintf('%s.json', exp_id));
+if ~exist(cfg_path, 'file')
+    error('exp01_preproc:MissingJSON', 'Config JSON not found: %s', cfg_path);
+end
+
+cfg = jsondecode(fileread(cfg_path));
+disp(cfg.exp.id);
+disp(cfg.exp.raw.pattern);
+
+if nargin >= 1 && ~isempty(subjects_override)
+    cfg.exp.subjects = subjects_override(:);
+end
+
+% ---------------------------------
+% Run default normalizer + pipeline
+% ---------------------------------
+preproc_default(exp_id, P, cfg);
+
 end
