@@ -1,446 +1,1301 @@
-function preproc_core(P, cfg, subjid, infoT, idCol, trialCol, powerCol, ratingCol, ...
-    doICA, doPost, interactiveClean)
-% PREPROC_CORE Single-subject preprocessing for an EEG experiment
+function preproc_core(P, cfg)
+% PREPROC_CORE Execute preprocessing according to cfg (from JSON)
+% V 1.2.0
 %
-% P : struct from config_paths(exp_id)
-% cfg : struct from load_cfg(expXX.json)
-% subjid : e.g., 'sub-01'
+% Pipeline:
+%   import -> filter -> notch -> resample -> reref -> initrej (manual
+%   interp) -> ica (trained on optional clean copy) -> iclabel (suggest) ->
+%   manual ic reject -> epoch -> baseline
 %
-% infoT, idCol, trialCol, powerCol, ratingCol : single-trial CSV info
-% doICA, doPost, interactiveClean : logical flags
+% Naming:
+%   base: 26BB_64_001.set (conceptual; not saved)
+%   storage saves: use cumulative tags, e.g.,
+%   26BB_64_001_fir_notch60_rs500_reref.set
+%
+% Requirements:
+%   - EEGLAB on path
+%   - BIOSIG plugin for pop_biosig (for .eeg)
+%   - ICLabel plugin if cfg.preproc.ica.iclabel.enabled = true
 
-    if nargin < 9 || isempty(doICA), doICA = false; end
-    if nargin < 10 || isempty(doPost), doPost = false; end
-    if nargin < 11 || isempty(interactiveClean), interactiveClean = doICA; end
+subs = cfg.exp.subjects(:);
 
-    %% =========================================================
-    % Stage 1: Import -> Relabel -> Filter -> Epoch -> CSV Merge
-    % ==========================================================
+for i = 1:numel(subs)
+    subjid = subs(i);
+    tags = {}; % cumulative tags for this subject
 
-    % Build BIDS input path & filename
-    input_path_1 = fullfile(P.BIDS, subjid, 'eeg');
-    bdf_file = fullfile(input_path_1, ...
-        sprintf('%s_task-%s_eeg.bdf', subjid, cfg.experiment_id));
-
-    fprintf('\n[Stage 1] Loading BDF for %s: \n %s\n', subjid, bdf_file);
-    EEG = pop_biosig(bdf_file);
-
-    % Select 64 Biosemi channels (A1-32 B1-32)
-    EEG = pop_select( EEG, 'channel', ...
-        {'A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8', 'A9', 'A10', 'A11', 'A12', 'A13', 'A14', 'A15', 'A16', ...
-        'A17', 'A18', 'A19', 'A20', 'A21', 'A22', 'A23', 'A24', 'A25', 'A26', 'A27', 'A28', 'A29', 'A30', 'A31', 'A32', ...
-        'B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9', 'B10', 'B11', 'B12', 'B13', 'B14', 'B15', 'B16', ...
-        'B17', 'B18', 'B19', 'B20', 'B21', 'B22', 'B23', 'B24', 'B25', 'B26', 'B27', 'B28', 'B29', 'B30', 'B31', 'B32'});
-
-    % Channel locations / relabel 
-    EEG = pop_chanedit(EEG, ...
-        'changefield', {1, 'labels' 'FP1'}, 'changefield', {2, 'labels' 'AF7'}, ...
-        'changefield', {3, 'labels' 'AF3'}, 'changefield', {4, 'labels' 'F1'}, ...
-        'changefield', {5, 'labels' 'F3'}, 'changefield', {6, 'labels' 'F5'}, ...
-        'changefield', {7, 'labels' 'F7'}, 'changefield', {8, 'labels' 'FT7'}, ...
-        'changefield', {9, 'labels' 'FC5'}, 'changefield', {10, 'labels' 'FC3'}, ...
-        'changefield', {11, 'labels' 'FC1'}, 'changefield', {12, 'labels' 'C1'}, ...
-        'changefield', {13, 'labels' 'C3'}, 'changefield', {14, 'labels' 'C5'}, ...
-        'changefield', {15, 'labels' 'T7'}, 'changefield', {16, 'labels' 'C5'}, ...
-        'changefield', {17, 'labels' 'CP5'}, 'changefield', {18, 'labels' 'CP3'}, ...
-        'changefield', {19, 'labels' 'CP1'}, 'changefield', {20, 'labels' 'P1'}, ...
-        'changefield', {21, 'labels' 'P3'}, 'changefield', {22, 'labels' 'P5'}, ...
-        'changefield', {23, 'labels' 'P7'}, 'changefield', {24, 'labels' 'P9'}, ...
-        'changefield', {25, 'labels' 'PO7'}, 'changefield', {26, 'labels' 'PO3'}, ...
-        'changefield', {27, 'labels' 'O1'}, 'changefield', {28, 'labels' 'Lz'}, ...
-        'changefield', {29, 'labels' 'Oz'}, 'changefield', {30, 'labels' 'POz'}, ...
-        'changefield', {31, 'labels' 'Pz'}, 'changefield', {32, 'labels' 'CPz'}, ...
-        'changefield', {33, 'labels' 'FPz'}, 'changefield', {34, 'labels' 'FP2'}, ...
-        'changefield', {35, 'labels' 'AF8'}, 'changefield', {36, 'labels' 'AF4'}, ...
-        'changefield', {37, 'labels' 'AFz'}, 'changefield', {38, 'labels' 'Fz'}, ...
-        'changefield', {39, 'labels' 'F2'}, 'changefield', {40, 'labels' 'F4'}, ...
-        'changefield', {41, 'labels' 'F6'}, 'changefield', {42, 'labels' 'F8'}, ...
-        'changefield', {43, 'labels' 'FT8'}, 'changefield', {44, 'labels' 'FC6'}, ...
-        'changefield', {45, 'labels' 'FC4'}, 'changefield', {46, 'labels' 'FC2'}, ...
-        'changefield', {47, 'labels' 'FCz'}, 'changefield', {48, 'labels' 'Cz'}, ...
-        'changefield', {49, 'labels' 'C2'}, 'changefield', {50, 'labels' 'C4'}, ...
-        'changefield', {51, 'labels' 'C6'}, 'changefield', {52, 'labels' 'T8'}, ...
-        'changefield', {53, 'labels' 'TP8'}, 'changefield', {54, 'labels' 'CP6'}, ...
-        'changefield', {55, 'labels' 'CP4'}, 'changefield', {56, 'labels' 'CP2'}, ...
-        'changefield', {57, 'labels' 'P2'}, 'changefield', {58, 'labels' 'P4'}, ...
-        'changefield', {59, 'labels' 'P6'}, 'changefield', {60, 'labels' 'P8'}, ...
-        'changefield', {61, 'labels' 'P10'}, 'changefield', {62, 'labels' 'PO8'}, ...
-        'changefield', {63, 'labels' 'PO4'}, 'changefield', {64, 'labels' 'O2'}, ...
-        'lookup', P.ELP_FILE);
-
-    % Base filename derived from subject + capsize
-    cap_n = EEG.nbchan;
-    cap_str = sprintf('%d', cap_n);
-    base_name = sprintf('%s_%s', subjid, cap_str);
-
-    % I/O Paths
-    sess_path = [P.SESSION_MERGED filesep];
-    filter_path = [P.FILTER filesep];
-    outpath = [P.OUTPATH filesep];
-
-    % Save merged (post-chanlocs, pre-filters)
-    EEG = save_eeg_set(EEG, sess_path, [base_name '_merged.set'], [subjid '_merged']);
-
-    % Re-reference via interpolation
-    EEG = rereference_interp(EEG, 1);
-    com = sprintf('Reference data');
-    EEG = eeg_hist(EEG, com);
-    pop_saveh(EEG.history, 'EEG_history.txt', outpath);
-
-    % Resample & band-pass filters (config-driven)
-    fprinmtf('[Stage 1] Resampling to %d Hz...\n', cfg.filters.resample_Hz);
-    EEG = pop_resample(EEG, cfg.filters.resample_Hz);
-
-    bandpass = [cfg.filters.highpass cfg.filters.lowpass];
-
-    fprintf('[Stage 1] Low-pass filtering below %g Hz...\n', bandpass(2));
-    EEG = pop_eegfilt(EEG, bandpass(2), 0, [], 0, 0, 0, 'fir1', 0);
-
-    fprintf('[Stage 1] High-pass filtering above %g Hz...\n', bandpass(1));
-    EEG = pop_eegfilt(EEG, 0, bandpass(1), 0, [], 0, 0, 0, 'fir1', 0);
-
-    % Interactive bad-channel interpolation
-    iter = 1;
-    EEG.filename = sprintf('%s_%s.set', EEG.filename(1:end-4), 'initrej');
-    pop_eegplot(EEG, 1, 1, 1);
-
-    varchan = squeeze(var(EEG.data, [], 2));
-    figure(30); bar(varchan);
-    meanvarchan = mean(varchan);
-    stdvarchan = std(varchan);
-    threshdelchan = meanvarchan - (stdvarchan * 2);
-    delchan = find(varchan >= threshdelchan);
-    EEG.chanInterp = delchan;
-
-    selchan = input('Channels to interpolate (labels, space- or comma-separated): ', 's');
-    selchan = regexp(selchan, '(\S+)', 'tokens');
-    selchan = cellfun(@(x) x{1}, selchan, 'UniformOutput', false);
-    chnloc = find(ismember({EEG.chanlocs.labels}, selchan);
-    if ~isempty(chnloc)
-        EEG = eeg_interp(EEG, chnloc);
+    % ---------------------
+    % Logging (per subject)
+    % ---------------------
+    logPath = fullfile(P.STAGE.LOGS, sprintf('sub-%03d_preproc.log', subjid));
+    logf = fopen(logPath, 'w');
+    if logf < 0
+        warning('preproc_core:LogOpenFail', 'Could not open log file: %s', logPath);
+        logf = 1; % fallback to stdout
     end
-    interpchan{iter} = chnloc; %#ok<NASGU>
+    cleanupObj = onCleanup(@() safeClose(logf)); %#ok<NASGU>
 
-    ManIsn = input(['Are you finished manually inspecting your data? ' ...
-        'Press 1 to keep interpolating; Press 2 if you are finished. '], 's');
-    ManIsn = str2double(ManIsn);
+    logmsg(logf, '===== PREPROC START sub-%03d =====', subjid);
+    logmsg(logf, 'Experiment: %s', string(cfg.exp.id));
+    logmsg(logf, 'Out prefix: %s', string(cfg.exp.out_prefix));
 
-    while ManIsm == 1
-        iter = iter + 1;
-        fprintf('Continue analysis...\n');
-        varchan = squeeze(var(EEG.data, [], 2));
-        figure(30); bar(varchan);
-        meanvarchan = mean(varchan);
-        stdvarchan = std(varchan);
-        threshdelchan = meanvarchan - (stdvarchan * 2);
-        delchan = find(varchan >= threshdelchan);
-        EEG.chanInterp = delchan;
+    % ----------------------
+    % Resolve raw input file
+    % ----------------------
+    rawPath = resolve_raw_file(P, cfg, subjid);
+    if isempty(rawPath) || ~exist(rawPath, 'file')
+        logmsg(logf, '[WARN] Raw file not found for sub-%03d. Skipping.', subjid);
+        continue;
+    end
+    logmsg(logf, 'Raw file: %s', rawPath);
 
-        selchan = input('Channels to interpolate (labels, space- or comma-separated): ', 's');
-        if isempty(selchan)
-            fprintf('No channels selected for interpolation.\n');
+    % ------------------------------------------------
+    % Inport raw (.eeg) -> EEG struct (no saving here)
+    % ------------------------------------------------
+    EEG = pop_biosig(rawPath);
+    EEG = eeg_checkset(EEG);
+
+    EEG = normalize_chan_labels(EEG);
+
+    % Apply experiment-specific montage (e.g., Biosemi A/B -> 10-20)
+    if isfield(cfg.exp, 'montage') && isfield(cfg.exp.montage, 'enabled') && cfg.exp.montage.enabled
+        EEG = apply_montage_biosemi_from_csv(P, cfg, EEG, logf, subjid);
+        EEG = eeg_checkset(EEG);
+    end
+
+    % -------------------------------------
+    % Channel locations (.elp) if requested
+    % -------------------------------------
+    if isfield(cfg.exp, 'channel_locs') && isfield(cfg.exp.channel_locs, 'use_elp') && cfg.exp.channel_locs.use_elp
+        if isfield(P, 'CORE') && isfield(P.CORE, 'ELP_FILE') && exist(P.CORE.ELP_FILE, 'file')
+            try
+                EEG = pop_chanedit(EEG, 'lookup', P.CORE.ELP_FILE);
+                EEG = eeg_checkset(EEG);
+                logmsg(logf, 'Loaded chanlocs from ELP: %s', P.CORE.ELP_FILE);
+            catch ME
+                logmsg(logf, '[WARN] Failed to load chanlocs: %s', ME.message);
+            end
         else
-            selchan = regexp(selchan, '(\S+)', 'tokens');
-            selchan = cellfun(@(x) x{1}, selchan, 'UniformOutput', false);
-            chnloc = find(ismember({EEG.chanlocs.labels}, selchan));
-            EEG = eeg_interp(EEG, chnloc);
-            interpchan{iter} = chnloc; %#ok<NASGU>
+            logmsg(logf, '[WARN] ELP file missing: %s', P.CORE.ELP_FILE);
         end
-
-        ManIsn = input(['Are you finished manually inspecting your data? ' ...
-            'Press 1 to keep interpolating; Press 2 if you are finished. '], 's');
-        ManIsn = str2double(ManIsn);
     end
 
-    % Epoch and Baseline (config-driven)
-    event_marker = cfg.events.stim_codes;
-    epoch_win = [cfg.epoching.tmin cfg.epoching.tmax];
-    base_sec = cfg.epoching.baseline;
-    base_ms = base_sec * 1000;
+    % Deterministic seed per subject (repro ICA runs)
+    rng(double(subjid), 'twister');
+    logmsg(logf, '[RNG] rng(%d, twister)', subjid);
 
-    EEG = pop_epoch(EEG, event_marker, epoch_win, ...
-        'newname', 'Merged datasets epochs', ...
-        'epochinfo', 'yes');
-    
-    EEG = pop_rmbase(EEG, base_ms);
+    % --------------
+    % FILTER (HP/LP)
+    % --------------
+    if cfg.preproc.filter.enabled
+        nextTag = char(string(cfg.preproc.filter.tag));
+        [EEG, tags, didLoad] = maybe_load_stage(P.STAGE.FILTER, P, subjid, tags, nextTag, logf);
+        if ~didLoad
+            hp = cfg.preproc.filter.highpass_hz;
+            lp = cfg.preproc.filter.lowpass_hz;
+            logmsg(logf, '[FILTER] %s hp = %.3f lp = %.3f', string(cfg.preproc.filter.type), hp, lp);
 
-    % Add rating and laser power from CSV
-    csvIDs = string(infoT.(idCol));
-    candIDs = unique([ string(subjid), ...
-        erase(string(subjid), 'sub-'), ...
-        extractAfter(string(subjid), 'sub-') ]);
+            EEG = pop_eegfiltnew(EEG, hp, lp);
+            EEG = eeg_checkset(EEG);
 
-    if isnumeric(infoT.(idCol))
-        numID = str2double(extractAfter(string(subjid), 'sub-'));
-        mask = infoT.(idCol) == numID;
-    else
-        mask = ismember(lower(strtrim(csvIDs)), lower(strtrim(candIDs)));
+            tags{end+1} = nextTag;
+            save_stage(P.STAGE.FILTER, P, subjid, tags, EEG, logf);
+        end
     end
 
-    Ts = infoT(mask, :);
+    % ----------------------------
+    % NOTCH (bandstop via revfilt)
+    % ----------------------------
+    if cfg.preproc.notch.enabled
+        nextTag = char(string(cfg.preproc.notch.tag));
+        [EEG, tags, didLoad] = maybe_load_stage(P.STAGE.FILTER, P, subjid, tags, nextTag, logf);
+        if ~didLoad
+            f0 = cfg.preproc.notch.freq_hz;
+            bw = cfg.preproc.notch.bw_hz;
+            logmsg(logf, '[NOTCH] f0 = %g bw = %g', f0, bw);
 
-    if ~issorted(Ts.(trialCol))
-        Ts = sortrows(Ts, trialCol, 'ascend');
+            EEG = pop_eegfiltnew(EEG, f0-bw, f0+bw, [], 1); % revfilt = 1 => bandstop
+            EEG = eeg_checkset(EEG);
+
+            tags{end+1} = nextTag;
+            save_stage(P.STAGE.FILTER, P, subjid, tags, EEG, logf);
+        end
     end
 
-    nEp = numel(EEG.epoch);
-    idx0 = zeros(1, nEp);
-    for k = 1:nEp
-        elats = EEG.epoch(k).eventlatency; if iscell(elats), elats = cell2mat(elats); end
-        einds = EEG.epoch(k).event; if iscell(einds), einds = cell2mat(einds); end
-        zpos = find(abs(elats) < 1e-6, 1, 'first'); if isempty(zpos), zpos = 1; end
-        idx0(k) = einds(zpos);
+    % --------
+    % RESAMPLE
+    % --------
+    if cfg.preproc.resample.enabled && ~isempty(cfg.preproc.resample.target_hz)
+        nextTag = char(string(cfg.preproc.resample.tag));
+        [EEG, tags, didLoad] = maybe_load_stage(P.STAGE.RESAMPLE, P, subjid, tags, nextTag, logf);
+        if ~didLoad
+            targetFs = cfg.preproc.resample.target_hz;
+            if EEG.srate ~= targetFs
+                logmsg(logf, '[RESAMPLE] %g -> %g Hz', EEG.srate, targetFs);
+                EEG = pop_resample(EEG, targetFs);
+                EEG = eeg_checkset(EEG);
+
+                tags{end+1} = nextTag;
+                save_stage(P.STAGE.RESAMPLE, P, subjid, tags, EEG, logf);
+            else
+                logmsg(logf, '[RESAMPLE] Already at %g Hz (skipping).', targetFs);
+            end
+        end
     end
 
-    if height(Ts) ~= nEp
-        warning('CSV trials (%d) =/= epochs (%d) for %s. Assigning min.', height(Ts), nEp, subjid);
+    % -----------
+    % REREFERENCE
+    % -----------
+    if cfg.preproc.reref.enabled
+        nextTag = char(string(cfg.preproc.reref.tag));
+        [EEG, tags, didLoad] = maybe_load_stage(P.STAGE.REREF, P, subjid, tags, nextTag, logf);
+        if ~didLoad
+            logmsg(logf, '[REREF] mode = %s', string(cfg.preproc.reref.mode));
+
+            mode = lower(string(cfg.preproc.reref.mode));
+            if mode == "average"
+                EEG = pop_reref(EEG, []);
+            elseif mode == "channels"
+                chans = cfg.preproc.reref.channels;
+                if isempty(chans)
+                    error('reref.mode = "channels" but cfg.preproc.reref.channels is empty.');
+                end
+                EEG = pop_reref(EEG, chans);
+            else
+                error('Unsupported reref.mode: %s', mode);
+            end
+            EEG = eeg_checkset(EEG);
+
+            tags{end+1} = nextTag;
+            save_stage(P.STAGE.REREF, P, subjid, tags, EEG, logf);
+        end
     end
-    nWrite = min(height(Ts).nEp);
 
-    for k = 1:nWrite
-        EEG.event(idx0(k)).laser_power = Ts.(powerCol)(k);
-        EEG.event(idx0(k)).rating = Ts.(ratingCol)(k);
-        EEG.event(idx0(k)).trial_num = Ts.(trialCol)(k);
-    end
+    % ------------------------------------------------
+    % INITREJ (manual interp + suggested bad channels + histograms + PSD metrics)
+    % ------------------------------------------------
+    if cfg.preproc.initrej.enabled
+        nextTag = char(string(cfg.preproc.initrej.tag));
+        [EEG, tags, didLoad] = maybe_load_stage(P.STAGE.INITREJ, P, subjid, tags, nextTag, logf);
+        if ~didLoad
+            logmsg(logf, '[INITREJ] Suggesting bad channels + manual spherical interpolation.');
 
-    % Save preprocessed epochs to FILTER dir
-    preproc_file = [base_name '_preproc.set'];
-    EEG = save_eeg_set(EEG, filter_path, preproc_file, [subjid '_preproc']);
+            % 1) Suggest bad chans (prob + kurtosis)
+            [badChans, reasons, metrics] = suggest_bad_channels(EEG);
 
-    %% ======================
-    % Stage 2: ICA (Optional)
-    % =======================
+            if ~isfield(EEG, 'etc') || isempty(EEG.etc)
+                EEG.etc = struct();
+            end
+            EEG.etc.initrej = struct();
+            EEG.etc.initrej.suggested_badchans = badChans;
+            EEG.etc.initrej.reasons = reasons;
+            EEG.etc.initrej.metrics = metrics;
 
-    if doICA
-        fprintf('\n[Stage 2] ICA for %s\n', subjid);
-
-        file_name = preproc_file;
-        EEG = pop_loadset('filename', file_name, 'filepath', filter_path);
-
-        log = struct();
-        log.sub = subjid;
-        log.when = datetime('now');
-        log.stage = 'pre-ICA';
-
-        if interactiveClean
-            fprintf('\n*** Interactive cleaning for %s ***\n', subjid);
-            fprintf('1) A viewer will open. Mark bad epochs, then close it.\n');
-            fprintf('2) You will be prompted to list bad channels to remove (labels, comma separated).\n');
-            fprintf('   These will be interpolated back AFTER ICA in Stage 3.\n');
-
-            % View data and wait for closure
-            pop_eegplot(EEG, 1, 1, 1);
-            fig = findall(0, 'type', 'figure', 'tag', 'EEGPLOT');
-            if isempty(fig), pause(0.1); fig = findall(0, 'type', 'figure', 'tag', 'EEGPLOT'); end
-            if ~isempty(fig), waitfor(fig(1)); else, warning('EEGPLOT window not detected, continuing.'); end
-
-            % Apply manual epoch rejections
-            EEG = eeg_rejsuperpose(EEG, 1, 1, 1, 1, 1, 1, 1, 1);
-            rejIdx = [];
-            if isfield(EEG.reject, 'rejmanual') && any(EEG.reject.rejmanual)
-                rejIdx = find(EEG.reject.rejmanual(:)');
-                EEG = pop_rejepoch(EEG, EEG.reject.rejmanual, 0);
+            % Channel PSD metrics + CSV + topoplots
+            try
+                chanPSD = compute_channel_psd_metrics(EEG);
+                EEG.etc.initrej.chan_psd = chanPSD;
+                write_channel_psd_csv(P, subjid, EEG, chanPSD);
+                save_chan_psd_topos(P, subjid, EEG, chanPSD);
+                logmsg(logf, '[INITREJ] Channel PSD metrics saved (CSV + topo is chanlocs).');
+            catch ME
+                logmsg(logf, '[WARN] Channel PSD metrics failed: %s', ME.message);
             end
 
-            log.rejected_epochs = rejIdx;
-            log.n_epochs_after = EEG.trials;
+            % 2) QC plots (hist/bar/topo/PSD) saved to logs
+            try
+                make_initrej_plots(P, subjid, EEG, metrics, badChans);
+                logmsg(logf, '[INITREJ] Saved QC plots to logs.\n');
+            catch ME
+                logmsg(logf, '[WARN] INITREJ plotting failed: %s', ME.message);
+            end
 
-            % Channels to remove before ICA
-            prompt = {'Bad channel labels to remove (comma-separated): '};
-            dlgtitle = 'Remove bad channels before ICA';
-            answer = inputdlg(prompt, dlgtitle, [1 80], {' '});
-            log.bad_channels_removed = {};
+            % 3) Print suggestions
+            if isempty(badChans)
+                logmsg(logf, '[INITREJ] No channels suggested.');
+            else
+                logmsg(logf, '[INITREJ] Suggested bad channels: %s', vec2str(badChans));
+                for k = 1:numel(badChans)
+                    ch = badChans(k);
+                    lbl = safe_chan_label(EEG, ch);
+                    logmsg(logf, '  - Ch %d (%s): %s', ch, lbl, reasons{k});
+                end
+            end
 
-            if ~isempty(answer)
-                raw = strtrim(answer{1});
-                if ~isempty(raw)
-                    parts = regexp(raw, '\s*, \s*', 'split');
-                    badLabels = strtrim(parts);
-                    allLabs = {EEG.chanlocs.labels};
-                    rmIdx = find(ismember(upper(allLabs), upper(badLabels)));
+            % 4) Manual decision: which to interp (default = none)
+            interpChans = prompt_channel_interp(EEG, badChans);
 
-                    if ~isempty(rmIdx)
-                        orig_chanlocs = EEG.chanlocs;
-                        log.bad_channels_removed = allLabs(rmIdx);
-                        if ~exist(P.LOGS, 'dir'), mkdir(P.LOGS); end
-                        save(fullfile(P.LOGS, ['badchans_' subjid '.mat']), ...
-                            'orig_chanlocs', 'badLabels');
-                        EEG = pop_select(EEG, 'nochannel', rmIdx);
-                    else
-                        warning('No matching bad channel labels found; nothing removed.');
+            if isempty(interpChans)
+                logmsg(logf, '[INITREJ] No channels interpolated (namual decision).');
+            else
+                logmsg(logf, '[INITREJ] Interpolating channels (spherical): %s', vec2str(interpChans));
+                EEG = pop_interp(EEG, interpChans, 'spherical');
+                EEG = eeg_checkset(EEG);
+
+                % Suggested but not interpolated (and why suggested)
+                notInterp = setdiff(badChans, interpChans);
+                if ~isempty(notInterp)
+                    logmsg(logf, '[INITREJ] Suggested but NOT interpolated: %s', vec2str(notInterp));
+                    for k = 1:numel(notInterp)
+                        ch = notInterp(k);
+                        idx = find(badChans == ch, 1);
+                        lbl = safe_chan_label(EEG, ch);
+                        if ~isempty(idx)
+                            logmsg(logf, '  - Ch %d (%s): %s', ch, lbl, reasons{idx});
+                        else
+                            logmsg(logf, '  - Ch %d (%s): (reason missing)', ch, lbl);
+                        end
                     end
                 end
             end
-        end
 
-        % Sanity
-        EEG = eeg_checkset(EEG);
-        if ~isa(EEG.data, 'double'), EEG.data = double(EEG.data); end
-
-        % Save cleaned (no interp yet) to no_ica/
-        EEG = save_eeg_set(EEG, [P.NO_ICA filesep], file_name, [subjid '_clean_nointerp']);
-
-        % Run ICA with PCA dimension
-        dat = reshape(EEG.data, EEG.nbchan, []); % channels x (time * trials)
-        try
-            rnk = rank(dat)
-        catch
-            rnk = min(size(dat, 1), size(dat, 2));
-        end
-        rnk = min(rnk, EEG.nbchan);
-        log.ica_rank_used = rnk;
-        lob.nbchan_before_ica = EEG.nbchan;
-        log.nsamples_total = size(dat, 2);
-
-        EEG = pop_runica(EEG, 'icatype', 'runica', 'extende', 1, ...
-            'pca', rnk, 'interrupt', 'on');
-
-        % ICLabel & Quick Reports
-        try
-            EEG = iclabel(EEG);
-            cls = EEG.etc.ic_classification.ICLabel;
-            log.iclabel_classes = cls.classes;
-            log.iclabel_probs = cls.classification;
-
-            outdir = fullfile(P.DERIV, 'ica_reports');
-            if ~exist(outdir, 'dir'), mkdir(outdir); end
-
-            EyeIdx = strcmpi(cls.classes, 'Eye');
-            MusIdx = strcmpi(cls.classes, ' Muscle');
-            p = cls.classification;
-            cand_eye = find(p(:, EyeIdx) > 0.90);
-            cand_mus = find(p(:, MusIdx) > 0.90);
-
-            if ~isempty(cand_eye)
-                f1 = figure('Visible', 'off');
-                pop_topoplot(EEG, 0, cand_eye, 'Eye ICs (p > .9)', 0, 'electrodes', 'off');
-                exportgraphics(f1, fullfile(outdir, [subjid '_eyeICs.png']), 'Resolution', '200');
-                close(f1);
-            end
-            if ~isempty(cand_mus)
-                f2 = figure('Visible', 'off');
-                pop_topoplot(EEG, 0, cand_mus, 'Muscle ICs (p > .9)', 0, 'electrodes', 'off');
-                exportgraphics(f2, fullfile(outdir, [subjid '_muscleICs.png']), 'Resolution', '200');
-            end
-        catch
-            warning('ICLabel not available; skipping auto labels/report.');
-            log.iclabel_classes = {};
-            log.iclabel_probs =[];
-        end
-
-        % Save ICA dataset to ICA/
-        EEG = save_eeg_set(EEG, [P.ICA filesep], file_name, [subjid '_ica']);
-
-        % Write Stage 2 log
-        if ~exist(P.LOGS, 'dir'), mkdir(P.LOGS); end
-        json_file = fullfile(P.LOGS, [subjid '_preproc_log_stage2.json']);
-        fid = fopen(json_file, 'w');
-        if fid == -1
-            error('Failed to open log file for writing: %s', json_file);
-        end
-        fprintf(fid, '%s', jsonencode(log));
-        fclose(fid);
-
-        summary = table(string(subjid), log.n_epochs_after, log.ica_rank_used, ...
-            log.nbchan_before_ica, ...
-            'VariableNames', {'sub', 'epochs_after', 'ica_rank', 'nbchan'});
-        summ_path = fullfile(P.LOGS, 'summary_stage2.csv');
-        if exist(summ_path, 'file')
-            writetable(summary, summ_path, 'WriteMode', 'append');
-        else
-            writetable(summary, summ_path);
+            tags{end+1} = nextTag;
+            save_stage(P.STAGE.INITREJ, P, subjid, tags, EEG, logf);
         end
     end
 
-    %% ================================================
-    % Stage 3: Refilter (30Hz) + Rereference (Optional)
-    % =================================================
 
-    if doPost
-        fprintf('\n[Stage 3] Post-ICA processing for %s\n', subjid);
+    % ------------------
+    % ICA
+    % ------------------
+    if cfg.preproc.ica.enabled
+        nextTag = char(string(cfg.preproc.ica.tag));
+        [EEG, tags, didLoad] = maybe_load_stage(P.STAGE.ICA, P, subjid, tags, nextTag, logf);
+        if ~didLoad
+            logmsg(logf, '[ICA] method = %s', char(string(cfg.preproc.ica.method)));
 
-        file_name = preproc_file;
+            % ICA training on clean copy (optional bad segment removal)
+            [EEGtrain, segInfo] = make_ica_training_copy(EEG, cfg, logf);
 
-        % Prefer dataset AFTER manual IC rejection; else fall back to ICA
-        src_post = [P.AFTER_ICA filesep];
-        if ~exist(fullfile(src_post, file_name), 'file')
-            warning('No file in after_ica/. Falling back to ica/ for post-ICA on %s.', subjid);
-            src_post = [P.ICA filesep];
-        end
+            EEGtrain = pop_runica(EEGtrain, 'icatype', char(string(cfg.preproc.ica.method)));
+            EEGtrain = eeg_checkset(EEGtrain);
 
-        EEG = pop_loadset('filename', file_name, 'filepath', src_post);
+            % Copy ICA solution back to full EEG
+            EEG.icaweights  = EEGtrain.icaweights;
+            EEG.icasphere   = EEGtrain.icasphere;
+            EEG.icawinv     = EEGtrain.icawinv;
+            EEG.icachansind = EEGtrain.icachansind;
+            EEG = eeg_checkset(EEG, 'ica');
 
-        log = struct();
-        log.sub = subjid;
-        log.when = datetime('now');
-        log.stage = 'post-ICA';
+            logmsg(logf, '[ICA] Trained on %s. badseg_removed = %d intervals = %d pct = %.2f', ...
+                tern(segInfo.removed, 'CLEAN-COPY', 'FULL'), segInfo.removed, segInfo.n_intervals, segInfo.pct_time);
 
-        % If removed channels earlier, interpolate them back now
-        badfile = fullfile(P.LOGS, ['badchans_' subjid '.mat']);
-        if exist(badfile, 'file')
-            S = load(badfile);
-            if isfield(S, 'orig_chanlocs') && ~isempty(S.orig_chanlocs)
-                EEG = pop_interp(EEG, S.orig_chanlocs, 'spherical')l;
-                lag.bad_channels_interpolated = S.badLabels(:)';
+            tags{end+1} = nextTag;
+
+            % -------------------------------------------
+            % ICLabel: suggest + manual (no auto removal)
+            % -------------------------------------------
+            if isfield(cfg.preproc.ica, 'iclabel') && isfield(cfg.preproc.ica.iclabel, 'enabled') && cfg.preproc.ica.iclabel.enabled
+                try
+                    EEG = iclabel(EEG);
+                    EEG = eeg_checkset(EEG);
+
+                    thr = struct();
+                    if isfield(cfg.preproc.ica.iclabel, 'thresholds')
+                        thr = cfg.preproc.ica.iclabel.thresholds;
+                    end
+                    [suggestICs, icReasons] = iclabel_suggest_reject(EEG, thr);
+
+                    if ~isfield(EEG, 'etc') || isempty(EEG.etc)
+                        EEG.etc = struct();
+                    end
+                    EEG.etc.iclabel = struct();
+                    EEG.etc.iclabel.suggestICs = suggestICs;
+                    EEG.etc.iclabel.reasons = icReasons;
+
+                    % Pre-mark suggestions (still no removal)
+                    if ~isfield(EEG, 'reject') || isempty(EEG.reject)
+                        EEG.reject = struct();
+                    end
+                    if ~isfield(EEG.reject, 'gcompreject') || isempty(EEG.reject.gcompreject)
+                        EEG.reject.gcompreject = zeros(1, size(EEG.icaweights, 1));
+                    end
+                    EEG.reject.gcompreject(:) = 0;
+                    if ~isempty(suggestICs)
+                        EEG.reject.gcompreject(suggestICs) = 1;
+                    end
+
+                    if isempty(suggestICs)
+                        logmsg(logf, '[ICLABEL] No ICs suggested for rejection.');
+                    else
+                        logmsg(logf, '[ICLABEL] Suggested ICs for rejection: %s', vec2str(suggestICs));
+                        for k = 1:numel(icReasons)
+                            logmsg(logf, '  - %s', icReasons{k});
+                        end
+                    end
+
+                    % Save QC packets (topoplot + PSD + snippet) for suggested ICs
+                    try
+                        save_ic_qc_packets(P, subjid, EEG, suggestICs);
+                        logmsg(logf, '[ICQC] Saved IC QC packets for suggested ICs.');
+                    catch ME
+                        logmsg(logf, '[WARN] IC QC packet generation failed: %s', ME.message);
+                    end
+
+                    if isfield(cfg.preproc.ica.iclabel, 'tag') && ~isempty(cfg.preproc.ica.iclabel.tag)
+                        tags{end+1} = char(string(cfg.preproc.ica.iclabel.tag));
+                    end
+
+                    % Numeric PSD metrics for suggested ICs (log + save)
+                    try
+                        icMetrics = compute_ic_psd_metrics(EEG, suggestICs);
+                        write_ic_metrics_csv(P, subjid, icMetrics);
+                        log_ic_metrics(logf, icMetrics);
+                        logmsg(logf, '[ICMET] Logged PSD metrics + wrote CSV.');
+                    catch ME
+                        logmsg(logf, '[WARN] IC PSD metric computation failed: %s', ME.message);
+                    end
+
+                    % ---- Manual decision (default = remove NONE) ----
+                    removedICs = prompt_ic_reject(suggestICs);
+
+                    if isempty(removedICs)
+                        logmsg(logf, '[ICREJ] No ICs removed.');
+                    else
+                        logmsg(logf, '[ICREJ] Removing ICs: %s', vec2str(removedICs));
+                        EEG = pop_subcomp(EEG, removedICs, 0); % 0 = don't plot
+                        EEG = eeg_checkset(EEG);
+                    end
+
+                    % Log suggested vs removed vs kept
+                    keptSuggested = setdiff(suggestICs, removedICs);
+                    if ~isempty(keptSuggested)
+                        logmsg(logf, '[ICREJ] Suggested but NOT removed: %s', vec2str(keptSuggested));
+                        for k = 1:numel(keptSuggested)
+                            ic = keptSuggested(k);
+                            idx = find(suggestICs == ic, 1);
+                            if ~isempty(idx)
+                                logmsg(logf, '  - %s', icReasons{idx});
+                            end
+                        end
+                    end
+
+                catch ME
+                    logmsg(logf, '[WARN] ICLabel failed: %s', ME.message);
+                end
             else
-                warning('Original chanlocs missing in %s; cannot restore montage for interpolation.', badfile);
-                log.bad_channels_interpolated = {};
+                logmsg(logf, '[ICLABEL] disabled.');
             end
-        else
-            log.bad_channels_interpolated = {};
+
+            save_stage(P.STAGE.ICA, P, subjid, tags, EEG, logf);
         end
+    end
 
-        % Estimate # of ICs removed
-        try
-            EEG_ica = pop_loadset('filename', file_name, 'filepath', [P.ICA filesep]);
-            total = size(EEG_ica.icaweights, 1);
-            kept = size(EEG.icaweights, 1);
-            log.ic_total = total;
-            log.ic_kept = kept;
-            log.ic_removed = total - kept;
-        catch
-            log.ic_total = NaN;
-            log.ic_kept = NaN;
-            log.ic_removed = NaN;
+    % -----
+    % EPOCH
+    % -----
+    if cfg.preproc.epoch.enabled
+        nextTag = char(string(cfg.preproc.epoch.tag));
+        [EEG, tags, didLoad] = maybe_load_stage(P.STAGE.EPOCH, P, subjid, tags, nextTag, logf);
+        if ~didLoad
+            ev = cfg.preproc.epoch.event_types;
+            tmin = cfg.preproc.epoch.tmin_sec;
+            tmax = cfg.preproc.epoch.tmax_sec;
+
+            logmsg(logf, '[EPOCH] events = %s window = [%.3f %.3f] sec', strjoin(string(ev), ','), tmin, tmax);
+            if isstring(ev); ev = cellstr(ev); end
+
+            validate_events_before_epoch(EEG, ev, logf);
+
+            EEG = pop_epoch(EEG, ev, [tmin tmax]);
+            EEG = eeg_checkset(EEG);
+
+            tags{end+1} = nextTag;
+            save_stage(P.STAGE.EPOCH, P, subjid, tags, EEG, logf);
         end
-        
-        % Final lowpass 30Hz and reref
-        EEG = pop_eegfiltnew(EEG, 'hicutoff', 30);
-        EEG = save_eeg_set(EEG, [P.REFILTER_30 filesep], file_name, [subjid '_refilter30']);
+    end
 
-        EEG = pop_reref(EEG, []);
-        EEG = save_eeg_set(EEG, [P.REREFER filesep], file_name, [subjid '_reref']);
+    % --------
+    % BASELINE
+    % --------
+    if cfg.preproc.baseline.enabled
+        nextTag = char(string(cfg.preproc.baseline.tag));
+        [EEG, tags, didLoad] = maybe_load_stage(P.STAGE.BASE, P, subjid, tags, nextTag, logf);
+        if ~didLoad
+            win = cfg.preproc.baseline.window_sec;
+            logmsg(logf, '[BASELINE] window = [%.3f %.3f] sec', win(1), win(2));
 
-        % Write Stage 3 Log
-        if ~exist(P.LOGS, 'dir'), mkdir(P.LOGS); end
-        json_file = fullfile(P.LOGS, [subjid '_preproc_log_stage3.json']);
-        fid = fopen(json_file, 'w');
-        fprintf(fid, '%s', jsonencode(log));
-        fclose(fid);
+            EEG = pop_rmbase(EEG, win * 1000); % ms
+            EEG = eeg_checkset(EEG);
 
-        summary = table(string(subjid), log.ic_total, log.ic_kept, log.ic_removed, ...
-            'VariableNames', {'sub', 'ic_total', 'ic_kept', 'ic_removed'});
-        summ_path = fullfile(P.LOGS, 'summary_stage3.csv');
-        if exist(summ_path, 'file')
-            writetable(summary, summ_path, 'WriteMode', 'append');
-        else
-            writetable(summary, summ_path);
+            tags{end+1} = nextTag;
+            save_stage(P.STAGE.BASE, P, subjid, tags, EEG, logf);
         end
+    end
+
+    logmsg(logf, '==== PREPROC DONE sub=%03d ====', subjid);
+end
+
+end
+
+% ---------------------------
+% HELPERS
+% ---------------------------
+
+function rawPath = resolve_raw_file(P, cfg, subjid)
+rawPath = '';
+
+pat = '';
+if isfield(cfg.exp, 'raw') && isfield(cfg.exp.raw, 'pattern')
+    pat = char(string(cfg.exp.raw.pattern));
+end
+
+if ~isempty(pat)
+    fname = sprintf(pat, subjid);
+    candidate = fullfile(P.INPUT.EXP, fname);
+    if exist(candidate, 'file')
+        rawPath = candidate;
+        return;
     end
 end
 
-%% ==========================
-% Helper: Failsafe EEG saving
-% ===========================
-function EEG = save_eeg_set(EEG, save_dir, file_name, setname)
-    if nargin < 4 || isempty(setname)
-        setname = regexprep(file_name,  '\.set$', '', 'ignorecase');
+doRec = true;
+if isfield(cfg.exp, 'raw') && isfield(cfg.exp.raw, 'search_recursive')
+    doRec = logical(cfg.exp.raw.search_recursive);
+end
+
+if doRec
+    pat1 = sprintf('*sub-%03d*.eeg', subjid);
+    pat2 = sprintf('*%03d*.eeg', subjid);
+    d = dir(fullfile(P.INPUT.EXP, '**', pat1));
+    if isempty(d)
+        d = dir(fullfile(P.INPUT.EXP, '**', pat2));
     end
-    EEG = eeg_checkset(EEG, 'eventconsistency');
-    EEG.setname = setname;
-    EEG = pop_saveset(EEG, ...
-        'filename', file_name, ...
-        'filepath', save_dir, ...
-        'check', 'on', ...
-        'savemode', 'onefile');
+    if ~isempty(d)
+        rawPath = fullfile(d(1).folder, d(1).name);
+    end
+end
+end
+
+function save_stage(stageDir, P, subjid, tags, EEG, logf)
+if ~exist(stageDir, 'dir'); mkdir(stageDir); end
+fname = P.NAMING.fname(subjid, tags);
+outPath = fullfile(stageDir, fname);
+logmsg(logf, '  [SAVE] %s', outPath);
+
+[fp, fn, ext] = fileparts(outPath);
+pop_saveset(EEG, 'filename', [fn ext], 'filepath', fp); % #ok<NASGU>
+end
+
+% Montage application helper
+function EEG = apply_montage_biosemi_from_csv(P, cfg, EEG, logf, subjid)
+% Apply BioSemi A/B channel mapping using a CSV resource.
+% - selects A1-32 and B1-32 if requested
+% - relabels channels according to CSV
+% - optionally applied .elp lookup for coords
+%
+% cfg.exp.montage.csv : filename under P.RESOURCE
+% cfg.exp.montage.select_ab_only : true/false
+% cfg.exp.montage.do_lookup : true/false
+
+% --- Resolve CSV path ---
+csvPath = "";
+if isfield(cfg.exp, 'montage') && isfield(cfg.exp.montage, 'csv')
+    csvPath = string(cfg.exp.montage.csv);
+end
+if strlength(csvPath) == 0
+    error('Montage enabled but cfg.exp.montage.csv is missing.');
+end
+
+csvPath2 = fullfile(P.RESOURCE, char(csvPath));
+if isfile(csvPath2)
+    csvPath = string(csvPath2);
+end
+if ~isfile(csvPath)
+    error('Montage CSV not found: %s', char(csvPath));
+end
+
+% --- Optionally select only A/B scalp channels ---
+selectAB = true;
+if isfield(cfg.exp, 'montage') && isfield(cfg.exp.montage, 'select_ab_only')
+    selectAB = logical(cfg.exp.montage.select_ab_only);
+end
+
+if selectAB
+    keep = [ ...
+        arrayfun(@(x) sprintf('A%d', x), 1:32, 'UniformOutput', false), ...
+        arrayfun(@(x) sprintf('B%d', x), 1:32, 'UniformOutput', false) ...
+    ];
+    EEG = pop_select(EEG, 'channel', keep);
+    EEG = eeg_checkset(EEG);
+    logmsg(logf, '[MONTAGE] Selected A1-32 & B1-32 only. nbchan = %d', EEG.nbchan);
+end
+
+% --- Read mapping ---
+T = readtable(char(csvPath), 'Delimiter', ',', 'TextType', 'string');
+T.Properties.VariableNames = lower(string(T.Properties.VariableNames));
+reqCols = ["raw_label", "std_label"];
+if ~all(ismember(reqCols, string(T.Properties.VariableNames)))
+    error('Montage CSV must contain columns: raw_label, std_label');
+end
+
+raw = string(T.raw_label);
+std = string(T.std_label);
+
+% --- Validate mapping uniqueness ---
+if numel(unique(raw)) ~= numel(raw)
+    error('Montage CSV has duplicate raw_label entries.');
+end
+if numel(unique(std)) ~= numel(std)
+    error('Montage CSV has duplicate std_label entries.');
+end
+
+% --- Apply relabelling by matching existing labels ---
+cur = string({EEG.chanlocs.labels});
+curU = upper(cur);
+rawU = upper(raw);
+
+missing = setdiff(rawU, curU);
+if ~isempty(missing)
+    error('Montage CSV expects channels not present in EEG: %s', strjoin(missing, ', '));
+end
+
+for i = 1:numel(rawU)
+    idx = find(curU == rawU(i), 1);
+    EEG.chanlocs(idx).labels = char(std(i));
+end
+EEG = eeg_checkset(EEG);
+
+% --- Final duplicate check ---
+labs = string({EEG.chanlocs.labels});
+if numel(unique(upper(labs))) ~= numel(labs)
+    error('Relabel produced duplicate labels (case-insensitive). Check montage CSV.');
+end
+
+% --- Sanity-check expected midline ---
+mustHave = upper(["FPZ","AFZ","FZ","FCZ","CZ","CPZ","PZ","POZ","OZ","IZ"]);
+have = upper(labs);
+missingStd = setdiff(mustHave, have);
+if ~isempty(missingStd)
+    logmsg(logf, '[WARN] Montage missing expected midline labels: %s', strjoin(missingStd, ', '));
+end
+
+logmsg(logf, '[MONTAGE] Relabel complete from CSV: %s', char(csvPath));
+
+% --- Optional ELP lookup ---
+doLookup = true;
+if isfield(cfg.exp, 'montage') && isfield(cfg.exp.montage, 'do_lookup')
+    doLookup = logical(cfg.exp.montage.do_lookup);
+end
+
+if doLookup
+    if isfield(P, 'CORE') && isfield(P.CORE, 'ELP_FILE') && exist(P.CORE.ELP_FILE, 'file')
+        EEG = pop_chanedit(EEG, 'lookup', P.CORE.ELP_FILE);
+        EEG = eeg_checkset(EEG);
+        logmsg(logf, '[MONTAGE] Applied coord lookup from ELP: %s', P.CORE.ELP_FILE);
+    else
+        logmsg(logf, '[WARN] ELP file missing; skipping lookup (P.CORE.ELP_FILE).');
+    end
+end
+
+write_channelmap_tsv(P, subjid, EEG, table(raw, std));
+end
+
+% Channel map audit writer
+function write_channelmap_tsv(P, subjid, EEG)
+% Writes an audit file of channel relabeling:
+% columns: index, final_label
+
+outPath = fullfile(P.STAGE.LOGS, sprintf('sub-%03d_channelmap_applied.tsv', subjid));
+fid = fopen(outPath, 'w');
+if fid < 0
+    warning('Could not write channel map TSV: %s', outPath);
+    return;
+end
+
+fprintf(fid, "index\tlabel\n");
+for i = 1:EEG.nbchan
+    lbl = EEG.chanlocs(i).labels;
+    fprintf(fid, "%d\t%s\n", i, lbl);
+end
+
+fclose(fid);
+end
+
+function logmsg(fid, fmt, varargin)
+ts = datetime("now", "Format", "yyyy-MM-dd HH:mm:ss");
+msg = sprintf(fmt, varargin{:});
+fprintf(fid, '[%s] %s\n', char(ts), msg);
+if fid ~= 1
+    fprintf(1, '[%s] %s\n', char(ts), msg);
+end
+end
+
+function safeClose(fid)
+if fid ~= 1 && fid > 0
+    fclose(fid);
+end
+end
+
+% Resume/Skip helper
+function [EEG, tags, didLoad] = maybe_load_stage(stageDir, P, subjid, tags, nextTag, logf)
+didLoad = false;
+tags2 = tags;
+if ~isempty(nextTag)
+    tags2{end+1} = nextTag;
+end
+fname = P.NAMING.fname(subjid, tags2);
+fpath = fullfile(stageDir, fname);
+if exist(fpath, 'file')
+    logmsg(logf, '[SKIP] Found existing stage file, loading: %s', fpath);
+    EEG = pop_loadset('filename', fname, 'filepath', stageDir);
+    EEG = eeg_checkset(EEG);
+    tags = tags2;
+    didLoad = true;
+end
+end
+
+% Channel label normalization
+function EEG = normalize_chan_labels(EEG)
+if ~isfield(EEG, 'chanlocs') || isempty(EEG.chanlocs)
+    return;
+end
+for i = 1:numel(EEG.chanlocs)
+    if isfield(EEG.chanlocs(i), 'labels') && ~isempty(EEG.chanlocs(i).labels)
+        lbl = string(EEG.chanlocs(i).labels);
+        lbl = strtrim(lbl);
+        lbl = replace(lbl, " ", "");
+        lbl = replace(lbl, "-", "");
+        EEG.chanlocs(i).labels = char(lbl);
+    end
+end
+end
+
+% ---- INITREJ: suggestions + plots + manual prompt ----
+
+function [badChans, reasons, metrics] = suggest_bad_channels(EEG)
+% Conservative automated suggestions using EEGLAB pop_rejchan (prob +
+% kurtosis)
+% Also returns metrics for plotting (STD/RMS)
+
+badChans = [];
+reasons = {};
+
+metrics = struct();
+metrics.chan_rms = sqrt(mean(double(EEG.data).^2, 2)); % [nChan x 1]
+metrics.chan_std = std(double(EEG.data), 0, 2);
+
+% Probability-based suggestions
+try
+    [~, badP] = pop_rejchan(EEG, 'threshold', 5, 'norm', 'on', 'measure', 'prob');
+    if ~isempty(badP)
+        for c = badP(:)'
+            badChans(end+1) = c; %#ok<AGROW>
+            reasons{end+1} = 'probability z>5 (pop_rejchan)'; %#ok<AGROW>
+        end
+    end
+catch
+end
+
+% Kurtosis-based suggestions
+try
+    [~, badK] = pop_rejchan(EEG, 'threshold', 5, 'norm', 'on', 'measure', 'kurt');
+    if ~isempty(badK)
+        for c = badK(:)'
+            if ~ismember(c, badChans)
+                badChans(end+1) = c; %#ok<AGROW>
+                reasons{end+1} = 'kurtosis z>5 (pop_rejchan)'; %#ok<AGROW>
+            else
+                idx = find(badChans == c, 1);
+                reasons{idx} = [reasons{idx} ' + kurtosis z>5'];
+            end
+        end
+    end
+catch
+end
+
+[badChans, sortIdx] = sort(badChans);
+reasons = reasons(sortIdx);
+end
+
+function make_initrej_plots(P, subjid, EEG, metrics, badChans)
+% Save diagnostic plots to logs/:
+%   - histogram of channel std/rms
+%   - barplot of channel std/rms with suggested chans marked
+%   - topoplot of std/rms (if chanlocs present)
+%   - channel PSD overview (median + IQR)
+%   - PSD overlay for suggested channels
+
+outDir = P.STAGE.LOGS;
+
+save_hist(outDir, subjid, metrics.chan_std, 'chan_std');
+save_hist(outDir, subjid, metrics.chan_rms, 'chan_rms');
+
+save_bar(outDir, subjid, metrics.chan_std, badChans, 'chan_std');
+save_bar(outDir, subjid, metrics.chan_rms, badChans, 'chan_rms');
+
+if has_chanlocs(EEG)
+    save_topo_metric(outDir, subjid, EEG, metrics.chan_std, 'STD');
+    save_topo_metric(outDir, subjid, EEG, metrics.chan_rms, 'RMS');
+end
+
+save_channel_psd_overview(outDir, subjid, EEG);
+
+if ~isempty(badChans)
+    save_channel_psd_badchans(outDir, subjid, EEG, badChans);
+end
+
+% write label index map for quick referencing
+fid = fopen(fullfile(outDir, sprintf('sub-%03d_chanlabels.txt', subjid)), 'w');
+if fid > 0
+    labs = get_chan_labels(EEG);
+    for k = 1:numel(labs)
+        fprintf(fid, '%d\t%s\n', k, labs{k});
+    end
+    fclose(fid);
+end
+end
+
+function save_hist(outDir, subjid, v, name)
+h = figure('Visible', 'off');
+histogram(v);
+title(sprintf('sub=%03d %s histogram', subjid, name), 'Interpreter', 'none');
+xlabel(name); ylabel('Count');
+saveas(h, fullfile(outDir, sprintf('sub-%03d_initrej_hist_%s.png', subjid, name)));
+close(h);
+end
+
+function save_bar(outDir, subjid, v, badChans, name)
+h = figure('Visible', 'off');
+bar(v);
+title(sprintf('sub-%03d %s (suggested marked)', subjid, name), 'Interpreter', 'none');
+xlabel('Channel index'); ylabel(name);
+hold on;
+for c = badChans(:)'
+    xline(c, '--');
+end
+hold off;
+saveas(h, fullfile(outDir, sprintf('sub-%03d_initrej_bar_%s.png', subjid, name)));
+close(h);
+end
+
+function tf = has_chanlocs(EEG)
+tf = isfield(EEG, 'chanlocs') && ~isempty(EEG.chanlocs) && isfield(EEG.chanlocs(1), 'X');
+end
+
+function save_topo_metric(outDir, subjid, EEG, v, label)
+h = figure('Visible', 'off');
+topoplot(v, EEG.chanlocs, 'electrodes', 'on');
+title(sprintf('sub-%03d channel %s topoplot', subjid, label), 'Interpreter', 'none');
+saveas(h, fullfile(outDir, sprintf('sub-%03d_initrej_topo_%s.png', subjid, lower(label))));
+close(h);
+end
+
+function save_channel_psd_overview(outDir, subjid, EEG)
+fs = EEG.srate;
+data = double(EEG.data);
+nChan = size(data, 1);
+
+win = round(fs*2);
+nover = round(win*0.5);
+nfft = max(2^nextpow2(win), win);
+
+Pxx = zeros(nfft/2+1, nChan);
+for ch = 1:nChan
+    [pxx, f] = pwelch(data(ch,:), win, nover, nfft, fs);
+    Pxx(:, ch) = 10*log10(pxx);
+end
+
+med = median(Pxx, 2);
+q1 = prctile(Pxx, 25, 2);
+q3 = prctile(Pxx, 75, 2);
+
+h = figure('Visible', 'off');
+plot(f, med); hold on;
+plot(f, q1, ':'); plot(f, q3, ':');
+xlim([0 80]);
+xlabel('Hz'); ylabel('Power (dB)');
+title(sprintf('sub-%03d channel PSD (median + IQR)', subjid), 'Interpreter', 'none');
+legend({'Median', '25%', '75%'}, 'Location', 'northeast');
+saveas(h, fullfile(outDir, sprintf('sub-%03d_initrej_psd_overview.png', subjid)));
+close(h);
+end
+
+function save_channel_psd_badchans(outDir, subjid, EEG, badChans)
+fs = EEG.srate;
+data = double(EEG.data);
+
+win = round(fs*2);
+nover = round(win*0.5);
+nfft = max(2^nextpow2(win), win);
+
+h = figure('Visible', 'off'); hold on;
+for ch = badChans(:)'
+    [pxx, f] = pwelch(data(ch, :), win, nover, nfft, fs);
+    plot(f, 10*log10(pxx));
+end
+xlim([0 80]);
+xlabel('Hz'); ylabel('Power (dB)');
+title(sprintf('sub-%03d PSD overlay: suggested channels %s', subjid, vec2str(badChans)), 'Interpreter', 'none');
+saveas(h, fullfile(outDir, sprintf('sub-%03d_initrej_psd_badchans.png', subjid)));
+close(h);
+end
+
+function interpChans = prompt_channel_interp(EEG, suggested)
+fprintf('\n[INITREJ] Suggested bad channels: %s\n', vec2str(suggested));
+if ~isempty(suggested)
+    for k = 1:numel(suggested)
+        ch = suggested(k);
+        fprintf('   %d) %d (%s)\n', k, ch, safe_chan_label(EEG, ch));
+    end
+end
+fprintf('\nType channel indices to INTERPOLATE (e.g., [1 2 17])\n');
+fprintf('Default = none (press Enter or type []).\n');
+resp = input('Channels to interpolate: ', 's');
+resp = strtrim(resp);
+
+if isempty(resp) || strcmp(resp, '[]')
+    interpChans = [];
+    return;
+end
+
+interpChans = str2num(resp); %#ok<ST2NM>
+if ~isnumeric(interpChans)
+    error('Manual interpolation must be numeric vector like [1 2 3] or [].');
+end
+interpChans = unique(interpChans(:))';
+end
+
+function lbl = safe_chan_label(EEG, ch)
+lbl = '';
+try
+    if isfield(EEG, 'chanlocs') && numel(EEG.chanlocs) >= ch && isfield(EEG.chanlocs(ch), 'labels')
+        lbl = EEG.chanlocs(ch).labels;
+    end
+catch
+end
+if isempty(lbl)
+    lbl = sprintf('Ch%d', ch);
+end
+end
+
+function labels = get_chan_labels(EEG)
+n = EEG.nbchan;
+labels = cell(n, 1);
+for i = 1:n
+    labels{i} = safe_chan_label(EEG, i);
+end
+end
+
+function s = vec2str(v)
+if isempty(v), s = '[]'; return; end
+s = ['[' sprintf('%d ', v) ']'];
+s = strrep(s, ' ]', ']');
+end
+
+% Per-channel PSD metrics + CSV + topo
+function chanPSD = compute_channel_psd_metrics(EEG)
+fs = EEG.srate;
+data = double(EEG.data);
+nChan = size(data, 1);
+
+win = round(fs*2);
+nover = round(win*0.5);
+nfft = max(2^nextpow2(win), win);
+
+chanPSD = struct();
+chanPSD.line_ratio  = zeros(nChan, 1);
+chanPSD.hf_ratio    = zeros(nChan, 1);
+chanPSD.drift_ratio = zeros(nChan, 1);
+chanPSD.alpha_ratio = zeros(nChan, 1);
+
+for ch = 1:nChan
+    [pxx, f] = pwelch(data(ch,:), win, nover, nfft, fs);
+
+    line = bp_psd(f, pxx, [59 61]);
+    lo   = bp_psd(f, pxx, [55 59]);
+    hi   = bp_psd(f, pxx, [61 65]);
+    chanPSD.line_ratio(ch) = line / max(lo + hi, eps);
+
+    hf = bp_psd(f, pxx, [20 40]);
+    lf = bp_psd(f, pxx, [1 12]);
+    chanPSD.hf_ratio(ch) = hf / max(lf, eps);
+
+    drift = bp_psd(f, pxx, [1 2]);
+    chanPSD.drift_ratio(ch) = drift / max(lf, eps);
+
+    a = bp_psd(f, pxx, [8 12]);
+    allp = bp_psd(f, pxx, [1 40]);
+    chanPSD.alpha_ratio(ch) = a / max(allp, eps);
+end
+end
+
+function p = bp_psd(f, pxx, band)
+m = (f >= band(1) & f < band(2));
+if ~any(m); p = 0; return; end
+p = trapz(f(m), pxx(m));
+end
+
+function write_channel_psd_csv(P, subjid, EEG, chanPSD)
+outDir = P.STAGE.LOGS;
+csvPath = fullfile(outDir, sprintf('sub-%03d_chan_psd_metrics.csv', subjid));
+fid = fopen(csvPath, 'w');
+if fid < 0; return; end
+fprintf(fid, 'chan_idx,label,line_ratio,hf_ratio,drift_ratio,alpha_ratio\n');
+for ch = 1:EEG.nbchan
+    fprintf(fid, '%d,%s,%.6f,%.6f,%.6f,%.6f\n', ch, safe_chan_label(EEG,ch), ...
+        chanPSD.line_ratio(ch), chanPSD.hf_ratio(ch), chanPSD.drift_ratio(ch), chanPSD.alpha_ratio(ch));
+end
+fclose(fid);
+end
+
+function save_chan_psd_topos(P, subjid, EEG, chanPSD)
+if ~has_chanlocs(EEG); return; end
+outDir = P.STAGE.LOGS;
+save_topo_metric(outDir, subjid, EEG, chanPSD.line_ratio, 'LINE_RATIO');
+save_topo_metric(outDir, subjid, EEG, chanPSD.hf_ratio, 'HF_RATIO');
+save_topo_metric(outDir, subjid, EEG, chanPSD.drift_ratio, 'DRIFT_RATIO');
+save_topo_metric(outDir, subjid, EEG, chanPSD.alpha_ratio, 'ALPHA_RATIO');
+end
+
+% ICA training copy with optional bad segment removal
+function [EEGtrain, segInfo] = make_ica_training_copy(EEG, cfg, logf)
+EEGtrain = EEG;
+segInfo = struct('removed', false, 'n_intervals', 0, 'pct_time', 0, 'intervals', []);
+if ~isfield(cfg, 'preproc') || ~isfield(cfg.preproc, 'initrej') || ~isfield(cfg.preproc.initrej, 'badseg') || ~cfg.preproc.initrej.badseg.enabled
+    logmsg(logf, '[ICA-TRAIN] badseg disabled; using full data for ICA.');
+    return;
+end
+thr = cfg.preproc.initrej.badseg.threshold_uv;
+logmsg(logf, '[ICA-TRAIN] Detecting bad segments (thr = %.1f uV) for ICA training copy.', thr);
+x = double(EEG.data);
+badSamp = any(abs(x) > thr, 1);
+intervals = mask_to_intervals(badSamp);
+segInfo.intervals = intervals;
+segInfo.n_intervals = size(intervals, 1);
+segInfo.pct_time = 100 * (sum(badSamp) / numel(badSamp));
+if isempty(intervals)
+    logmsg(logf, '[ICA-TRAIN] No bad segments detected; using full data.');
+    return;
+end
+logmsg(logf, '[ICA-TRAIN] Detected %d intervals (%.2f%% of samples).', segInfo.n_intervals, segInfo.pct_time);
+doRemove = prompt_yesno('Remove detected bad segments from ICA training copy? (y/n) [n]: ', false);
+if ~doRemove
+    logmsg(logf, '[ICA-TRAIN] Keeping all segments for ICA training (manual decision).');
+    return;
+end
+EEGtrain = pop_select(EEGtrain, 'nopoint', intervals);
+EEGtrain = eeg_checkset(EEGtrain);
+segInfo.removed = true;
+logmsg(logf, '[ICA-TRAIN] Removed bad segments from ICA training copy.');
+end
+
+function intervals = mask_to_intervals(mask)
+mask = mask(:)';
+if ~any(mask)
+    intervals = [];
+    return;
+end
+d = diff([0 mask 0]);
+starts = find(d == 1);
+ends   = find(d == -1) - 1;
+intervals = [starts(:) ends(:)];
+end
+
+function tf = prompt_yesno(prompt, defaultTF)
+resp = input(prompt, 's');
+resp = lower(strtrim(resp));
+if isempty(resp)
+    tf = defaultTF;
+elseif any(strcmp(resp, {'y', 'yes'}))
+    tf = true;
+elseif any(strcmp(resp, {'n', 'no'}))
+    tf = false;
+else
+    tf = defaultTF;
+end
+end
+
+function s = tern(cond, a, b)
+if cond
+    s = a;
+else
+    s = b;
+end
+end
+
+% Event validation before epoching
+function validate_events_before_epoch(EEG, wanted, logf)
+if isstring(wanted)
+    wanted = cellstr(wanted);
+end
+if isempty(EEG.event)
+    error('No EEG.event present; cannot epoch.');
+end
+types = {EEG.event.type};
+typesStr = strings(1, numel(types));
+for k = 1:numel(types)
+    typesStr(k) = string(types{k});
+end
+u = unique(typesStr);
+logmsg(logf, '[EVENTS] Unique event types present (%d): %s', numel(u), strjoin(u, ', '));
+for k = 1:numel(u)
+    c = sum(typesStr == u(k));
+    logmsg(logf, '  [EVENTS] %s: %d', u(k), c);
+end
+wantedStr = string(wanted);
+hit = intersect(u, wantedStr);
+if isempty(hit)
+    error('None of requested event_types found: %s', strjoin(wantedStr, ', '));
+else
+    for k = 1:numel(hit)
+        logmsg(logf, '[EVENTS] Will epoch on "%s" (n = %d)', hit(k), sum(typesStr == hit(k)));
+    end
+end
+end
+
+% ---- ICLabel: suggest + QC packets + manual rejection ----
+function [suggestICs, reasons] = iclabel_suggest_reject(EEG, thr)
+% Uses EEG.etc.ic_classification.ICLabel.classifications (Nx7)
+% Order: [Brain Muscle Eye Heart LineNoise ChannelNoise Other]
+
+suggestICs = [];
+reasons = {};
+
+if ~isfield(EEG, 'etc') || ~isfield(EEG.etc, 'ic_classification') || ...
+        ~isfield(EEG.etc.ic_classification, 'ICLabel') || ...
+        ~isfield(EEG.etc.ic_classification.ICLabel, 'classifications')
+    return;
+end
+
+C = EEG.etc.ic_classification.ICLabel.classifications;
+if isempty(C)
+    return;
+end
+
+for ic = 1:size(C, 1)
+    pBrain  = C(ic, 1);
+    pMus    = C(ic, 2);
+    pEye    = C(ic, 3);
+    pHeart  = C(ic, 4);
+    pLine   = C(ic, 5);
+    pChan   = C(ic, 6);
+    pOther  = C(ic, 7);
+
+    hits = {};
+    if isfield(thr,'eye') && pEye >= thr.eye
+        hits{end+1} = sprintf('eye=%.2f>=%.2f', pEye, thr.eye); %#ok<AGROW>
+    end
+    if isfield(thr,'muscle') && pMus >= thr.muscle
+        hits{end+1} = sprintf('muscle=%.2f>=%.2f', pMus, thr.muscle); %#ok<AGROW>
+    end
+    if isfield(thr,'heart') && pHeart >= thr.heart
+        hits{end+1} = sprintf('heart=%.2f>=%.2f', pHeart, thr.heart); %#ok<AGROW>
+    end
+    if isfield(thr,'line_noise') && pLine >= thr.line_noise
+        hits{end+1} = sprintf('line=%.2f>=%.2f', pLine, thr.line_noise); %#ok<AGROW>
+    end
+    if isfield(thr,'channel_noise') && pChan >= thr.channel_noise
+        hits{end+1} = sprintf('chanNoise=%.2f>=%.2f', pChan, thr.channel_noise); %#ok<AGROW>
+    end
+
+    if ~isempty(hits)
+        suggestICs(end+1) = ic; %#ok<AGROW>
+        reasons{end+1} = sprintf('IC %d: %s (brain = %.2f other = %.2f)', ...
+            ic, strjoin(hits, ', '), pBrain, pOther); %#ok<AGROW>
+    end
+end
+end
+
+function save_ic_qc_packets(P, subjid, EEG, icList)
+% Saves per-IC QC figures for suggested ICs:
+%   - scalp map (icawinv)
+%   - IC PSD (Welch)
+%   - IC activation snippet
+
+if isempty(icList); return; end
+
+outDir = fullfile(P.STAGE.LOGS, sprintf('sub-%03d_icqc', subjid));
+if ~exist(outDir, 'dir'); mkdir(outDir); end
+
+fs = EEG.srate;
+
+W = EEG.icaweights * EEG.icasphere;
+X = double(EEG.data(EEG.icachansind, :));
+act = W * X; % [nIC x time]
+
+C = [];
+if isfield(EEG, 'etc') && isfield(EEG.etc, 'ic_classification') && ...
+        isfield(EEG.etc.ic_classification, 'ICLabel') && ...
+        isfield(EEG.etc.ic_classification.ICLabel, 'classifications')
+    C = EEG.etc.ic_classification.ICLabel.classifications;
+end
+
+for ic = icList(:)'
+    h = figure('Visible', 'off');
+
+    % 1) Scalp map
+    subplot(2,2,1);
+    if isfield(EEG, 'icawinv') && has_chanlocs(EEG)
+        topoplot(EEG.icawinv(:,ic), EEG.chanlocs, 'electrodes', 'on');
+        title(sprintf('IC %d scalp map', ic), 'Interpreter', 'none');
+    else
+        axis off; title('No chanlocs/icawinv');
+    end
+
+    % 2) PSD
+    subplot(2,2,2);
+    win = round(fs * 2);
+    nover = round(win * 0.5);
+    nfft = max(2^nextpow2(win), win);
+    [pxx, f] = pwelch(act(ic,:), win, nover, nfft, fs);
+    plot(f, 10*log10(pxx));
+    xlim([0 80]);
+    xlabel('Hz'); ylabel('Power (dB)');
+    title('IC PSD', 'Interpreter', 'none');
+
+    % 3/4) time series snippet
+    subplot(2, 2, [3 4]);
+    nSamp = min(size(act, 2), round(fs * 10));
+    plot((0:nSamp-1)/fs, act(ic,1:nSamp));
+    xlabel('Time (s)'); ylabel('a.u.');
+    title('IC activation (first 10s)', 'Interpreter', 'none');
+
+    % Title with ICLabel probs if available
+    if ~isempty(C) && size(C, 1) >= ic
+        p = C(ic,:);
+        ttl = sprintf('sub-%03d IC %d | B%.2f M%.2f E%.2f H%.2f L%.2f C%.2f O%.2f', ...
+            subjid, ic, p(1), p(2), p(3), p(4), p(5), p(6), p(7));
+    else
+        ttl = sprintf('sub-%03d IC %d', subjid, ic);
+    end
+    sgtitle(ttl, 'Interpreter', 'none');
+
+    saveas(h, fullfile(outDir, sprintf('sub-%03d_ic%03d_qc.png', subjid, ic)));
+    close(h);
+end
+end
+
+function removedICs = prompt_ic_reject(suggestICs)
+fprintf('\n[ICREJ] ICLabel suggested ICs: %s\n', vec2str(suggestICs));
+fprintf('Review QC figs in logs/sub-XXX_icqc/ before deciding.\n');
+fprintf('Type IC indices to REMOVE (e.g., [1 3 7]).\n');
+fprintf('Default = remove none (press Enter or type []).\n');
+
+resp = input('ICs to remove: ', 's');
+resp = strtrim(resp);
+
+if isempty(resp) || strcmp(resp, '[]')
+    removedICs = [];
+    return;
+end
+
+removedICs = str2num(resp); %#ok<ST2NM>
+if isempty(removedICs)
+    removedICs = [];
+else
+    removedICs = unique(removedICs(:))';
+end
+end
+
+function icMetrics = compute_ic_psd_metrics(EEG, icList)
+% Returns struct array with per-IC PSD summary metrics
+
+if isempty(icList)
+    icMetrics = struct('ic', {}, 'peak_hz', {}, 'bp', {}, 'hf_ratio', {}, 'line_ratio', {});
+    return;
+end
+
+fs = EEG.srate;
+
+% activations
+W = EEG.icaweights * EEG.icasphere;
+X = double(EEG.data(EEG.icachansind, :));
+act = W * X; % [nIC x time]
+
+win = round(fs * 2);
+nover = round(win * 0.5);
+nfft = max(2^nextpow2(win), win);
+
+% Bands (Hz)
+bands = struct( ...
+    'delta', [1 4], ...
+    'theta', [4 8], ...
+    'alpha', [8 12], ...
+    'beta',  [13 30], ...
+    'gamma', [30 45]);
+
+icMetrics = repmat(struct('ic',NaN,'peak_hz',NaN,'bp',struct(),'hf_ratio',NaN,'line_ratio',NaN), numel(icList), 1);
+
+for k = 1:numel(icList)
+    ic = icList(k);
+
+    [pxx, f] = pwelch(act(ic,:), win, nover, nfft, fs); % linear power
+
+    % Peak frequency (0.5-40 Hz)
+    bandMask = (f >= 0.5 & f <= 40);
+    pband = pxx(bandMask);
+    fband = f(bandMask);
+    [~, idx] = max(pband);
+    peakHz = fband(idx);
+
+    % Bandpower (integral)
+    bp = struct();
+    fn = fieldnames(bands);
+    for j = 1:numel(fn)
+        b = bands.(fn{j});
+        m = (f >= b(1) & f < b(2));
+        bp.(fn{j}) = trapz(f(m), pxx(m));
+    end
+
+    % HF ratio: (20-40)/(1-12)
+    hf = bandpower_from_psd(f, pxx, [20 40]);
+    lf = bandpower_from_psd(f, pxx, [1 12]);
+    hf_ratio = hf / max(lf, eps);
+
+    % Line noise ratio: (59-61)/(55-65 excluding 59-61)
+    line = bandpower_from_psd(f, pxx, [59 61]);
+    lo   = bandpower_from_psd(f, pxx, [55 59]);
+    hi   = bandpower_from_psd(f, pxx, [61 65]);
+    denom = max(lo + hi, eps);
+    line_ratio = line / denom;
+
+    icMetrics(k).ic = ic;
+    icMetrics(k).peak_hz = peakHz;
+    icMetrics(k).bp = bp;
+    icMetrics(k).hf_ratio = hf_ratio;
+    icMetrics(k).line_ratio = line_ratio;
+end
+end
+
+function p = bandpower_from_psd(f, pxx, band)
+m = (f >= band(1) & f < band(2));
+if ~any(m), p = 0; return; end
+p = trapz(f(m), pxx(m));
+end
+
+function write_ic_metrics_csv(P, subjid, icMetrics)
+outDir = P.STAGE.LOGS;
+if ~exist(outDir, 'dir'); mkdir(outDir); end
+
+csvPath = fullfile(outDir, sprintf('sub-%03d_ic_psd_metrics.csv', subjid));
+fid = fopen(csvPath, 'w');
+if fid < 0
+    warning('Could not write IC metrics CSV: %s', csvPath);
+    return;
+end
+
+% header
+fprintf(fid, 'ic,peak_hz,delta,theta,alpha,beta,gamma,hf_ratio,line_ratio\n');
+
+for k = 1:numel(icMetrics)
+    bp = icMetrics(k).bp;
+    fprintf(fid, '%d,%.4f,%.6e,%.6e,%.6e,%.6e,%.6e,%.6f,%.6f\n', ...
+        icMetrics(k).ic, icMetrics(k).peak_hz, ...
+        bp.delta, bp.theta, bp.alpha, bp.beta, bp.gamma, ...
+        icMetrics(k).hf_ratio, icMetrics(k).line_ratio);
+end
+
+fclose(fid);
+end
+
+function log_ic_metrics(logf, icMetrics)
+if isempty(icMetrics); return; end
+logmsg(logf, '[ICMET] Per-IC PSD summary (suggested ICs):');
+for k = 1:numel(icMetrics)
+    bp = icMetrics(k).bp;
+    logmsg(logf, '  IC %d | peak = %.2f Hz | d = %.2e t = %.2e a = %.2e b = %.2e g = %.2e | HP = %.3f | line = %.3f', ...
+        icMetrics(k).ic, icMetrics(k).peak_hz, ...
+        bp.delta, bp.theta, bp.alpha, bp.beta, bp.gamma, ...
+        icMetrics(k).hf_ratio, icMetrics(k).line_ratio);
+end
 end
