@@ -31,6 +31,12 @@ It is a **preprocessing system**.
 This pipeline is intentionally layered:
 
 ```bash
+expXX.json           ← config the preprocessing pipeline
+↓
+load_cfg.m           ← load JSON config
+↓
+config_paths.m       ← prepare file paths for I/O
+↓
 expXX_preproc.m      ← experiment entrypoint
 ↓
 preproc_default.m    ← config normalization & validation
