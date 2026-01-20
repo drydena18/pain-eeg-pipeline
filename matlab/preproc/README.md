@@ -73,7 +73,7 @@ exp01_preproc()
 #### Run a single subject for debugging
 ```matlab
 subjects_override(12);
-preproc_default(exp_id, P, cfg, subjects_override(;
+preproc_default(exp_id, P, cfg, subjects_override);
 ```
 
 ### 3.2 'preproc_default.m' - Configuration Normalization
@@ -125,7 +125,7 @@ Stages allow:
 
 Each stage produces a tagged .set file:
 ```bash
-26BB_64_012_fir_notch60_rs500_reref.set
+e.g., 26BB_64_012_fir_notch60_rs500_reref.set
 ```
 
 ### 4.2 Stage order
@@ -134,7 +134,7 @@ Each stage produces a tagged .set file:
   3. Notch filter
   4. Resample
   5. Re-reference
-  6. INITReJ (channel / segment QC)
+  6. INITREJ (channel / segment QC)
   7. ICA
   8. ICLabel
   9. Manual IC rejection
@@ -226,11 +226,11 @@ No channel is removed automatically.
 ### 8.2 QC Outputs
 
 Saved to logs/:
-- RMS / STD histograms
-- RMS / STD bar plots
+- RMS / STD histograms                       (Root Mean Squares / Standard Deviation)
+- RMS / STD bar plots                        (Root Mean Squares / Standard Deviation)
 - Topoplots
-- PSD overview (median + IQR)
-- PSD overlays for suggested channels
+- PSD overview (median + IQR)                (Power Spectra Density + Interquartile Range)
+- PSD overlays for suggested channels        (Power Spectra Density)
 - Channel metrics CSV
 
 ### 8.3 Manual Decision
