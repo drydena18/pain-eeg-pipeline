@@ -7,7 +7,7 @@ P.PROJ_ROOT = fullfile('/cifs','seminowicz','eegPainDatasets','CNED'); % Root fo
 % ---- BIDS dataset root ----
 P.PROC = fullfile(P.PROJ_ROOT, 'da-analysis'); % preproc data goes here
 P.RUN = fullfile(P.PROC, '26ByBiosemi'); % where my preproc lives
-P.RESOURCE = fullile(P.RUN, 'resources'); % analysis resources
+P.RESOURCE = fullfile(P.RUN, 'resources'); % analysis resources
 
 % ---- Core Inputs ----
 P.PARTICIPANTS_TSV = fullfile(P.RESOURCE, 'participants.tsv');
