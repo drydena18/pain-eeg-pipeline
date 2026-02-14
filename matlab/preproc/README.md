@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # CNED EEG Preprocessing Framework (MATLAB)
 
 **Author:** Dryden Arseneau  
