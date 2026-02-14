@@ -1,4 +1,5 @@
 {
+<<<<<<< HEAD
   "meta": {
     "schema": "v1",
     "config": "exp01_v1.0.1"
@@ -8,6 +9,32 @@
     "raw_root": "/path/to/raw/data",
     "proj_root": "/path/to/project/root"
   },
+=======
+  "experiment_id": "26ByBiosemi",
+  "description": "26ByBiosemi: Citation - Zhao Xiangyue, Zhou Jingyao, Zhang Libo, Duan Haoqing, Wei Shiyu, Bi Yanzhi, and Hu Li (2024). 26 By Biosemi. OpenNeuro. [Dataset] doi: doi:10.18112/openneuro.ds005284.v1.0.0",
+
+  "paths": {
+    "raw_dir": "/cifs/seminowicz/eegPainDatasets/CNED/26ByBiosemi",
+    "preproc_dir": "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/26ByBiosemi/Preproc",
+    "figures_dir": "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/26ByBiosemi/Preproc/Figures",
+    "logs_dir": "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/26ByBiosemi/Logs"
+  },
+
+  "exp": {
+    "id": [001, 002, 003, 004, 005, 006, 007, 008, 009, 010, 011, 012, 013, 014, 015, 016, 017, 018, 019, 020, 021, 022, 023, 024, 025, 026],
+    "out_prefix": "26BB_62",
+    "raw": {
+      "pattern": "sub-%03d_task-26ByBiosemi_eeg.bdf",
+      "search_recusiveL": true
+    }
+  },
+
+  "data": {
+    "file_extension": ".set",
+    "sampling_rate": 1000,
+    "channel_locations": "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/26ByBiosemi/resources/standard-10-5-cap385.elp",
+    "cap_type": "62",
+>>>>>>> bc259a06836bf8e2df96e96bf5570bd527991910
 
   "exp": {
     "id": "exp01",
@@ -31,12 +58,19 @@
   },
 
   "preproc": {
+<<<<<<< HEAD
     "filter": {
       "enabled": true,
       "type": "fir",
       "highpass_hz": 0.5,
       "lowpass_hz": 40,
       "tag": "fir"
+=======
+    "line_noise_removal": {
+      "apply_notch": false,
+      "lowpass_alternative": true,
+      "lowpass_cutoff": 40
+>>>>>>> bc259a06836bf8e2df96e96bf5570bd527991910
     },
 
     "notch": {
@@ -59,6 +93,7 @@
       "tag": "reref"
     },
 
+<<<<<<< HEAD
     "initrej": {
       "enabled": true,
       "tag": "initrej",
@@ -73,6 +108,10 @@
         "method": "threshold",
         "threshold_uv": 150
       }
+=======
+    "reference": {
+      "reference_type": "average"
+>>>>>>> bc259a06836bf8e2df96e96bf5570bd527991910
     },
 
     "ica": {
