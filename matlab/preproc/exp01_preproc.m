@@ -1,25 +1,70 @@
-function exp01_preproc(only_sub, doICA, doPost, interactiveClean)
-% EXP01_PREPROC Wrapper for the 26ByBiosemi experiment (exp01)
+function exp01_preproc(subjects_override)
+% EXP01_PREPROC Entrypoint for preprocessing experiment 01.
+% V 1.0.3
 %
-% exp01_preproc(sonly_sub, doICA, doPost, interactiveClean)
+% Call chain:
+%   exp01_preproc.m -> preproc_default.m -> preproc_core.m
 %
-% only_sub : 'all' deault, or specific ID (e.g., 'sub-01')
-% doICA : true/false (default: false)
-% doPost: true/false (default: false)
-% interactiveClean : true/false (default: same as doICA)
-%
-% This calls the generic preproc_default() with experiment specific
-% identifiers and configuration
+% Usage:    
+%   exp01_preproc();            -> runs cfg.exp.subjects
+%   exp01_preproc([1 2 3 10]);  -> override subjects list
 
-% Set default values for optional parameters
-    if nargin < 1 || isempty(only_sub), only_sub = 'all'; end
-    if nargin < 2 || isempty(doICA), doICA = false; end
-    if nargin < 3 || isempty(doPost), doPost = false; end
-    if nargin < 4 || isempty(interactiveClean), interactiveClean = doICA; end
+% Initialize working directory
+thisFile = filename('fullpath');
+projRoot = fileparts(fileparts(thisFile));
+addpath(genpath(projRoot));
 
-    % Experiment ID is used by config_paths (BIDS folder name)
-    exp_id = '26ByBiosemi';
-    cfg_file = 'exp01.json';
+%addpath(genpath('/path/to/pipeline/code')); % contains preproc_helpers.m
 
-    preproc_default(exp_id, cfg_file, only_sub, doICA, doPost, interactiveClean);
+
+if nargin < 1
+    subjects_override = [];
+end
+
+exp_id = "exp01";
+
+% ----------------------------------
+% EEGLAB init (EDIT ON EACH MACHINE)
+% ----------------------------------
+% If EEGLAB is already on the path, this will just no-op
+try
+    if exist('eeglab', 'file') ~= 2
+        % EDIT if needed
+        %addpath('/path/to/eeglab');
+    end
+    if exist('eeglab', 'file') ~= 2
+        error('EEGLAB not on path. Add EEGLAB folder to MATLAB path.');
+    end
+    eeglab nogui;
+catch ME
+    error('exp01_preproc:EEGLABInitFail', 'EEGLAB init failed: %s', ME.message);
+end
+
+% -------------------------
+% Load experiment JSON cfg
+% -------------------------
+cfgFileDir = fullfile('/Users/drydena18/Desktop/pain-eeg-pipeline/config');
+cfg_path = fullfile(cfgFileDir, sprintf('%s.json', exp_id));
+
+if ~exist(cfg_path, 'file')
+    error('exp01_preproc:MissingJSON', 'Config JSON not found: %s', cfg_path);
+end
+
+cfg = load_cfg(cfg_path);
+
+% Sanity prints
+fprintf('cfg class: %s\n', class(cfg));
+fprintf('exp id: %s\n', string(cfg.exp.id));
+fprintf('raw pattern: %s\n', string(cfg.exp.raw.pattern));
+
+% ------------
+% Build paths
+% ------------
+P = config_paths(exp_id, cfg);
+
+% ----------------------------------
+% Run default normalizer + pipeline
+% ----------------------------------
+preproc_default(P, cfg, subjects_override);
+
 end

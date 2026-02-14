@@ -1,69 +1,112 @@
 {
-  "experiment_id": "26ByBiosemi",
-  "description": "26ByBiosemi: Citation - Zhao Xiangyue, Zhou Jingyao, Zhang Libo, Duan Haoqing, Wei Shiyu, Bi Yanzhi, and Hu Li (2024). 26 By Biosemi. OpenNeuro. [Dataset] doi: doi:10.18112/openneuro.ds005284.v1.0.0",
-
-  "paths": {
-    "raw_dir": "/path/to/raw/",
-    "preproc_dir": "/path/to/preproc/",
-    "figures_dir": "/path/to/preproc/figures/",
-    "logs_dir": "/path/to/logs/"
+  "meta": {
+    "schema": "v1",
+    "config": "exp01_v1.0.1"
   },
 
-  "data": {
-    "file_extension": ".set",
-    "sampling_rate": 1000,
-    "channel_locations": "/path/to/cap_layout.elp/",
-    "cap_type": "32",
+  "paths": {
+    "raw_root": "/path/to/raw/data",
+    "proj_root": "/path/to/project/root"
+  },
 
-    "event_markers": {
-      "pain_stimulus": ["condition 54"],
-      "optional_secondary_markers": ""
+  "exp": {
+    "id": "exp01",
+    "out_prefix": "26BB_62_",
+    "raw": {
+      "pattern": "26ByBiosemi_sub-%03d.bdf",
+      "search_recursive": true
+    },
+    "montage": {
+      "enabled": true,
+      "csv_path": "",
+      "csv": "montage_biosemi64_AB_to_1020_v1.csv",
+      "select_ab_only": true,
+      "do_lookup": true
+  },
+    "subjects": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26],
+    "channel_locs": {
+      "use_elp": true,
+      "elp_path_key": "P.CORE.ELP_FILE" change to file path
     }
   },
 
-  "preprocessing": {
-    "line_noise_removal": {
-      "apply_notch": false,
-      "lowpass_alternative": true,
-      "lowpass_cutoff": 40
+  "preproc": {
+    "filter": {
+      "enabled": true,
+      "type": "fir",
+      "highpass_hz": 0.5,
+      "lowpass_hz": 40,
+      "tag": "fir"
     },
 
-    "filters": {
-      "highpass": 0.5,
-      "lowpass": 40,
-      "filter_order": 2,
-      "apply_fir": true
+    "notch": {
+      "enabled": true,
+      "freq_hz": 60,
+      "bw_hz": 2,
+      "tag": "notch60"
     },
 
-    "epoching": {
-      "apply_epoching": true,
-      "event_code": "pain_stimulus",
-      "tmin": -1.0,
-      "tmax": 2.0,
-      "baseline": [-0.5, 0]
+    "resample": {
+      "enabled": true,
+      "target_hz": 500,
+      "tag": "rs500"
     },
 
-    "bad_channel_detection": {
-      "auto_detect": true,
-      "z-threshold": 4.0,
-      "interpolate_before_ica": true
+    "reref": {
+      "enabled": true,
+      "mode": "average",
+      "channels": [],
+      "tag": "reref"
     },
 
-    "reference": {
-      "reference_type": "average",
+    "initrej": {
+      "enabled": true,
+      "tag": "initrej",
+      "badchan": {
+        "enabled": false,
+        "method": "flatline_or_variance",
+        "flatline_sec": 5,
+        "variance_z": 5
+      },
+      "badseg": {
+        "enabled": true,
+        "method": "threshold",
+        "threshold_uv": 150
+      }
     },
 
     "ica": {
-      "run_ica": true,
-      "method": "extended_infomax",
-      "reject_by_iclabel": true,
-      "iclabel_threshold": 0.8
-    }
-  },
+      "enabled": true,
+      "method": "runica",
+      "tag": "ica",
+      "iclabel": {
+        "enabled": true,
+        "tag": "iclabel",
+        "auto_reject": false,
+        "thresholds": {
+          "eye": 0.9,
+          "muscle": 0.9,
+          "heart": 0.9,
+          "line_noise": 0.9,
+          "channel_noise": 0.9,
+          "other": 0.0,
+          "brain_min": 0.0
+        }
+      }
+    },
 
-  "export": {
-    "save_cleaned_epochs": true,
-    "save_continuous_cleaned": true,
-    "output_format": "set"
+    "epoch": {
+      "enabled": true,
+      "event_types": ["condition 54"],
+      "tmin_sec": -1.0,
+      "tmax_sec": 2.0,
+      "tag": "epoch"
+    },
+
+    "baseline": {
+      "enabled": true,
+      "window_sec": [-0.5, 0.0],
+      "tag": "base"
+    }
   }
-} 
+}
