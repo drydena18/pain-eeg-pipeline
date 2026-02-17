@@ -12,7 +12,7 @@ if isempty(resp) || strcmp(resp, '[]')
     return;
 end
 
-removedICs = srt2num(resp);
+removedICs = str2num(resp);
 if isempty(removedICs)
     removedICs = [];
 else

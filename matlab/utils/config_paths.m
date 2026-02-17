@@ -57,13 +57,13 @@ end
 E = R.(exp_id);
 
 % ----------------------
-% Roots: RAW vs OUTPUTS
+% Roots: RAW + OUTPUTS
 % ----------------------
 % RAW root can be read-only
 rawRootDefault = fullfile('/cifs', 'seminowicz', 'eegPainDatasets', 'CNED');
 
 % Outputs must be writeable. Default to user home.
-outRootDefault = fullfile(string(getenv("HOME")), "CNED_outputs");
+outRootDefault = fullfile('/cifs', 'seminowicz', 'eegPainDatasets', 'CNED', 'da-analysis');
 
 % Allow JSON override:
 % cfg.paths.raw_root, cfg.paths.proj_root or (out_root)
@@ -84,7 +84,7 @@ P.INPUT.EXP = fullfile(P.RAW_ROOT, E.raw_dirname);
 
 % All outputs for this experiment go under PROJ_ROOT/<out_dirname>/preproc
 P.RUN_ROOT = fullfile(P.PROJ_ROOT, E.out_dirname, 'preproc');
-P.RESOURCE = fullfile(P.RUN_ROOT, 'resources');
+P.RESOURCE = fullfile(P.PROJ_ROOT, E.out_dirname, 'resource');
 
 % ---------------
 % Core Resources

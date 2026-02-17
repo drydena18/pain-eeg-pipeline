@@ -8,7 +8,7 @@ if fid < 0
 end
 fprintf(fid, "index\tlavel\n");
 for i = 1:EEG.nbchan
-    frpintf(fid, '%d\t%s\n', i, EEG.chanlocs(i).labels);
+    fprintf(fid, '%d\t%s\n', i, EEG.chanlocs(i).labels);
 end
 fclose(fid);
 end

@@ -84,9 +84,7 @@ for i = 1:numel(subs)
     logmsg(logf, 'Raw File: %s', rawPath);
 
     rawPath = char(string(rawPath));
-    assert(exist(rawPath, 'file') == 2, 'Raw file missing: %s', rawPath);
-
-    logmsg(logf, 'RawPath class = %s | isstring = %d', class(rawPath), isstring(rawPath));
+    assert(exist)
 
     % -------------------------------------------------
     % Import raw (.eeg/.bdf) -> EEG struct (no saving)
@@ -135,7 +133,7 @@ for i = 1:numel(subs)
     % -------
     if cfg.preproc.filter.enabled
         nextTag = char(string(cfg.preproc.filter.tag));
-        [EEG, tags, didLoad] = maybe_load_stage(ST.FILTER, P, subjid, tags, nextTag, logf, EEG);
+        [EEG, tags, didLoad] = maybe_load_stage(ST.FILTER, P, subjid, tags, nextTag, logf);
         if ~didLoad
             hp = cfg.preproc.filter.highpass_hz;
             lp = cfg.preproc.filter.lowpass_hz;
@@ -154,7 +152,7 @@ for i = 1:numel(subs)
     % -----------------------------
     if cfg.preproc.notch.enabled
         nextTag = char(string(cfg.preproc.notch.tag));
-        [EEG, tags, didLoad] = maybe_load_stage(ST.NOTCH, P, subjid, tags, nextTag, logf, EEG);
+        [EEG, tags, didLoad] = maybe_load_stage(ST.NOTCH, P, subjid, tags, nextTag, logf);
         if ~didLoad
             f0 = cfg.preproc.notch.freq_hz;
             bw = cfg.preproc.notch.bw_hz;
@@ -173,7 +171,7 @@ for i = 1:numel(subs)
     % ---------
     if cfg.preproc.resample.enabled
         nextTag = char(string(cfg.preproc.resample.tag));
-        [EEG, tags, didLoad] = maybe_load_stage(ST.RESAMPLE, P, subjid, tags, nextTag, logf, EEG);
+        [EEG, tags, didLoad] = maybe_load_stage(ST.RESAMPLE, P, subjid, tags, nextTag, logf);
         if ~didLoad
             targetFs = cfg.preproc.resample.target_hz;
             if EEG.srate ~= targetFs
@@ -194,7 +192,7 @@ for i = 1:numel(subs)
     % ------------
     if cfg.preproc.reref.enabled
         nextTag = char(string(cfg.preproc.reref.tag));
-        [EEG, tags, didLoad] = maybe_load_stage(ST.REREF, P, subjid, tags, nextTag, logf, EEG);
+        [EEG, tags, didLoad] = maybe_load_stage(ST.REREF, P, subjid, tags, nextTag, logf);
         if ~didLoad
             logmsg(logf, '[REREF] mode = %s', string(cfg.preproc.reref.mode));
 
@@ -222,7 +220,7 @@ for i = 1:numel(subs)
     % ----------------------------------------------------
     if cfg.preproc.initrej.enabled
         nextTag = char(string(cfg.preproc.initrej.tag));
-        [EEG, tags, didLoad] = maybe_load_stage(ST.INITREJ, P, subjid, tags, nextTag, logf, EEG);
+        [EEG, tags, didLoad] = maybe_load_stage(ST.INITREJ, P, subjid, tags, nextTag, logf);
         if ~didLoad
             logmsg(logf, '[INITREJ] Suggesting bad channels + manual spherical interpolation.');
 
@@ -302,7 +300,7 @@ for i = 1:numel(subs)
     % ----------------
     if cfg.preproc.ica.enabled
         nextTag = char(string(cfg.preproc.ica.tag));
-        [EEG, tags, didLoad] = maybe_load_stage(ST.ICA, P, subjid, tags, nextTag, logf, EEG);
+        [EEG, tags, didLoad] = maybe_load_stage(ST.ICA, P, subjid, tags, nextTag, logf);
         if ~didLoad
             logmsg(logf, '[ICA] method = %s', char(string(cfg.preproc.ica.method)));
 
@@ -371,14 +369,6 @@ for i = 1:numel(subs)
                         logmsg(logf, '[ICMET] Logged PSD metrics + wrote CSV.');
                     catch ME
                         logmsg(logf, '[WARN] IC PSD metric computation failed: %s', ME.message);
-
-                        logmsg(logf, '[WARN] ICLabel stack trace:\n%s', getReport(ME, 'extended', 'hyperlinks', 'off'));
-
-                        if ~isempty(ME.stack)
-                            s0 = ME.stack(1);
-                            logmsg(logf, '[WARN] Top stack frame: %s (line %d) | func = %s', s0.file, s0.line, s0.name);
-                        end
-                        
                     end
 
                     % Manual reject (default none)
@@ -406,13 +396,6 @@ for i = 1:numel(subs)
 
                 catch ME
                     logmsg(logf, '[WARN] ICLabel failed: %s', ME.message);
-
-                    logmsg(logf, '[WARN] ICLabel stack trace:\n%s', getReport(ME, 'extended', 'hyperlinks', 'off'));
-
-                    if ~isempty(ME.stack)
-                        s0 = ME.stack(1);
-                        logmsg(logf, '[WARN] Top stack frame: %s (lind %d) | func = %s', s0.file, s0.line, s0.name);
-                    end
                 end
             else
                 logmsg(logf, '[ICLABEL] disabled.');
@@ -427,7 +410,7 @@ for i = 1:numel(subs)
     % ------
     if cfg.preproc.epoch.enabled
         nextTag = char(string(cfg.preproc.epoch.tag));
-        [EEG, tags, didLoad] = maybe_load_stage(ST.EPOCH, P, subjid, tags, nextTag, logf, EEG);
+        [EEG, tags, didLoad] = maybe_load_stage(ST.EPOCH, P, subjid, tags, nextTag, logf);
         if ~didLoad
             ev = cfg.preproc.epoch.event_types;
             tmin = cfg.preproc.epoch.tmin_sec;
@@ -451,7 +434,7 @@ for i = 1:numel(subs)
     % ---------
     if cfg.preproc.baseline.enabled
         nextTag = char(string(cfg.preproc.baseline.tag));
-        [EEG, tags, didLoad] = maybe_load_stage(ST.BASE, P, subjid, tags, nextTag, logf, EEG);
+        [EEG, tags, didLoad] = maybe_load_stage(ST.BASE, P, subjid, tags, nextTag, logf);
         if ~didLoad
             win = cfg.preproc.baseline.window_sec;
             logmsg(logf, '[BASELINE] window = [%.3f %.3f] sec', win(1), win(2));

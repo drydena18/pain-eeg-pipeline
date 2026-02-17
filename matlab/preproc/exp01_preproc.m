@@ -17,7 +17,7 @@ P = config_paths(exp_id);
 try
     if exist('eeglab', 'file') ~= 2
         % EDIT if needed
-        %addpath('/path/to/eeglab');
+        addpath('/home/UWO/darsenea/Documents/matlab-toolboxes/eeglab2025.1.0');
     end
     if exist('eeglab', 'file') ~= 2
         error('EEGLAB not on path. Add EEGLAB folder to MATLAB path.');
@@ -30,7 +30,7 @@ end
 % -------------------------
 % Load experiment JSON cfg
 % -------------------------
-cfgFileDir = fullfile('/Users/drydena18/Desktop/pain-eeg-pipeline/config');
+cfgFileDir = fullfile('/home/UWO/darsenea/Documents/GitHub/pain-alpha-dynamics/config/');
 cfg_path = fullfile(cfgFileDir, sprintf('%s.json', exp_id));
 
 if ~exist(cfg_path, 'file')

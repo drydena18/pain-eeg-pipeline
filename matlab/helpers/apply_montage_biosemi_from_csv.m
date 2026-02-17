@@ -5,7 +5,7 @@ function EEG = apply_montage_biosemi_from_csv(P, cfg, EEG, logf, subjid, LOGS)
 % Resolve csv path
 csvPath = "";
 if isfield(cfg.exp, 'montage') && isfield(cfg.exp.montage, 'csv')
-    csvPath = string(cfg.exp.montage.csv);
+    csvPath = strtrim(string(cfg.exp.montage.csv));
 end
 if strlength(csvPath) == 0
     error('Montage enabled but cfg.exp.montage.csv is missing.');
@@ -16,9 +16,36 @@ csvPath2 = fullfile(string(P.RESOURCE), char(csvPath));
 if isfile(csvPath2)
     csvPath = string(csvPath2);
 end
+
+logmsg(logf, '[MONTAGE][DEBUG] P.RESOURCE = "%s"', string(P.RESOURCE));
+logmsg(logf, '[MONTAGE][DEBUG] cfg.exp.montage.csv = "%s"', string(cfg.exp.montage.csv));
+logmsg(logf, '[MONTAGE][DEBUG] csvPath (after trim) = "%s"', csvPath);
+
+csvPath2 = fullfile(string(P.RESOURCE), char(csvPath));
+logmsg(logf, '[MONTAGE][DEBUG] csvPath2 (P.RESOURCE + csv) = "%s"', string(csvPath2));
+
+if isfolder(P.RESOURCE)
+    D = dir(P.RESOURCE);
+    names = string({D.name});
+    logmsg(logf, '[MONTAGE][DEBUG] Files in P.RESOURCE = "%s"', strjoin(names, ", "));
+else
+    logmsg(logf, '[MONTAGE][DEBUG] P.RESOURCE folder does not exist.');
+end
+
 if ~isfile(csvPath)
     error('Montage CSV not found: %s', char(csvPath));
 end
+
+labs0 = string({EEG.chanlocs.labels});
+logmsg(logf, '[DEBUG] nbchan before AB-select = %d', EEG.nbchan);
+logmsg(logf, '[DEBUG] First 20 labels: %s', strjoin(labs0(1:min(20,end)), ", "));
+
+wantA = "A" + string(1:32);
+wantB = "B" + string(1:32);
+present = upper(strtrim(labs0));
+
+logmsg(logf, '[DEBUG] Present A chans: %s', strjoin(intersect(wantA, present), ", "));
+logmsg(logf, '[DEBUG] Present B chans: %s', strjoin(intersect(wantB, present), ", "));
 
 % Optionally select only A/B scalp channels
 selectAB = true;
@@ -27,9 +54,12 @@ if isfield(cfg.exp.montage, 'select_ab_only')
 end
 
 if selectAB
-    keep = [
-        arrayfun(@(x) sprintf('A%d', x), 1:32, 'UniformOutput', false), 
-        arrayfun(@(x) sprintf('B%d', x), 1:32, 'UniformOutput', fale)];
+    labs = string({EEG.chanlocs.labels});
+    labsU = upper(strtrim(labs));
+
+    isAB = ~cellfun(@isempty, regexp(cellstr(labsU), '^(A|B)\d+$|^(A|B)0+\d+$', 'once'));
+    keep = cellstr(labs(isAB));
+
     EEG = pop_select(EEG, 'channel', keep);
     EEG = eeg_checkset(EEG);
     logmsg(logf, '[MONTAGE] Selected A1-32 & B1-32 only. nbchan = %d', EEG.nbchan);

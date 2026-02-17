@@ -25,7 +25,7 @@ Pp = ensureBlock(Pp, 'ica', true, 'ica');
 Pp.ica = defaultField(Pp.ica, 'method', 'runica');
 Pp.ica = defaultStruct(Pp.ica, 'iclabel');
 Pp.ica.iclabel = defaultField(Pp.ica.iclabel, 'enabled', false);
-Pp.ica.iclabel = defaultField(Pp.ica.icalabel, 'auto_reject', false);
+Pp.ica.iclabel = defaultField(Pp.ica.iclabel, 'auto_reject', false);
 Pp.ica.iclabel = defaultStruct(Pp.ica.iclabel, 'thresholds');
 
 Pp = ensureBlock(Pp, 'epoch', true, 'epoch');

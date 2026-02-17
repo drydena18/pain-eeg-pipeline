@@ -8,6 +8,6 @@ for c = badChans(:)'
     xline(c, '--');
 end
 hold off;
-saveas(h, fullfile(LOGS, sprintf('sub-%03d)initrej_bar_%s.png', subjid, name)));
+saveas(h, fullfile(LOGS, sprintf('sub-%03d_initrej_bar_%s.png', subjid, name)));
 close(h);
 end

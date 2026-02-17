@@ -1,6 +1,6 @@
 function icMetrics = compute_ic_psd_metrics(EEG, icList)
 if isempty(icList)
-    icMetrics = strict('ic', {}, 'peak_hz', {}, 'bp', {}, 'hf_ratio', {}, 'line_ratio', {});
+    icMetrics = struct('ic', {}, 'peak_hz', {}, 'bp', {}, 'hf_ratio', {}, 'line_ratio', {});
     return;
 end
 
@@ -31,7 +31,7 @@ for k = 1:numel(icList)
     bandMask = (f >= 0.5 & f <= 40);
     pBand = pxx(bandMask);
     fband = f(bandMask);
-    [~, idx] = max(pband);
+    [~, idx] = max(pBand);
     peakHz = fband(idx);
 
     bp = struct();

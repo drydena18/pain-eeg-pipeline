@@ -35,7 +35,7 @@ for ic = 1:size(C, 1)
     if isfield(thr, 'line_noise') && pLine >= thr.line_noise
         hits{end+1} = sprintf('line = %.2f >= %.2f', pLine, thr.line_noise);
     end
-    if isfield(thr, 'channel_noise') && PChan >= thr.channel_noise
+    if isfield(thr, 'channel_noise') && pChan >= thr.channel_noise
         hits{end+1} = sprintf('chanNoise = %.2f >= %.2f', pChan, thr.channel_noise);
     end
 

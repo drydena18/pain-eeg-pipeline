@@ -25,7 +25,7 @@ if isempty(hit)
     error('None of requested event_types found: %s', strjoin(wantedStr, ', '));
 else
     for k = 1:numel(hit)
-        logmsg(logf, '[EVENTS] Will epoch on "%s" (n = %d)', hit9k0, sum9typeStr == hit(k)));
+        logmsg(logf, '[EVENTS] Will epoch on "%s" (n = %d)', hit(k), sum(typeStr == hit(k)));
     end
 end
 end
