@@ -29,8 +29,8 @@ writematrix(gaPxx', psdPath); % trials x freqs
 
 % Write cfg json for python
 pcfg = struct();
-pcfg.fmin_hz = foo.min_hz;
-pcfg.fmax_hz = foo.max_hz;
+pcfg.fmin_hz = foo.fmin_hz;
+pcfg.fmax_hz = foo.fmax_hz;
 pcfg.peak_width_limits = foo.peak_width_limits;
 pcfg.max_n_peaks = foo.max_n_peaks;
 pcfg.min_peak_height = foo.min_peak_height;
@@ -43,7 +43,7 @@ fid = fopen(cfgPath, 'w'); fwrite(fid, txt); fclose(fid);
 
 % Resolve python exe + script path
 pyexe = "python";
-if isfield(foo, 'python_exe') && strlength(string(foo.pythin_exe)) > 0
+if isfield(foo, 'python_exe') && strlength(string(foo.python_exe)) > 0
     pyexe = string(foo.python_exe);
 end
 

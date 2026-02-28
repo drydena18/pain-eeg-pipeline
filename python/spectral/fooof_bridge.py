@@ -25,7 +25,7 @@ def main():
 
     cfg = load_cfg(args.cfg)
 
-    fooof_cfg = cfg["spectral"]["fooof"]
+    fooof_cfg = cfg
 
     fmin = float(fooof_cfg["fmin_hz"])
     fmax = float(fooof_cfg["fmax_hz"])
