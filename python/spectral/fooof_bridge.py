@@ -28,17 +28,15 @@ def main():
 
     cfg = load_cfg(args.cfg)
 
-    fooof_cfg = cfg
-
-    fmin = float(fooof_cfg["fmin_hz"])
-    fmax = float(fooof_cfg["fmax_hz"])
-    pwl = fooof_cfg.get("peak_width_limits", [1.0, 12.0])
-    max_peaks = int(fooof_cfg.get("max_n_peaks", 6))
-    min_peak_height = float(fooof_cfg.get("min_peak_height", 0.0))
-    aperiodic_mode = fooof_cfg.get("aperiodic_mode", "fixed")
-    alpha_band = fooof_cfg.get("alpha_band_hz", [8.0, 12.0])
-    peak_threshold = float(fooof_cfg.get("peak_threshold", 1.0))
-    verbose = bool(fooof_cfg.get("verbose", False))
+    fmin = float(cfg["fmin_hz"])
+    fmax = float(cfg["fmax_hz"])
+    pwl = cfg.get("peak_width_limits", [1.0, 12.0])
+    max_peaks = int(cfg.get("max_n_peaks", 10))
+    min_peak_height = float(cfg.get("min_peak_height", 0.0))
+    aperiodic_mode = cfg.get("aperiodic_mode", "fixed")
+    alpha_band = cfg.get("alpha_band_hz", [8.0, 12.0])
+    peak_threshold = float(cfg.get("peak_threshold", 1.0))
+    verbose = bool(cfg.get("verbose", False))
 
     out = {
         "summary": {

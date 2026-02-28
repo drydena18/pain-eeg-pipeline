@@ -134,6 +134,7 @@ for i = 1:numel(subs)
             spec_logmsg(logf, '[FOOOF] Running Python FOOOF bridge on GA PSD...');
             fooofOut = spec_run_fooof_python(f, gaPxx, foo, outTmp, subjid, logf);
             spec_logmsg(logf, '[FOOOF] Done. Trials fit: %d', numel(fooofOut.trials));
+            if doFooof && isf
         catch ME
             spec_logmsg(logf, '[WARN] FOOOF failed: %s', ME.message);
             fooofOut = struct();
@@ -156,16 +157,13 @@ for i = 1:numel(subs)
     % Plot figures
     % -----------
     try
-        spec_logmsg(logf, '[FIG] Writing summary figure...');
+        spec_logmsg(logf, '[FIG] Writing summary figures...');
         outSummary = fullfile(outFig, sprintf('sub-%03d_spectral_summary.png', subjid));
         spec_plot_summary(outSummary, f, gaPxx, featGA, fooofOut, alpha, cfg, subjid);
 
         if isfield(cfg.spectral.qc,'save_heatmaps') && logical(cfg.spectral.qc.save_heatmaps)
-            outHM1 = fullfile(outFig, sprintf('sub-%03d_paf_cog_heatmap.png', subjid));
-            outHM2 = fullfile(outFig, sprintf('sub-%03d_sf_balance_heatmap.png', subjid));
-            outHM3 = fullfile()
-            spec_plot_heatmap(outHM1, featChan.paf_cog_hz, chanLabels, 'PAF CoG (Hz)');
-            spec_plot_heatmap(outHM2, featChan.sf_balance, chanLabels, 'Slow/Fast Balance');
+            outPanel = fullfile(outFig, sprintf('sub-%03d_heatmap_panel.png', subjid));
+            spec_plot_heatmap_panel(outPanel, featChan, chanLabels, subjid);
         end
 
         if plotMode == "debug" || plotMode == "exhaustive"

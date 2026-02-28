@@ -1,0 +1,51 @@
+function fooofOut = spec_fill_fooof_alpha(fooofOut, f, gaPxx, featGA, alpha_band_hz)
+% Fill missing FOOOF alpha peak params with defensible fallbacks.
+%
+% Adds fields per trial:
+%   alpha_found (0/1)
+%   alpha_cf_filled, alpha_pw_filled, alpha_bw_filled
+%   alpha_cf_source, alpha_pw_source, alpha_bw_source, ('fooof'/'fallback')
+%
+% Fallbacks:
+%   CF: CoG PAF within alpha (featGA.paf_cog_hz)
+%   PW: log(alpha total power) (featGA.pow_alpha_total)
+%   BW: weighted SD proxy within alpha band (Hz)
+
+if ~isfield(fooofOut, 'trials') || isempty(fooofOut.trials)
+    return;
+end
+
+nTr = numel(fooofOut.trials);
+
+% Pull GA features needed
+paf = featGA.paf_cog_hz(:);
+powA = featGA.pow_alpha_total(:);
+
+% Bandwidth proxy always available
+bwProxy = spec_alpha_bandwidth_proxy(f, gaPxx, alpha_band_hz, paf);
+
+% Fill per trial
+for t = 1:nTr
+    tr = fooofOut.trials(t);
+
+    hasCF = isfield(tr, 'alpha_cf') && ~isnan(tr.alpha_cf);
+    hasPW = isfield(tr, 'alpha_pw') && ~isnan(tr.alpha_pw);
+    hasBW = isfield(tr, 'alpha_bw') && ~isnan(tr.alpha_bw);
+
+    tr.alpha_found = double(hasCF);
+
+    % CF fill
+    if hasCF
+        tr.alpha_cf_filled = tr.alpha_cf;
+        tr.alpha_cf_source = "fooof";
+    else
+        tr.alpha_cf_filled = paf(t);
+        tr.alpha_cf_source = "cog_fallback";
+    end
+
+    % PW fill
+    if hasPW
+        tr.alpha_pw_filled = tr.alpha_pw;
+        tr.alpha_pw_source = "fooof";
+    else
+        tr.alpha_pw_fi

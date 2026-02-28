@@ -1,0 +1,29 @@
+function fooofOut = spec_fill_fooof_alpha_nans(fooofOut, featGA, alpha)
+% Fill missing FOOOF alpha peak params with defensible fallbacks
+% - alpha_cf -> PAF CoG
+% - alpha_pw -> log10(total alpha power)
+% - alpha_bw -> weighted SD of frequency within alpha using GA PSD if
+% available
+
+if ~isfield(fooofOut, 'trials') || isempty(fooofOut.trials)
+    return;
+end
+
+nTr = numel(fooofOut.trials);
+
+% Pre-extract arrays
+acf = nan(nTr, 1); apw = nan(nTr, 1); abw = nan(nTr, 1);
+for t = 1:nTr
+    tr = fooofOut.trials(t);
+    if isfield(tr, 'alpha_cf'), acf(t) = tr.alpha_cf; end
+    if isfield(tr, 'alpha_pw'), apw(t) = tr.alpha_pw; end
+    if isfield(tr, 'alpha_bw'), abw(t) = tr.alpha_bw; end
+end
+
+% Fallbacks
+acf_f = acf;
+apw_f = apw;
+abw_f = abw;
+
+% 1) alpha_cf fallback = PAF CoG
+bad = isnan(a)

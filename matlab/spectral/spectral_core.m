@@ -133,6 +133,9 @@ for i = 1:numel(subs)
         try
             spec_logmsg(logf, '[FOOOF] Running Python FOOOF bridge on GA PSD...');
             fooofOut = spec_run_fooof_python(f, gaPxx, foo, outTmp, subjid, logf);
+            if doFooof && isfield(fooofOut, 'trials') && ~isempty(fooofOut.trials)
+                fooofOut = spec_fill_fooof_alpha(fooofOut, f, gaPxx, featGA, cfg.spectral.fooof.alpha_band_hz);
+            end
             spec_logmsg(logf, '[FOOOF] Done. Trials fit: %d', numel(fooofOut.trials));
         catch ME
             spec_logmsg(logf, '[WARN] FOOOF failed: %s', ME.message);

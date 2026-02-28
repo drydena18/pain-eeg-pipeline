@@ -26,7 +26,7 @@ for k = 1:size(items, 1)
     end
 end
 
-items = items(keep, :)';
+items = items(keep, :);
 
 if isempty(items)
     warning('spec_plot_heatmap_panel:NoFields', 'No valid featChan fields to plot.');
