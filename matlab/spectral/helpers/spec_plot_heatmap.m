@@ -17,7 +17,7 @@ if nChan > 80, step = 4; end
 
 yt = 1:step:nChan;
 set(gca, 'YTick', yt, 'YTickLabel', chanLabels(yt));
-set(gca, 'FontSize', 12);
+set(gca, 'FontSize', 18);
 
 colorbar;
 

@@ -24,8 +24,16 @@ cfgPath  = fullfile(outTmp, sprintf('sub-%03d_fooof_cfg.json', subjid));
 outPath  = fullfile(outTmp, sprintf('sub-%03d_fooof_out.json', subjid));
 
 % Write inputs
-writematrix(f(:), freqPath);
-writematrix(gaPxx', psdPath); % trials x freqs
+writecell({'freq_hz'}, freqPath);
+writematrix(f(:), freqPath, 'WriteMode', 'append');
+
+freqHdr = arrayfun(@(x) sprintf('f_%0.3f', x), f(:)', 'UniformOutput', false);
+freqHdr = matlab.lang.makeValidName(freqHdr);
+
+Tpsd = array2table(gaPxx', 'VariableNames', freqHdr);
+Tpsd = addvars(Tpsd, (1:nTr)', 'Before', 1, 'NewVariableNames', 'trial');
+
+writetable(Tpsd, psdPath);
 
 % Write cfg json for python
 pcfg = struct();
@@ -36,6 +44,7 @@ pcfg.max_n_peaks = foo.max_n_peaks;
 pcfg.min_peak_height = foo.min_peak_height;
 pcfg.aperiodic_mode = char(string(foo.aperiodic_mode));
 pcfg.alpha_band_hz = foo.alpha_band_hz;
+pcfg.peak_threshold = foo.peak_threshold;
 pcfg.verbose = isfield(foo, 'verbose') && logical(foo.verbose);
 
 txt = jsonencode(pcfg);

@@ -16,12 +16,15 @@ def main():
     ap.add_argument("--out", required = True, help = "Output JSON")
     args = ap.parse_args()
 
-    freqs = np.loadtxt(args.freq, delimiter = ",")
+    freqs = np.genfromtxt(args.freq, delimiter = ",", skip_header = 1)
     if freqs.ndim > 1:
         freqs = freqs.squeeze()
-    psd = np.loadtxt(args.psd, delimiter = ",")
+    
+    psd = np.genfromtxt(args.psd, delimiter = ",", skip_header = 1)
     if psd.ndim == 1:
-        psd = psd.reshape(1, -1)
+        psd.psd.reshape(1, -1)
+    if psd.shape[1] == (len(freqs) + 1):
+        psd = psd[:, 1:]
 
     cfg = load_cfg(args.cfg)
 
@@ -34,6 +37,7 @@ def main():
     min_peak_height = float(fooof_cfg.get("min_peak_height", 0.0))
     aperiodic_mode = fooof_cfg.get("aperiodic_mode", "fixed")
     alpha_band = fooof_cfg.get("alpha_band_hz", [8.0, 12.0])
+    peak_threshold = float(fooof_cfg.get("peak_threshold", 1.0))
     verbose = bool(fooof_cfg.get("verbose", False))
 
     out = {
@@ -43,6 +47,7 @@ def main():
             "peak_width_limits": pwl,
             "max_n_peaks": max_peaks,
             "min_peak_height": min_peak_height,
+            "peak_threshold": peak_threshold,
             "aperiodic_mode": aperiodic_mode,
             "alpha_band_hz": alpha_band,
             "n_trials": int(psd.shape[0]),
@@ -56,6 +61,7 @@ def main():
             peak_width_limits = pwl,
             max_n_peaks = max_peaks,
             min_peak_height = min_peak_height,
+            peak_threshold = peak_threshold,
             aperiodic_mode = aperiodic_mode,
             verbose = verbose
         )

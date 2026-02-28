@@ -36,20 +36,8 @@ legend({'sf\balance', 'sf\logratio'}, 'Interpreter', 'none', 'Location', 'best')
 title('Alpha interaction over trials', 'Interpreter', 'none');
 
 % 4) FOOOF summary (if available)
-nexttile;
-axis off;
-if ~isempty(fooofOut) && isfield(fooofOut, 'summary')
-    s = fooofOut.summary;
-    txt = sprintf(['FOOOF (GA per-trial)\n', ...
-        'f range: %.1f-%.1f Hz\n', ...
-        'aperiodic_mode: %s\n', ...
-        'alpha band: %.1f-%.1f Hz\n', ...
-        'trials fit: %d\n'], ...
-        s.fmin_hz, s.fmax_hz, s.aperiodic_mode, s.alpha_band_hz(1), s.alpha_band_hz(2), s.n_trials);
-    text(0, 1, txt, 'VerticalAlignment', 'top', 'Interpreter', 'none');
-else
-    text(0, 1, 'FOOOF: not available / failed', 'VerticalAlignment', 'top', 'Interpreter', 'none');
-end
+outFooofFig = strrep(outPath, '_summary.png', '_fooof.png');
+spec_plot_fooof_summary(outFooofFig, fooofOut, subjid, cfg);
 
 exportgraphics(h, outPath, 'Resolution', 200);
 close(h);
