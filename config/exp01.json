@@ -81,6 +81,9 @@
     "ica": {
       "enabled": true,
       "method": "runica",
+      "runica": {
+          "extended": 1
+      },
       "tag": "ica",
       "iclabel": {
         "enabled": true,

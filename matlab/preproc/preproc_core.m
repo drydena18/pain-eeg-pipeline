@@ -307,8 +307,23 @@ for i = 1:numel(subs)
             logmsg(logf, '[ICA] method = %s', char(string(cfg.preproc.ica.method)));
 
             [EEGtrain, segInfo] = make_ica_training_copy(EEG, cfg, logf);
-            EEGtrain = pop_runica(EEGtrain, 'icatype', char(string(cfg.preproc.ica.method)));
+
+            icatype = char(string(cfg.preproc.ica.method));
+
+            doExtended = false;
+            if isfield(cfg.preproc.ica, 'runica') && isfield(cfg.preproc.ica.runica, 'extended')
+                doExtended = logical(cfg.preproc.ica.runica.extended);
+            end
+
+            if strcmpi(icatype, 'runica') && doExtended
+                EEGtrain = pop_runica(EEGtrain, 'icatype', 'runica', 'extended', 1);
+            else
+                EEGtrain = pop_runica(EEGtrain, 'icatype', icatype);
+            end
+
             EEGtrain = eeg_checkset(EEGtrain);
+
+            logmsg(logf, '[ICA] icatype = %s extended = %d', icatype, doExtended);
 
             EEG.icaweights = EEGtrain.icaweights;
             EEG.icasphere = EEGtrain.icasphere;
@@ -326,7 +341,7 @@ for i = 1:numel(subs)
             if isfield(segInfo, 'n_intervals'); nIntervals = segInfo.n_intervals; end
             if isfield(segInfo, 'pct_time'); pctTime = segInfo.pct_time; end
             
-                logmsg(logf, '[ICA] Trained on %s. badseg_removed = %d intervals = %g pct = %.2f', trainedOn, logical(isfield(segInfo, 'removed') && segInfo.removed), nIntervals, pctTime);
+            logmsg(logf, '[ICA] Trained on %s. badseg_removed = %d intervals = %g pct = %.2f', trainedOn, logical(isfield(segInfo, 'removed') && segInfo.removed), nIntervals, pctTime);
 
             tags{end+1} = nextTag;
 

@@ -50,7 +50,7 @@ for ic = icList(:)'
     end
     sgtitle(ttl, 'Interpreter', 'none');
 
-    saveas(h, fullfile(outDir, sprintf('sub-$03d_ic%03d_qc.png', subjid, ic)));
+    saveas(h, fullfile(outDir, sprintf('sub-%03d_ic%03d_qc.png', subjid, ic)));
     close(h);
 end
 end
