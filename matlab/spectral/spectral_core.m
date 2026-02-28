@@ -161,24 +161,8 @@ for i = 1:numel(subs)
         spec_plot_summary(outSummary, f, gaPxx, featGA, fooofOut, alpha, cfg, subjid);
 
         if isfield(cfg.spectral.qc,'save_heatmaps') && logical(cfg.spectral.qc.save_heatmaps)
-            outHM1 = fullfile(outFig, sprintf('sub-%03d_paf_cog_heatmap.png', subjid));
-            outHM2 = fullfile(outFig, sprintf('sub-%03d_sf_balance_heatmap.png', subjid));
-            %outHM3 = fullfile(outFig, sprintf('sub-%03d_pow_slow_heatmap.png', subjid));
-            %outHM4 = fullfile(outFig, sprintf('sub-%03d_pow_fast_heatmap.png', subjid));
-            %outHM5 = fullfile(outFig, sprintf('sub-%03d_rel_slow_heatmap.png', subjid));
-            %outHM6 = fullfile(outFig, sprintf('sub-%03d_rel_fast_heatmap.png', subjid));
-            %outHM7 = fullfile(outFig, sprintf('sub-%03d_log_ratio_heatmap.png', subjid));
-            %outHM8 = fullfile(outFig, sprintf('sub-%03d_sf_ratio_heatmap.png', subjid));
-            %outHM9 = fullfile(outFig, sprintf('sub-%03d_slow_frac_heatmap.png', subjid));
-            spec_plot_heatmap(outHM1, featChan.paf_cog_hz, chanLabels, 'PAF CoG (Hz)');
-            spec_plot_heatmap(outHM2, featChan.sf_balance, chanLabels, 'Slow/Fast Balance');
-            %spec_plot_heatmap(outHM3, featChan.pow_slow, chanLabels, 'Slow Alpha (Hz)');
-            %spec_plot_heatmap(outHM4, featChan.pow_fast, chanLabels, 'Fast Alpha (Hz)');
-            %spec_plot_heatmap(outHM5, featChan.rel_slow, chanLabels, 'Relative Slow Alpha');
-            %spec_plot_heatmap(outHM6, featChan.rel_fast, chanLabels, 'Relative Fast Alpha');
-            %spec_plot_heatmap(outHM7, featChan.sf_logratio, chanLabels, 'Log Ratio^10');
-            %spec_plot_heatmap(outHM8, featChan.sf_ratio, chanLabels, 'Slow/Fast Ratio');
-            %spec_plot_heatmap(outHM9, featChan.slow_frac, chanLabels, 'Slow Alpha Fraction');
+            outPanel = fullfile(outFig, sprintf('sub-%03d_heatmap_panel.png', subjid));
+            spec_plot_heatmap_panel(outPanel, featChan, chanLabels, subjid);
         end
 
         if plotMode == "debug" || plotMode == "exhaustive"
