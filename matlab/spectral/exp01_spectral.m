@@ -40,7 +40,7 @@ exp_id = "exp01";
 % ------------------------------------
 try
     if exist('eeglab', 'file') ~= 2
-        addpath('/Users/drydena18/Desktop/matlab-toolboxes/eeglab2025.1.0');
+        addpath('/home/UWO/darsenea/Documents/matlab-toolboxes/eeglab2025.1.0');
     end
     if exist('eeglab', 'file') ~= 2
         error('EEGLAB not on path. Add EEGLAB folder to MATLAB path.');

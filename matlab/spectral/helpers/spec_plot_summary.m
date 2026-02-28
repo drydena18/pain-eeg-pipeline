@@ -3,7 +3,7 @@ function spec_plot_summary(outPath, f, gaPxx, featGA, fooofOut, alpha, cfg, subj
 nTr = size(gaPxx, 2);
 
 % Trial averaged GA PSD
-meanPSD = mean(gzPxx, 2, 'omitnan');
+meanPSD = mean(gaPxx, 2, 'omitnan');
 
 % Choose two alpha interaction traces to show
 y1 = featGA.sf_balance;
@@ -19,7 +19,7 @@ xlabel('Frequency (Hz)'); ylabel('Power (dB)');
 title(sprintf('sub-%03d: GA PSD (trial-avg)', subjid), 'Interpreter', 'none');
 xline(alpha.alpha_hz(1)); xline(alpha.alpha_hz(2));
 xline(alpha.slow_hz(1), '--'); xline(alpha.slow_hz(2), '--');
-xline(alpha.fast_hz(1), '--'); xline(alpha.fast_hz(2, '--');
+xline(alpha.fast_hz(1), '--'); xline(alpha.fast_hz(2), '--');
 
 % 2) PAF over trials
 nexttile;

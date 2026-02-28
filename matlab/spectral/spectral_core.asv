@@ -87,9 +87,7 @@ for i = 1:numel(subs)
     spec_logmsg(logf, '[LOAD] %s', inSet);
 
     inSet = char(inSet);
-    [p, n, ~] = fileparts(inSet);
-    fdt = fullfile(p, [n '.fdt']);
-    fprintf("SET: %d | FDT: %d\n", exist(inSet, 'file'), exist(fdt, 'file'));
+    [p, n, ~] = fileparts(inSet)
 
     [inFolder, inName, inExt] = fileparts(inSet);
     EEG = pop_loadset('filename', [inName inExt], 'filepath', inFolder);

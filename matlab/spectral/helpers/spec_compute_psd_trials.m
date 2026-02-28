@@ -20,7 +20,7 @@ end
 
 win = max(8, round(winS * fs));
 ovr = psd.overlap_frac;
-if isempty(ovr) || ovr = 0.5; end
+if isempty(ovr) || ovr == 0.5; end
 nover = round(win * ovr);
 
 nfft = psd.nfft;

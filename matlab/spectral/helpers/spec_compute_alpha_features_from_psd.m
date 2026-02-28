@@ -22,7 +22,7 @@ pow_alpha = squeeze(trapz(f(idxA), Pxx(:, idxA, :), 2));
 % PAF CoG within alpha band
 nums = squeeze(trapz(f(idxA), Pxx(:, idxA, :) .* reshape(f(idxA), [1 sum(idxA) 1]), 2));
 den = pow_alpha + eps0;
-paf_cog = num ./ den;
+paf_cog = nums ./ den;
 
 % Interaction family
 sf_ratio    = pow_slow ./ (pow_fast + eps0);

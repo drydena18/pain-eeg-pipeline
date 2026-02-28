@@ -1,6 +1,9 @@
 function spec_write_ga_trial_csv(outPath, subjid, featGA, fooofOut)
 % One row per trial (GA features + FOOOF outputs if available)
 
+disp('---- INSIDE spec_write_ga_trial_csv ----');
+disp(fieldnames(featGA));
+
 nTr = numel(featGA.paf_cog_hz);
 T = table();
 T.subjid = repmat(subjid, nTr, 1);
@@ -15,10 +18,10 @@ T.rel_fast_alpha    = featGA.rel_fast_alpha;
 T.sf_ratio          = featGA.sf_ratio;
 T.sf_logratio       = featGA.sf_logratio;
 T.sf_balance        = featGA.sf_balance;
-T.slow_fast_frac    = featGA.slow_fast_frac;
+T.slow_alpha_frac   = featGA.slow_alpha_frac;
 
 % FOOOF outputs
-if nargin >= 3 && ~isempty(fooofOut) && ifield(fooofOut, 'trials') && ~isempty(fooofOut.trials)
+if nargin >= 3 && ~isempty(fooofOut) && isfield(fooofOut, 'trials') && ~isempty(fooofOut.trials)
     % Map trial -> fields; assume fooofOut.trials is struct array length nTr
     ex = nan(nTr, 1); off = nan(nTr, 1); r2 = nan(nTr, 1); err = nan(nTr, 1);
     acf = nan(nTr, 1); apw = nan(nTr, 1); abw = nan(nTr, 1);
