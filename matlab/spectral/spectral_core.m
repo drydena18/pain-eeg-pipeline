@@ -1,0 +1,175 @@
+function spectral_core(P, cfg)
+% SPECTRAL_CORE Trial-wise spectral features + GA + Python FOOOF bridge
+% V 1.0.0
+%
+% Expected inputs:
+%   - P from config_paths(exp_id, cfg)
+%   - cfg normalized by spectral_default (recommended)
+%
+% Default assumes you want trial-wise spectral from epoched data,
+% so it loads from preproc "08_base" (baseline-corrected epochs).
+%
+% Output (per subject):
+%   <P.RUN_ROOT>/sub-XXX/SPECTRAL/
+%       csv/
+%       figures/
+%       tmp/        (fooof inputs/outputs)
+%       logs/
+%
+% Requires:
+%   - EEGLAB on path (pop_loadset)
+%   - Python with fooof installed (specparam) for FOOOF step
+
+subs = cfg.exp.subjects(:);
+
+% ---------
+% Settings
+% ---------
+inStage = "08_base";
+if isfield(cfg, 'spectral') && isfield(cfg.spectral, 'input_stage') && strlength(string(cfg.spectral.input_stage)) > 0
+    inStage = string(cfg.spectral.input_stage);
+end
+
+plotMode = "summary"; % summary | debug | exhaustive
+if isfield(cfg.spectral, 'qc') && isfield(cfg.spectral.qc, 'plot_mode')
+    plotMode = string(cfg.spectral.qc.plot_mode);
+end
+
+% PSD params
+psd = cfg.spectral.psd;
+alpha = cfg.spectral.alpha;
+
+% FOOOF bridge settings
+foo = cfg.spectral.fooof;
+doFooof = isfield(foo, 'enabled') && logical(foo.enabled);
+
+for i = 1:numel(subs)
+    subjid = subs(i);
+
+    % -----------------------------
+    % Per-subject output structure
+    % -----------------------------
+    subRoot = fullfile(string(P.RUN_ROOT), sprintf('sub-%03d', subjid));
+    outRoot = fullfile(subRoot, 'SPECTRAL');
+    outCSV  = fullfile(outRoot, 'csv');
+    outFig  = fullfile(outRoot, 'figures');
+    outTmp  = fullfile(outRoot, 'tmp');
+    outLog  = fullfile(outRoot, 'logs');
+
+    spec_ensure_dir(outRoot);
+    spec_ensure_dir(outCSV);
+    spec_ensure_dir(outFig);
+    spec_ensure_dir(outTmp);
+    spec_ensure_dir(outLog);
+
+    logf = spec_open_log(outLog, subjid, 'spectral');
+    cobj = onCleanup(@() spec_safe_close(logf));
+
+    spec_logmsg(logf, '===== SPECTRAL START sub-%03d =====', subjid);
+    spec_logmsg(logf, 'Input stage: %s', inStage);
+    spec_logmsg(logf, 'Plot mode: %s', plotMode);
+
+    % -------------------------
+    % Load input EEG .set file
+    % -------------------------
+    inDir = fullfile(subRoot, char(inStage));
+    if ~exist(inDir, 'dir')
+        spec_logmsg(logf, '[WARN] Missing input stage dir: %s (skipping)', inDir);
+        continue;
+    end
+
+    inSet = spec_find_latest_set(inDir, cfg.exp.out_prefix, subjid);
+    if strlength(inSet) == 0
+        spec_logmsg(logf, '[WARN] No .set found in %s (skipping)', inDir);
+        continue;
+    end
+
+    spec_logmsg(logf, '[LOAD] %s', inSet);
+    [inFolder, inName, inExt] = fileparts(inSet);
+    EEG = pop_loadset('filename', [inName inExt], 'filepath', inFolder);
+    EEG = eeg_checkset(EEG);
+
+    if EEG.trials <= 1
+        spec_logmsg(logf, '[WARN] EEG is not epoched (EEG.trials=%d). Trial-wise spectral needs epochs. Skipping.', EEG.trials);
+        continue;
+    end
+
+    chanLabels = spec_get_chanlabels(EEG);
+    nChan = EEG.nbchan;
+    nTr = EEG.trials;
+
+    % -----------------------
+    % Compute PSD per trial
+    % -----------------------
+    spec_logmsg(logf, '[PSD] Computing trial-wise PSD... (nChan=%d nTrials=%d)', nChan, nTr);
+    [f, Pxx] = spec_compute_psd_trials(EEG, psd); % Pxx: [chan x freq x trial]
+
+    % --------------------------
+    % Compute features per trial
+    % --------------------------
+    spec_logmsg(logf, '[FEAT] Computing alpha features + PAF (CoG)...');
+    featChan = spec_compute_alpha_features_from_psd(f, Pxx, alpha); % struct of [chan x trial] fields
+
+    % GA PSD per trial: average across channels (power domain)
+    gaPxx = squeeze(mean(Pxx, 1, 'omitnan')); % [freq x trial]
+    if size(gaPxx,1) ~= numel(f)
+        gaPxx = gaPxx'; % ensure [freq x trial]
+    end
+
+    featGA = spec_compute_alpha_features_from_psd(f, reshape(gaPxx, [1 numel(f) nTr]), alpha);
+    featGA = spec_squeeze_ga_features(featGA); % fields become [trial x 1]
+
+    % --------------------
+    % Run FOOOF on GA PSD
+    % --------------------
+    fooofOut = struct();
+    if doFooof
+        try
+            spec_logmsg(logf, '[FOOOF] Running Python FOOOF bridge on GA PSD...');
+            fooofOut = spec_run_fooof_python(f, gaPxx, foo, outTmp, subjid, logf);
+            spec_logmsg(logf, '[FOOOF] Done. Trials fit: %d', numel(fooofOut.trials));
+        catch ME
+            spec_logmsg(logf, '[WARN] FOOOF failed: %s', ME.message);
+            fooofOut = struct();
+        end
+    else
+        spec_logmsg(logf, '[FOOOF] disabled.');
+    end
+
+    % ----------------
+    % Write CSV files
+    % ----------------
+    spec_logmsg(logf, '[CSV] Writing channel-by-trial + GA-by-trial CSVs...');
+    outChanCSV = fullfile(outCSV, sprintf('sub-%03d_spectral_chan_by_trial.csv', subjid));
+    outGaCSV   = fullfile(outCSV, sprintf('sub-%03d_spectral_ga_by_trial.csv', subjid));
+
+    spec_write_chan_trial_csv(outChanCSV, subjid, chanLabels, featChan);
+    spec_write_ga_trial_csv(outGaCSV, subjid, featGA, fooofOut);
+
+    % -----------
+    % Plot figures
+    % -----------
+    try
+        spec_logmsg(logf, '[FIG] Writing summary figure...');
+        outSummary = fullfile(outFig, sprintf('sub-%03d_spectral_summary.png', subjid));
+        spec_plot_summary(outSummary, f, gaPxx, featGA, fooofOut, alpha, cfg, subjid);
+
+        if isfield(cfg.spectral.qc,'save_heatmaps') && logical(cfg.spectral.qc.save_heatmaps)
+            outHM1 = fullfile(outFig, sprintf('sub-%03d_paf_cog_heatmap.png', subjid));
+            outHM2 = fullfile(outFig, sprintf('sub-%03d_sf_balance_heatmap.png', subjid));
+            spec_plot_heatmap(outHM1, featChan.paf_cog_hz, chanLabels, 'PAF CoG (Hz)');
+            spec_plot_heatmap(outHM2, featChan.sf_balance, chanLabels, 'Slow/Fast Balance');
+        end
+
+        if plotMode == "debug" || plotMode == "exhaustive"
+            spec_logmsg(logf, '[FIG] Plot mode %s: generating per-trial debug plots...', plotMode);
+            spec_plot_debug_trials(outFig, f, Pxx, featChan, chanLabels, alpha, cfg, subjid, plotMode);
+        end
+    catch ME
+        spec_logmsg(logf, '[WARN] Plotting failed: %s', ME.message);
+    end
+
+    spec_logmsg(logf, '===== SPECTRAL DONE sub-%03d =====', subjid);
+end
+
+end

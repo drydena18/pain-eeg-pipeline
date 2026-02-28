@@ -1,17 +1,19 @@
 {
   "meta": {
     "schema": "v1",
-    "config": "exp01_v1.0.1"
+    "config": "exp01_v2.1.0"
   },
 
   "paths": {
     "raw_root": "/cifs/seminowicz/eegPainDatasets/CNED/26ByBiosemi",
-    "proj_root": "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/26ByBiosemi"
+    "proj_root": "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/26ByBiosemi",
+    "da_root": "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis"
   },
 
   "exp": {
     "id": "exp01",
     "task": "26ByBiosemi",
+    "out_dirname": "26ByBiosemi",
     "out_prefix": "26BB_62_",
     "raw": {
       "pattern": "sub-%03d/eeg/sub-%03d_task-26ByBiosemi_eeg.bdf",
@@ -108,6 +110,133 @@
       "enabled": true,
       "window_sec": [-0.5, 0.0],
       "tag": "base"
+    }
+  },
+
+  "spectral": {
+    "input_stage": "08_base",
+    "psd": {
+      "fmin_hz": 1,
+      "fmax_hz": 80,
+      "window_sec": 2.0,
+      "overlap_frac": 0.5,
+      "nfft": 0
+    },
+
+    "alpha": {
+      "alpha_hz": [8, 12],
+      "slow_hz": [8, 10],
+      "fast_hz": [10, 12]
+    },
+
+    "fooof": {
+      "enabled": true,
+      "python_exe": "python3",
+      "script_path": "/Users/drydena18/Desktop/pain-eeg-pipeline/python/spectral/fooof_bridge.py",
+      "fmin_hz": 2,
+      "fmax_hz": 40,
+      "aperiodic_mode": "fixed",
+      "peak_width_limits": [1, 12],
+      "max_n_peaks": 6,
+      "min_peak_height": 0.0,
+      "alpha_band_hz": [8, 12],
+      "verbose": false
+    },
+
+    "qc": {
+      "plot_mode": "summary",
+      "save_heatmaps": true,
+      "legend_max_channels": 20,
+      "max_debug_trials": 6
+    }
+  },
+
+  "source": {
+    "enabled": true,
+
+    "input": {
+      "stage_dir": "08_base",
+      "allow_fallback_search": true
+    },
+
+    "template": {
+      "subjects_dir": "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/26ByBiosemi/source"
+    },
+
+    "lambda2": 0.1111111111111111,
+
+    "fsaverage": {
+      "subjects_dir": "/path/to/fsaverage/subjects_dir"
+    },
+
+    "forward": {
+      "spacing": "oct6",
+      "bem": "fsaverage",
+      "mindist_mm": 5.0
+    },
+
+    "inverse": {
+      "method": "sLORETA",
+      "snr": 3.0,
+      "pick_ori": null
+    },
+
+    "roi": {
+      "parcellation": "aparc",
+      "mode": "mean_flip",
+      "use_custom_rois": true,
+
+      "custom_rois": {
+        "lTC": ["lh-superiortemporal", "lh-middletemporal", "lh-inferiortemporal", "lh-bankssts", "lh-transversetemporal", "lh-temporalpole"],
+        "rTC": ["rh-superiortemporal", "rh-middletemporal", "rh-inferiortemporal", "rh-bankssts", "rh-transversetemporal", "rh-temporalpole"],
+
+        "lPC": ["lh-inferiorparietal", "lh-superiorparietal", "lh-supramarginal", "lh-postcentral", "lh-precuneus"],
+        "rPC": ["rh-inferiorparietal", "rh-superiorparietal", "rh-supramarginal", "rh-postcentral", "rh-precuneus"],
+
+        "lFC": ["lh-superiorfrontal", "lh-rostralmiddlefrontal", "lh-caudalmiddlefrontal", "lh-inferiorfrontal", "lh-precentral"],
+        "rFC": ["rh-superiorfrontal", "rh-rostralmiddlefrontal", "rh-caudalmiddlefrontal", "rh-inferiorfrontal", "rh-precentral"],
+
+        "lOC": ["lh-lateraloccipital", "lh-cuneus", "lh-lingual", "lh-pericalcarine"],
+        "rOC": ["rh-lateraloccipital", "rh-cuneus", "rh-lingual", "rh-pericalcarine"]
+      }
+    },
+
+    "spectral": {
+      "fmin": 1.0,
+      "fmax": 40.0,
+      "alpha_band": [8.0, 12.0],
+      "slow_alpha_band": [8.0, 10.0],
+      "fast_alpha_band": [10.0, 12.0]
+    },
+
+    "fooof": {
+      "enabled": true,
+      "mode": "trial_and_ga",
+      "aperiodic_mode": "fixed",
+      "peak_width_limits": [1.0, 12.0],
+      "max_n_peaks": 6,
+      "min_peak_height": 0.1,
+      "peak_threshold": 2.0,
+      "freq_range": [1.0, 40.0]
+    },
+
+    "noise_cov": {
+      "tmin": -0.2,
+      "tmax": 0.0
+    },
+
+    "outputs": {
+      "root": "AUTO",
+      "save_stc": true,
+      "save_roi_csv": true,
+      "save_connectivity": true,
+      "save_brain_images": true
+    },
+
+    "qc": {
+      "save_plots": true,
+      "save_brain_images": true,
+      "brain_snapshot_time_sec": 0.05
     }
   }
 }
