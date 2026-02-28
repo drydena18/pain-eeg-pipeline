@@ -53,7 +53,7 @@ for t = 1:nT
     if isfield(tr(t), 'aperiodic_offset'),   offs(t)  = tr(t).aperiodic_offset; end
     if isfield(tr(t), 'r2'),                 r2(t)    = tr(t).r2; end
     if isfield(tr(t), 'error'),              err(t)   = tr(t).error; end
-    if isfield(tr(t), 'alpha_cw'),           acf(t)   = tr(t).alpha_cf; end
+    if isfield(tr(t), 'alpha_cf'),           acf(t)   = tr(t).alpha_cf; end
     if isfield(tr(t), 'alpha_pw'),           apw(t)   = tr(t).alpha_pw; end
     if isfield(tr(t), 'alpha_bw'),           abw(t)   = tr(t).alpha_bw; end
 end
