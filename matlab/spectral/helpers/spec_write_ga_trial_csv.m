@@ -1,5 +1,4 @@
 function spec_write_ga_trial_csv(outPath, subjid, featGA, fooofOut)
-% SPEC_WRITE_GA_TRIAL_CSV
 % One row per trial (GA spectral features + FOOOF outputs if available)
 
 nTr = numel(featGA.paf_cog_hz);
@@ -38,44 +37,27 @@ if hasFooof
     for t = 1:nAvail
         s = fooofOut.trials(t);
 
-        if isfield(s,'aperiodic_offset'),   off(t) = s.aperiodic_offset; end
-        if isfield(s,'aperiodic_exponent'), ex(t)  = s.aperiodic_exponent; end
-        if isfield(s,'r2'),                r2(t)  = s.r2; end
-        if isfield(s,'error'),             er(t)  = s.error; end
+        off(t) = getScalarNum(s, 'aperiodic_offset');
+        ex(t)  = getScalarNum(s, 'aperiodic_exponent');
+        r2(t)  = getScalarNum(s, 'r2');
+        er(t)  = getScalarNum(s, 'error');
 
-        % Raw alpha peak outputs from python (your fooof_bridge.py)
-        if isfield(s,'alpha_cf'), acf(t) = s.alpha_cf; end
-        if isfield(s,'alpha_pw'), apw(t) = s.alpha_pw; end
-        if isfield(s,'alpha_bw'), abw(t) = s.alpha_bw; end
+        % Raw alpha peak outputs from python (fooof_bridge.py)
+        acf(t) = getScalarNum(s, 'alpha_cf');
+        apw(t) = getScalarNum(s, 'alpha_pw');
+        abw(t) = getScalarNum(s, 'alpha_bw');
 
-        % Filled outputs from spec_fill_fooof_alpha (if you ran it)
-        if isfield(s,'alpha_cf_filled') && ~isempty(s.alpha_cf_filled)
-            v = s.alpha_cf_filled;
-            acf_f(t) = v(1);
-        end
-        if isfield(s,'alpha_pw_filled') && ~isempty(s.alpha_pw_filled)
-            v = s.alpha_cf_filled;
-            apw_f(t) = v(1);
-        end
-        if isfield(s,'alpha_bw_filled') && ~isempty(s.alpha_bw_filled)
-            v = s.alpha_bw_filled;
-            abw_f(t) = v(1);
-        end
+        % Filled outputs (if you ran spec_fill_fooof_alpha)
+        acf_f(t) = getScalarNum(s, 'alpha_cf_filled');
+        apw_f(t) = getScalarNum(s, 'alpha_pw_filled');   
+        abw_f(t) = getScalarNum(s, 'alpha_bw_filled');
 
-        if isfield(s,'alpha_cf_source')
-            tmp = string(s.alpha_cf_source);
-            if ~isempty(tmp), acf_src(t) = tmp(1); end
-        end
-        if isfield(s,'alpha_pw_source')
-            tmp = string(s.alpha_pw_source);
-            if ~isempty(tmp), apw_src(t) = tmp(1); end
-        end
-        if isfield(s,'alpha_bw_source')
-            tmp = string(s.alpha_bw_source);
-            if ~isempty(tmp), abw_src(t) = tmp(1); end
-        end
+        % Provenance strings
+        acf_src(t) = getScalarStr(s, 'alpha_cf_source');
+        apw_src(t) = getScalarStr(s, 'alpha_pw_source');
+        abw_src(t) = getScalarStr(s, 'alpha_bw_source');
 
-        if isfield(s,'alpha_found'), alpha_found(t) = s.alpha_found; end
+        alpha_found(t) = getScalarNum(s, 'alpha_found');
     end
 
     T.fooof_offset   = off;
@@ -106,4 +88,48 @@ if hasFooof
 end
 
 writetable(T, outPath);
+end
+
+% ---------------- Helpers ----------------
+function v = getScalarNum(s, fn)
+    if ~isstruct(s) || ~isfield(s, fn) || isempty(s.(fn))
+        v = nan; return;
+    end
+    raw = s.(fn);
+
+    if iscell(raw)
+        if isempty(raw), v = nan; return; end
+        raw = raw{1};
+    end
+
+    if isstring(raw) || ischar(raw)
+        tmp = str2double(raw);
+        if isnan(tmp), v = nan; else, v = tmp; end
+        return;
+    end
+
+    if islogical(raw)
+        v = double(raw); return;
+    end
+
+    if isnumeric(raw)
+        raw = double(raw);
+        if isempty(raw), v = nan; else, v = raw(1); end
+        return;
+    end
+
+    v = nan;
+end
+
+function s1 = getScalarStr(s, fn)
+    if ~isstruct(s) || ~isfield(s, fn) || isempty(s.(fn))
+        s1 = ""; return;
+    end
+    raw = s.(fn);
+    try
+        s1 = string(raw);
+        if numel(s1) > 1, s1 = s1(1); end
+    catch
+        s1 = "";
+    end
 end
