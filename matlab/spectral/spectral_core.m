@@ -158,12 +158,12 @@ for i = 1:numel(subs)
     % -------------------------------
     % Trial-by-trial pre/post PSD QC
     % -------------------------------
-    if isfield(cfg.spectral, 'trial-spectral') && isfield(cfg.spectral.trial-spectral, 'enabled') && logical(cfg.spectral.trial-spectral.enabled)
-
-        outTrialSpec = fullfile(outRoot, 'trial-spectral');
+    if isfield(cfg, 'spectral') && isfield(cfg.spectral, 'trial_spectral') && isfield(cfg.spectral.trial_spectral, 'enabled') && logical(cfg.spectral.trial_spectral.enabled)
+        
+        outTrialSpec = fullfile(outRoot, 'trial_spectral');
         spec_ensure_dir(outTrialSpec);
 
-        spec_logmsg(logf, '[QC] Saving pre/post-stim trial spectral plots...');
+        spec_logmsg(logf, '[TRIALSPEC] Saving pre/post-stim spectral plots...');
         spec_plot_trial_spectral_qc(outTrialSpec, EEG, cfg, subjid, logf);
     end
 
