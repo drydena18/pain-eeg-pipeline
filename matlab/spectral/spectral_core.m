@@ -155,6 +155,18 @@ for i = 1:numel(subs)
     spec_write_chan_trial_csv(outChanCSV, subjid, chanLabels, featChan);
     spec_write_ga_trial_csv(outGaCSV, subjid, featGA, fooofOut);
 
+    % -------------------------------
+    % Trial-by-trial pre/post PSD QC
+    % -------------------------------
+    if isfield(cfg.spectral, 'trial-spectral') && isfield(cfg.spectral.trial-spectral, 'enabled') && logical(cfg.spectral.trial-spectral.enabled)
+
+        outTrialSpec = fullfile(outRoot, 'trial-spectral');
+        spec_ensure_dir(outTrialSpec);
+
+        spec_logmsg(logf, '[QC] Saving pre/post-stim trial spectral plots...');
+        spec_plot_trial_spectral_qc(outTrialSpec, EEG, cfg, subjid, logf);
+    end
+
     % -----------
     % Plot figures
     % -----------

@@ -152,7 +152,17 @@
       "save_heatmaps": true,
       "legend_max_channels": 20,
       "max_debug_trials": 6
-    }
+    },
+
+    "trial_spectral": {
+        "enabled": true,
+        "pre_sec": [-0.2, 0.0],
+        "post_sec": [0.0, 0.8],
+        "max_trials": 30,
+        "legend_max_channels": 16,
+        "fmin_hz": 1,
+        "fmax_hz": 40
+      }
   },
 
   "source": {
