@@ -114,9 +114,44 @@ end
 end
 
 function v = getFieldOrNaN(s, fn)
-if isfield(s, fn)
-    v = double(s.(fn));
-else
+
+if ~isfield(s, fn) || isempty(s.(fn))
     v = nan;
+    return;
 end
+
+raw = s.(fn);
+
+if iscell(raw)
+    if isempty(raw), v = nan; return; end
+    raw = raw{1};
+end
+
+if isstring(raw) || ischar(raw)
+    num = str2double(raw);
+    if isnan(num)
+        v = nan;
+    else
+        v = num;
+    end
+    return;
+end
+
+if islogical(raw)
+    v = double(raw);
+    return;
+end
+
+if isnumeric(raw)
+    raw = double(raw);
+    if isempty(raw)
+        v = nan;
+    else
+        v = raw(1);
+    end
+    return;
+end
+
+v = nan;
+
 end

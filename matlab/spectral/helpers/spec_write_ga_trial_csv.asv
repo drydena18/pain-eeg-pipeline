@@ -65,15 +65,9 @@ if hasFooof
         if isfield(s,'alpha_cf_source')
             tmp = string(s.alpha_cf_source);
             if ~isempty(tmp), acf_src(t) = tmp(1); end
-        end
-        if isfield(s,'alpha_pw_source')
-            tmp = string(s.alpha_pw_source);
-            if ~isempty(tmp), apw_src(t) = tmp(1); end
-        end
-        if isfield(s,'alpha_bw_source')
-            tmp = string(s.alpha_bw_source);
-            if ~isempty(tmp), abw_src(t) = tmp(1); end
-        end
+            e
+        if isfield(s,'alpha_pw_source'), apw_src(t) = string(s.alpha_pw_source); end
+        if isfield(s,'alpha_bw_source'), abw_src(t) = string(s.alpha_bw_source); end
 
         if isfield(s,'alpha_found'), alpha_found(t) = s.alpha_found; end
     end
