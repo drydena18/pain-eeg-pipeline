@@ -48,7 +48,7 @@ end
 nChan = numel(chanLabels);
 
 % Figure sizing
-figW = 2600;
+figW = 1800;
 figH = max(1400, 18*nChan);
 h = figure('Visible', 'off', 'Units', 'pixels', 'Position', [100 100 figW figH]);
 

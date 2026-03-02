@@ -54,7 +54,7 @@ try t = 1:nDo
         outPath = fullfile(outDir, sprintf('sub-%03d_trial-%03d_prepost_psd.png', subjid, t));
         spec_plot_trial_prepost_psd(outPath, fPre, pPre, fPost, pPost, chanLabels, subjid, t, legendMax);
     catch ME
-        spec_logmsg(logf, '[TRIALSPEC][WARN] Trial %d failed: %s', t, ME.message);
+        spec_logmsg(logf, '[TRIALSPEC][WARN] Trial %d | Chan %d failed: %s', t, ch, ME.message);
     end
 end
 
