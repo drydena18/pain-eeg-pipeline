@@ -1,0 +1,10 @@
+experiment_name,experiment_id,cap_size
+26ByBiosemi,1,62
+29ByANT,2,32
+39ByBP,3,64
+30ByANT,4,32
+65ByANT,5,32
+95ByBP,6,64
+142ByBiosemi,7,62
+223ByBP,8,64
+29ByBP,9,64

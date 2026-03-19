@@ -1,71 +1,104 @@
-### --------------------
-# Packages / libraries
-# ----------------------
+# =========================================================
+# merge_behavioural.R
+# ---------------------------------------------------------
+# Merges all behavioural CSVs across experiments into a
+# single standardized behavioural dataset.
+# =========================================================
+
 library(readr)
 library(dplyr)
+library(stringr)
 library(purrr)
-library(stringer)
+library(tibble)
 
-# =============================================
+# =========================================================
 # USER SETTINGS
-# =============================================
-
-# Directory containing all behvaioural CSVs
+# =========================================================
 behav_dir <- "pain-eeg-pipeline/R/analysis/experiment/"
+output_file <- "pain-eeg-pipeline/R/analysis/behavioural_analysis/behavioural_master.csv"
 
-# Output file
-output_file <- "pain-eeg-pipeline/R/analysis/behavioural-analysis/behavioural_data.csv"
+# =========================================================
+# FIXED EXPERIMENT LOOKUP
+# =========================================================
+experiment_lookup <- tibble::tribble(
+  ~experiment_name,   ~experiment_id,
+  "26ByBiosemi",      1,
+  "29ByANT",          2,
+  "39ByBP",           3,
+  "30ByANT",          4,
+  "65ByANT",          5,
+  "95ByBP",           6,
+  "142ByBiosemi",     7,
+  "223ByBP",          8,
+  "29ByBP",           9
+)
 
-# =============================================
-# HELPER FUNCTION
-# =============================================
-standardize_behaviour <- function(file_path) {
-  message('Reading: ', basename(file_path))
-
-  df <- read_csv(file_path, show_col_types = FALSE)
-
-  # Standardize column names
-  df <- df %>%
-    rename_with(~ str_trim(.x)) %>%
-    rename(
-      subjid = any_oc(c("subjid", "ID", "id", "participant")),
-      trial  = any_of(c("trial", "trial_num", "trial_number", "Trialnum")),
-      laser_power = any_of(c("laser_power", "laser", "stim_intensity", "intensity")),
-      pain_rating = any_of(c("pain_rating", "pain", "rating", "Painrating"))
-    )
-
-    # Extract experiment ID from filename
-    exp_id <- str_extract(basename(file_path), "exp\\d+")
-
-    if(is.na(exp_id)) {
-      exp_id <- basename(file_path) %>%
-        str_remove("\\.csv$")
-    }
-
-    # Add metadata
-    df <- df %>%
-      mutate(
-        experiment = exp_id
-      )
-
-    # Create trial index (within subject)
-    df <- df %>%
-      arrange(subjid, trial) %>%
-      group_by(subjid) %>%
-      mutate(trial_index = row_number()) %>%
-      ungroup()
-
-    # Sanity checks
-    if (!all(c("subjid", "trial", "laser_power", "pain_rating") %in% names(df))) {
-      stop("Missing required columns in file: ", file_path)
-    }
-
-    df
+# =========================================================
+# HELPERS
+# =========================================================
+clean_names_local <- function(x) {
+  x %>%
+    str_trim() %>%
+    str_replace_all("\\s+", "_") %>%
+    str_replace_all("\\.", "_") %>%
+    str_replace_all("\\^2", "r2")
 }
 
-# =============================================
-# READ ALL FILES
-# =============================================
+extract_experiment_name_from_file <- function(file_path, valid_names) {
+  fname <- basename(file_path)
+  matches <- valid_names[str_detect(fname, fixed(valid_names))]
+
+  if (length(matches) == 1) return(matches)
+  if (length(matches) == 0) stop("Could not match behavioural file to experiment name: ", fname)
+  stop("Multiple experiment name matches found in behavioural file: ", fname)
+}
+
+standardize_behaviour <- function(file_path, experiment_lookup) {
+  message("Reading: ", basename(file_path))
+
+  df <- read_csv(file_path, show_col_types = FALSE)
+  names(df) <- clean_names_local(names(df))
+
+  df <- df %>%
+    rename(
+      subjid      = any_of(c("subjid", "ID", "id", "participant")),
+      trial       = any_of(c("trial", "trial_num", "trial_number")),
+      laser_power = any_of(c("laser_power", "laser", "stim_intensity", "intensity")),
+      pain_rating = any_of(c("pain_rating", "pain", "rating"))
+    )
+
+  if (!all(c("subjid", "trial", "laser_power", "pain_rating") %in% names(df))) {
+    stop("Missing required columns in behavioural file: ", file_path)
+  }
+
+  experiment_name <- extract_experiment_name_from_file(
+    file_path,
+    experiment_lookup$experiment_name
+  )
+
+  experiment_id <- experiment_lookup %>%
+    filter(experiment_name == !!experiment_name) %>%
+    pull(experiment_id)
+
+  df %>%
+    mutate(
+      experiment_name = experiment_name,
+      experiment_id   = experiment_id,
+      subjid          = as.integer(subjid),
+      trial           = as.integer(trial)
+    ) %>%
+    arrange(experiment_id, subjid, trial) %>%
+    group_by(experiment_id, subjid) %>%
+    mutate(trial_index = row_number()) %>%
+    ungroup() %>%
+    mutate(
+      subjid_uid = sprintf("E%02d_S%03d", experiment_id, subjid)
+    )
+}
+
+# =========================================================
+# READ + MERGE
+# =========================================================
 files <- list.files(
   behav_dir,
   pattern = "\\.csv$",
@@ -73,53 +106,40 @@ files <- list.files(
 )
 
 if (length(files) == 0) {
-  stop('No behavioural files found in directory.')
+  stop("No behavioural CSVs found in directory: ", behav_dir)
 }
 
-# =============================================
-# PROCESS + MERGE
-# =============================================
-behaviour_list <- map(files, standardize_behaviour)
-
+behaviour_list <- map(files, ~standardize_behaviour(.x, experiment_lookup))
 behaviour_master <- bind_rows(behaviour_list)
 
-# =============================================
-# FINAL CLEANING
-# =============================================
+# =========================================================
+# ADD GLOBAL SUBJECT ID
+# =========================================================
+subject_key <- behaviour_master %>%
+  distinct(experiment_id, experiment_name, subjid, subjid_uid) %>%
+  arrange(experiment_id, subjid) %>%
+  mutate(global_subjid = row_number())
+
 behaviour_master <- behaviour_master %>%
-  mutate(
-    subjid = as.factor(subjid),
-    experiment_id = as.factor(experiment_id)
+  left_join(
+    subject_key,
+    by = c("experiment_id", "experiment_name", "subjid", "subjid_uid")
   ) %>%
   select(
+    experiment_name,
     experiment_id,
     subjid,
+    subjid_uid,
+    global_subjid,
     trial,
     trial_index,
     laser_power,
     pain_rating
-  )
+  ) %>%
+  arrange(experiment_id, subjid, trial)
 
-# =============================================
-# SAVE OUTPUT
-# =============================================
 write_csv(behaviour_master, output_file)
 
-message("Behavioural data merged and saved to: ", output_file)
-
-# =============================================
-# Quick QC
-# =============================================
+message("Behavioural master saved: ", output_file)
 message("Total rows: ", nrow(behaviour_master))
-message("Total subjects: ", n_distinct(behaviour_master$subjid))
-
-qc <- behaviour_master %>%
-  group_by(experiment_id, subjid) %>%
-  summarise(
-    n_trials = n(),
-    missing_pain = sum(is.na(pain_rating)),
-    missing_laser = sum(is.na(laser_power)),
-    .groups = "drop"
-  )
-
-print(qc)
+message("Total subjects: ", n_distinct(behaviour_master$subjid_uid))
