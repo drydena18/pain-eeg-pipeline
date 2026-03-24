@@ -84,6 +84,7 @@ P.INPUT.EXP = fullfile(P.RAW_ROOT, E.raw_dirname);
 
 % All outputs for this experiment go under PROJ_ROOT/<out_dirname>/preproc
 P.RUN_ROOT = fullfile(P.PROJ_ROOT, E.out_dirname, 'preproc');
+P.SPEC_ROOT = fullfile(P.PROJ_ROOT, E.out_dirname, 'spec');
 P.RESOURCE = fullfile(P.PROJ_ROOT, E.out_dirname, 'resource');
 
 % ---------------
@@ -147,6 +148,7 @@ P.NAMING.fname = @(subjid, tags, prefix) local_fname(subjid, tags, prefix, defau
 % IMPORTANT: only mkdir under PROJ_ROOT (writable). Never touch RAW_ROOT.
 ensure_dir(P.PROJ_ROOT);
 ensure_dir(P.RUN_ROOT);
+ensure_dir(P.SPEC_ROOT);
 ensure_dir(P.RESOURCE);
 
 end

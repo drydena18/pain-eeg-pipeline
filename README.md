@@ -1,232 +1,181 @@
-# **Pain EEG Preprocessing & Analysis Toolkit**
-This reporsitory exists to standardize pain EEG processing and analysis while enabling transparent, shareable, and extensible methods for neuroscience research.
-*A modular, reproducible pipeline for preprocessing, source localization, and analysis of pain-related EEG data.*
+# CNED EEG Preprocessing & Analysis Framework (MATLAB/R/PYTHON)
+**Author**: Dryden Arseneau  
+**Affiliations**: Schabrun Lab · Seminowicz Pain Imaging Lab · Univeristy of Western Ontario, Neuroscience, Schulich School of Medicine and Dentistry  
+**Dataset**: CNED – Zhao et al., _Sci Data_ (2025) – https://doi.org/10.1038/s41597-025-05900-1  
 
 ---
 
-## **Overview**
+## Overview
+This repository contains a **config-driven, stage-based EEG preprocessing and analysis framework** designed for large, heterogeneous, multi-experiment pain EEG datasets. It was built to answer one question:
+> How do we preprocess large EEG datasets in a way that in reproducible, inspectable, resumable, and defensible under peer review?  
 
-This repository provides a complete, configurable pipeline for:
-
-1. **EEG Preprocessing (MATLAB)**
-   - 9 experiment-specific configurations
-   - Unified, reproducible core architecture
-2. **Source Localization (Python)**
-   - Support for 32-, 62-, and 64-channel caps
-   - sLORETA and DeepSIF workflows (WIP)
-   - Standardized source-space outputs
-3. **Analysis & Modelling (R & Python)**
-   - Alpha-band feature extraction
-   - Slow/fast alpha modelling
-   - Generalized Mixed Additive Models (GAMMs)
-   - Pain-brain relationships in source space
-
-This toolkit is designed for **scalable, transparent, and publishable neuroscience workflows**, with complete documentation and reproducibility standards.
+The framework is not a one-off scrip. It is a modular system spanning raw EEG import through spectral feature extraction and statistical modelling.  
 
 ---
 
-## **Key Features**
-
-- **Multi-experiment preprocessing** with shared architecture
-- **Automatic ICA cleaning workflows**
-- **Cap-specific source localization pipelines**
-- **DeepSIF-ready integration** (WIP)
-- **Unified ROI-level outputs for all experiments**
-- **Cross-language reproducibility** (MATLAB > Python > R)
-- **Publication-ready figures + GAMM models**
-- **Designed for open methods papers and co-authorship pipelines**
-
-## **Pipeline Architecture**
-```
-Raw EEG
-  -> Preprocessing (MATLAB; per experiment)
-    -> Cleaned sensor-space data
-      -> Source Localization (Python; per cap type)
-        -> ROI-level source signals
-          -> Analysis & statistics (R / Python; shared model)
-            -> Figures, tables, reports
-```
-
----
-
-## **Repository Structure**
+## Repository Structure
 ```
 pain-eeg-pipeline/
-│
-├── README.md
-├── LICENSE
-│
-├── matlab/                      # Preprocessing
+├── matlab/
 │   ├── preproc/
-│   │   ├── preproc_core.m
+│   │   ├── expXX_preproc.m
 │   │   ├── preproc_default.m
-│   │   ├── exp01_preproc.m
-│   │   ├── exp02_preproc.m
-│   │   ├── …
-│   │   ├── exp09_preproc.m
-│   │   └── README.md
-│   │
+│   │   ├── preproc_core.m
 │   ├── utils/
-│   │   ├── load_cfg.m
-│   │   ├── file_utils.m
-│   │   └── …
-│   └── README.md
-│
-├── python/                      # Source localization
-│   ├── source/
-│   │   ├── source_core.py
-│   │   ├── cfg_cap_32.py
-│   │   ├── cfg_cap_62.py
-│   │   ├── cfg_cap_64.py
-│   │   ├── run_source_exp01.py
-│   │   ├── run_source_exp02.py
-│   │   └── README.md
-│   │
-│   ├── utils/
-│   │   ├── io_utils.py
-│   │   ├── plotting_utils.py
-│   │   └── …
-│   └── requirements.txt
-│
-├── R/                           # Analysis & statistics
+│   │   ├── config_paths.m/      Centralized path resolution + experiment registry
+│   ├── helpers/        Individual standalone helper functions
+│   ├── spectral/
+│   │   ├── expXX_spectral.m
+│   │   ├── spectral_default.m
+│   │   ├── spectral_core.m
+│   │   ├── helpers/      Individual standalone helper functions
+│   │   │   ├── spec_*.m      All spectral helpers prefixed with spec_
+├── 
+├── python/
+│   ├── spectral/
+│   │   ├── fooof_bridge.py     CLI  bridge: MATLAB -> specparam (FOOOF)
+├── 
+├── R/
 │   ├── analysis/
-│   │   ├── run_analysis.R
-│   │   ├── alpha_features.R
-│   │   ├── gamm_models.R
-│   │   ├── stats_utils.R
-│   │   └── README.md
-│   └── renv/ (optional)
-│
-├── config/
-│   ├── paths_template.json
-│   ├── exp01.json
-│   ├── exp02.json
-│   └── …
-│
-├── docs/
-│   ├── Pipeline_Overview.md
-│   ├── Data_Standards.md
-│   ├── Experiment_Configs.md
-│   ├── Preprocessing_Design.md
-│   ├── Source_Localization_Design.md
-│   ├── Analysis_Methods.md
-│   ├── Figures/
-│   └── Diagrams/
-│
-└── examples/
-├── example_preproc_output/
-├── example_source_output/
-├── example_analysis_results/
-└── notebooks/
-└── validation.ipynb
+│   │   ├── behavioural-analysis/
+│   │   │   ├── merge_behavioural.R   Merge raw behavioural CSVs -> master
+│   │   │   ├── merge_participants_into_behavioural.R    Add demographics + cap size
+│   │   │   ├── merge_spectral_behaviour.R     Merge EEG spectral features -> master
+│   │   │   ├── run_gamm_alpha_metrics.R      First-pass GAMM workflow
+│   │   │   ├── run_gamm_alpha_metrics_v2.R    v2 GAMM with aperiodic controls + tensors
+│   │   ├── experiment/    Experiment specific trial-by-trial behavioural data
 ```
 
 ---
 
-## **Dependencies**
+## Design Principles
+- **Explicit decisions** – every parameter lives in a JSON config; nothing is hardcoded 
+- **Human-in-the-loop QC** – bad channel interpolation and IC rejection are manual prompts backed by automated suggestions
+- **Full audit logging** – every run produces a timestamped .log per subject
+- **JSON-driven reproducibility** – rerunning the same JSON and raw data produces identical results
+- **Stage-based resumption** – each preprocessing stage saves a tagged .set file; completed stages are skipped on rerun
+- **Strict separation of responsibilities** – each layer of the call chain has a single job
+- **Deterministic ICA** – rng(subjid, 'twister') seeds the RNG per subject before ICA
+- **Raw data is never modified** – all outputs are isolated per subject and per stage under <code>PROJ_ROOT</code>
 
-### MATLAB (Preprocessing)
-- MATLAB R20XX+
-- EEGLAB
-- Signal Processing Toolbox (recommended)
+---
 
-### Python (Source Localization)
-Installation:
-```bash
-cd python
-pip install -r requirements.txt
+## Call Chains
+
+### Preprocessing
+```
+pain-eeg-pipeline/
+├── expXX_preproc.m
+│   ├── preproc_default.m (validate + normalize config, resolve subjects)
+│   │   ├── preproc_core.m (execute stage loop per subject)
 ```
 
-### R (Analysis & GAMMs)
-Recommended Packages:
-- mgcv
-- tidyverse
-- data.table
-- lme4 / glmmTMB
-- renv (optional for reproducibility)
+### Spectral
+```
+pain-eeg-pipeline/
+├── expXX_spectral.m
+│   ├── spectral_default.m (validate + normalize config, resolve subjects)
+│   │   ├── spectral_core.m (trial-wise PSD,  features, FOOOF, CSV, plots)
+```
 
-## **Usage**
+### R Analysis
+```
+pain-eeg-pipeline/
+├── merge_behavioural.R
+│   ├── merge_participants_into_behaviour.R
+│   │   ├── merge_spectral_behaviour.R
+│   │   │   ├── run_gamm_alpha_metrics.R / run_gamm_alpha_metrics_v2.R
+```
 
-### **1. Preprocessing**
+---
 
+## Quick Start
+### 1. Prerequisites
+- MATLAB (R2021b or later recommended)
+- EEGLAB with BIOSIG and ICLabel plugins
+- Python3 with fooof / specparam installed (for FOOOF step only)
+- R with mgcv, readr, dplyr, ggplot2, purrr
+
+### 2. Add a new experiment
+Register it in <code>config_paths.m/</code>
 ```matlab
-cd matlab/preproc
-exp01_preproc
-```
-Outputs cleaned, epoched data in:
-```bash
-/derivatives/preproc/EXP01/sub-XX/
-```
-
-
-### **2. Source Localization**
-
-```python
-cd python/source
-python run_source_exp01.py
-```
-Outputs standardized source-space data in:
-```bash
-/derivatives/source/EXP01/sub-XX/
+R.exp02 = struct(
+  'id', 'exp02', ...
+  'raw_dirname', 'MyRawFolder', ...
+  'out_dirname', 'MyOutputFolder', ...
+  'out_prefix', 'EXP02_'
+);
 ```
 
-### **3. Analysis**
+### 3. Configure
+Create <code>utils/exp02.json</code>:
+```json
+{
+  "exp": {
+    "id": "exp02",
+    "out_prefix": "EXP02_",
+    "subjects": [1, 2, 3]
+  },
 
-```r
-setwd('R/analysis')
-source("run_analysis.R")
-run_analysis()
+  "preproc": {
+    "filter": {
+      "enabled": true,
+      "highpass_hz": 0.5,
+      "lowpass_hz": 40
+    },
+    "notch":{
+      "enabled": true,
+      "freq_hz": 60
+    },
+    "resample": {
+      "enabled": false
+    },
+    "reref": {
+      "enabled": true,
+      "mode": "average"
+    },
+    "initrej": {
+      "enabled": true
+    },
+    "ica": {
+      "enabled": true,
+      "method": "runica",
+      "iclabel": {
+        "enabled": true,
+        "thresholds": {
+          "eye": 0.8,
+          "muscle": 0.8
+        }
+      }
+    },
+    "epoch": {
+      "enabled": true,
+      "event_types": ["S1"],
+      "tmin_sec": -1.0,
+      "tmax_sec": 2.0
+    },
+    "baseline": {
+      "enabled": true,
+      "window_sec": [-0.5, 0]
+    }
+  }
+}
 ```
-Outputs statistical results & figures in:
-```bash
-/derivatives/analysis/
+
+### 4. Run
+```matlab
+exp01_preproc(); % All subjects from participants.tsv
+exp01_preproc([1 2 3]); % Override subject list
 ```
----
-
-## **Versioning**
-This toolkit follows semantic versioning:
-- **v0.x** - Development
-- **v1.x** - First stable full pipeline
-- **v2.x** - DeepSIF integration + publication release
-
----
-
-## **Documentation**
-
-See `/docs/` for detailed specifications:
-
-- **Pipeline_Overview.md** - conceptual summary
-- **Data_Standards.md** - naming conventions & directory schemas
-- **Preprocessing_Design.md** - filters, ICA, referencing, epoching
-- **Source_Localization_Design.md** - cap models, DeepSIF, sLORETA
-- **Analysis_Methods.md** - alpha composition, GAMMs, stats
-
-The **GitHub Wiki** provides tutorials and high-level explanations.
-
----
-
-## **For Researchers**
-
-This toolkit supports:
-- EEG preprocessing using modern standards
-- Source localization for pain-related paradigms
-- Nonlinear statistical modelling
-- High-reproducibility research workflows
-
-It is intended for both new learners and experienced researchers.
-
----
-
-## **Contributing**
-
-Contributions, issues, and feature requests are welcome.
-Please open an issue or submit a pull request via GitHub.
 
 ---
 
-## **Contact**
-
-**Dryden Arseneau**  
-Email: darsenea@uwo.ca  
-Website: drydena18.github.io   
-LinkedIn: https://www.linkedin.com/in/dryden-arseneau/**
+## Further Documentation
+| Page | Contents|
+|------|----------|
+Architecture | Call chain, layer responsibilities, config flow
+Filesystem | Full directory tree, file naming, what lives where
+Stages | Every preprocessing stage; inputs, outputs, parameters, resume logic
+QC | QC outputs, plots, logs, manual decision plots
+Spectral | Trial-wise spectral pipeline, features, FOOOF bridge
+R Analysis | Behavioural merging, demographic merging, GAMM workflow
