@@ -1,11 +1,31 @@
-cff-version: 1.0.0
-message: "If you found this pipeline helpful in your analysis, please cite it!"
+cff-version: 1.2.0
+title: "pain-eeg-pipeline: A preprocessing and spectral analysis pipeline for pain EEG data"
+message: "If you use this pipeline, please cite it as below."
+type: software
+
 authors:
-- family-names: "Arseneau"
-  given-names: "Dryden"
-  orcid: "https://orcid.org/0009-0002-0299-315X"
-title: "pain-eeg-pipeline"
-version: 1.0.0
-doi: 10.5281/zenodo.1234
+  - family-names: Arseneau
+    given-names: Dryden
+    affiliation: "Neuroscience Program, University of Western Ontario"
+
+identifiers:
+  - type: url
+    value: "https://github.com/drydena18/pain-eeg-pipeline"
+
+repository-code: "https://github.com/drydena18/pain-eeg-pipeline"
+
+abstract: >
+  A modular EEG preprocessing and spectral feature extraction pipeline designed for multi-site pain datasets. Supports trial-level alpha band decomposition, FOOOF-based parameterization, and downstream statistical modelling (e.g., GAMMs) for investigating  individual differences in pain sensitivity.
+
+keywords:
+  - EEG
+  - pain
+  - alpha oscillations
+  - preprocessing
+  - spectral analysis
+  - GAMM
+  - neuroscience
+
+license: MIT
+version: 0.1.0
 date-released: 2026-03-26
-url: "https://github.com/drydena18/pain-eeg-pipeline"
