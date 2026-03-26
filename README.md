@@ -1,6 +1,6 @@
 # CNED EEG Preprocessing & Analysis Framework (MATLAB/R/PYTHON)
 **Author**: Dryden Arseneau  
-**Affiliations**: Schabrun Lab · Seminowicz Pain Imaging Lab · Univeristy of Western Ontario, Neuroscience, Schulich School of Medicine and Dentistry  
+**Affiliations**: Human Pain Discovery Lab · Seminowicz Pain Imaging Lab · Univeristy of Western Ontario, Neuroscience, Schulich School of Medicine and Dentistry  
 **Dataset**: CNED – Zhao et al., _Sci Data_ (2025) – https://doi.org/10.1038/s41597-025-05900-1  
 
 ---
