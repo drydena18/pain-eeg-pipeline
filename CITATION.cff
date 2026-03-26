@@ -1,0 +1,11 @@
+cff-version: 1.0.0
+message: "If you found this pipeline helpful in your analysis, please cite it!"
+authors:
+- family-names: "Arseneau"
+  given-names: "Dryden"
+  orcid: "https://orcid.org/0009-0002-0299-315X"
+title: "pain-eeg-pipeline"
+version: 1.0.0
+doi: 10.5281/zenodo.1234
+date-released: 2026-03-26
+url: "https://github.com/drydena18/pain-eeg-pipeline"
