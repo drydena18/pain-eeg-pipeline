@@ -1,11 +1,13 @@
 # CNED EEG Preprocessing & Analysis Framework (MATLAB/R/PYTHON)
+
 **Author**: Dryden Arseneau  
-**Affiliations**: Schabrun Lab · Seminowicz Pain Imaging Lab · Univeristy of Western Ontario, Neuroscience, Schulich School of Medicine and Dentistry  
-**Dataset**: CNED – Zhao et al., _Sci Data_ (2025) – https://doi.org/10.1038/s41597-025-05900-1  
+**Affiliations**: Human Pain Discovery Lab · Seminowicz Pain Imaging Lab · Univeristy of Western Ontario, Neuroscience, Schulich School of Medicine and Dentistry  
+**Dataset**: CNED – Zhao et al., _Sci Data_ (2025) – <https://doi.org/10.1038/s41597-025-05900-1>  
 
 ---
 
 ## Overview
+
 This repository contains a **config-driven, stage-based EEG preprocessing and analysis framework** designed for large, heterogeneous, multi-experiment pain EEG datasets. It was built to answer one question:
 > How do we preprocess large EEG datasets in a way that in reproducible, inspectable, resumable, and defensible under peer review?  
 
@@ -14,6 +16,7 @@ The framework is not a one-off scrip. It is a modular system spanning raw EEG im
 ---
 
 ## Repository Structure
+
 ```
 pain-eeg-pipeline/
 ├── matlab/
@@ -49,20 +52,22 @@ pain-eeg-pipeline/
 ---
 
 ## Design Principles
-- **Explicit decisions** – every parameter lives in a JSON config; nothing is hardcoded 
+
+- **Explicit decisions** – every parameter lives in a JSON config; nothing is hardcoded
 - **Human-in-the-loop QC** – bad channel interpolation and IC rejection are manual prompts backed by automated suggestions
 - **Full audit logging** – every run produces a timestamped .log per subject
 - **JSON-driven reproducibility** – rerunning the same JSON and raw data produces identical results
 - **Stage-based resumption** – each preprocessing stage saves a tagged .set file; completed stages are skipped on rerun
 - **Strict separation of responsibilities** – each layer of the call chain has a single job
-- **Deterministic ICA** – rng(subjid, 'twister') seeds the RNG per subject before ICA
-- **Raw data is never modified** – all outputs are isolated per subject and per stage under <code>PROJ_ROOT</code>
+- **Deterministic ICA** – `rng(subjid, 'twister')` seeds the RNG per subject before ICA
+- **Raw data is never modified** – all outputs are isolated per subject and per stage under `PROJ_ROOT`
 
 ---
 
 ## Call Chains
 
 ### Preprocessing
+
 ```
 pain-eeg-pipeline/
 ├── expXX_preproc.m
@@ -71,6 +76,7 @@ pain-eeg-pipeline/
 ```
 
 ### Spectral
+
 ```
 pain-eeg-pipeline/
 ├── expXX_spectral.m
@@ -79,6 +85,7 @@ pain-eeg-pipeline/
 ```
 
 ### R Analysis
+
 ```
 pain-eeg-pipeline/
 ├── merge_behavioural.R
@@ -90,14 +97,18 @@ pain-eeg-pipeline/
 ---
 
 ## Quick Start
+
 ### 1. Prerequisites
+
 - MATLAB (R2021b or later recommended)
 - EEGLAB with BIOSIG and ICLabel plugins
 - Python3 with fooof / specparam installed (for FOOOF step only)
 - R with mgcv, readr, dplyr, ggplot2, purrr
 
 ### 2. Add a new experiment
-Register it in <code>config_paths.m/</code>
+
+Register it in `config_paths.m/`
+
 ```matlab
 R.exp02 = struct(
   'id', 'exp02', ...
@@ -108,7 +119,9 @@ R.exp02 = struct(
 ```
 
 ### 3. Configure
-Create <code>utils/exp02.json</code>:
+
+Create `utils/exp02.json`:
+
 ```json
 {
   "exp": {
@@ -163,6 +176,7 @@ Create <code>utils/exp02.json</code>:
 ```
 
 ### 4. Run
+
 ```matlab
 exp01_preproc(); % All subjects from participants.tsv
 exp01_preproc([1 2 3]); % Override subject list
@@ -171,7 +185,8 @@ exp01_preproc([1 2 3]); % Override subject list
 ---
 
 ## Further Documentation
-| Page | Contents|
+
+| Page | Contents |
 |------|----------|
 Architecture | Call chain, layer responsibilities, config flow
 Filesystem | Full directory tree, file naming, what lives where
