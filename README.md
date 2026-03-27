@@ -2,11 +2,7 @@
 
 **Author**: Dryden Arseneau  
 **Affiliations**: Human Pain Discovery Lab · Seminowicz Pain Imaging Lab · Univeristy of Western Ontario, Neuroscience, Schulich School of Medicine and Dentistry  
-<<<<<<< HEAD
 **Dataset**: CNED – Zhao et al., _Sci Data_ (2025) – <https://doi.org/10.1038/s41597-025-05900-1>  
-=======
-**Dataset**: CNED – Zhao et al., _Sci Data_ (2025) – https://doi.org/10.1038/s41597-025-05900-1  
->>>>>>> 034a6a872279f617b22ac2012601339a6750543b
 
 ---
 
