@@ -479,6 +479,104 @@ for i = 1:numel(subs)
         end
     end
 
+    %% -------------------------------------------------
+    % Stage 09: SLOW-ALPHA HILBERT (instantaneous phase)
+    % --------------------------------------------------
+    % Gate: cfg.preproc.hilbert.enabled (default false; set in JSON)
+    %
+    % Why here and not in a standalone script:
+    %   - cfg.exp.subjects is already resolved by preproc_default, so
+    %     subjects_override works automatically with no extra plumbing
+    %   - EEG is still in memory from stage 08_base, avoiding a reload
+    %   - Resume logic mirrors all other stages: if the .mat already
+    %     exists this block is skipped entirely on reruns
+    %
+    % slow_hz resolution order:
+    %   1. cfg.spectral.alpha.slow_hz (preferred; keeps spectral config
+    %      as the single source of truth for alpha bands)
+    %   2. cfg.preproc.hilbert.slow_hz (fallback; useful when spectral
+    %      block is absent from the JSON, default [8 10])
+    if isfield(cfg.preproc, 'hilbert') && isfield(cfg.preproc.hilbert, 'enabled') && ...
+        logical(cfg.preproc.hilbert.enabled)
+
+        hilbertDir = fullfile(subRoot, '09_hilbert');
+        hilbertLogs = fullfile(hilbertDir, 'LOGS');
+        ensure_dir(hilbertDir);
+        ensure_dir(hilbertLogs);
+
+        matPath = fullfile(hilbertDir, sprintf('sub-%03d_hilbert_phase.mat', subjid));
+
+        if exist(matPath, 'file')
+            logmsg(logf, '[HILBERT] Output already exists. Skipping (resume). %s', matPath);
+        else
+            % Verify EEG is epoched; stage 09 requires trial dimension
+            if EEG.trials <= 1
+                logmsg(logf, '[HILBERT][WARN] EEG is not epoched (trials = %d). '...
+                    'Stage 09 requires epochs. Ensure epoch + baseline stages ran before Hilbert.', ...
+                    EEG.trials);
+            else
+                % Resolve slow_hz
+                slowHz = [8 10]; % ultimate fallback
+                if isfield(cfg, 'spectral') && isfield(cfg.spectral, 'alpha') && ...
+                    isfield(cfg.spectral.alpha, 'slow_hz')
+                    slowHz = cfg.spectral.alpha.slow_hz;
+                elseif isfield(cfg.preproc.hilbert, 'slow_hz') && ... 
+                    ~isempty(cfg.preproc.hilbert.slow_hz)
+                    slowHz = cfg.preproc.hilbert.slow_hz;
+                end
+
+                fs = EEG.srate;
+                nChan = EEG.nbchan;
+                nTr = EEG.trials;
+                nTime = EEG.pnts;
+
+                % Stimulus-onset sample index (t closest to 0 ms)
+                timesSec = double(EEG.times(:))' / 1000;
+                [~, t0idx] = min(abs(timesSec));
+
+                logmsg(logf, '[HILBERT] Band = [%.0f %.0f] Hz nChan = %d nTrials = %d stimOnsetIdx = %d', ...
+                    slowHz(1), slowHz(2), nChan, nTr, t0idx);
+
+                % Zero-phase FIR bandpass – operates on a temporary copy
+                % EEG is never modified.
+                try
+                   EEGfilt = pop_eegfiltnew(EEG, slowHz(1), slowHz(2));
+                   EEGfilt = eeg_checkset(EEGfilt);
+                catch ME
+                    logmsg(logf, '[HILBERT][WARN] FIR bandpass failed: %s (skipping stage 09)', ME.message);
+                    EEGfilt = []; 
+                end
+
+                if ~isempty(EEGfilt)
+                    % Hilbert per channel x trial - store phase as single
+                    % to keep file size manageable (~4x smaller than double)
+                    phaseSlow = zeros(nChan, nTime, nTr, 'single');
+
+                    for t = 1:nTr
+                        X = double(EEGfilt.data(:, :, t)); % [nChan x nTime]
+                        for ch = 1:nChan
+                            z = hilbert(X(ch, :)'); % analytic signal [nTime x 1]
+                            phaseSlow(ch, :, t) = single(angle(z));
+                        end
+                    end
+
+                    % Save - use -v7.3 for arrays > 2 GB
+                    phase_slow = phaseSlow;
+                    t_ms = EEG.times;
+                    stimOnsetIdx = t0idx;
+                    chan_labels = {EEG.chanlocs.labels};
+                    slow_hz = slowHz;
+                    subjid_save = subjid;
+
+                    save(matPath, 'phase_slow', 't_ms', 'stimOnsetIdx', ...
+                        'chan_labels', 'slow_hz', 'subjid_save', 'fs', '-v7.3');
+
+                    logmsg(logf, '[HILBERT] Saved -> %s', matPath);
+                end
+            end
+        end
+    end
+
     logmsg(logf, '===== PREPROC DONE sub-%03d =====', subjid);
 end
 

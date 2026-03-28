@@ -113,17 +113,29 @@
       "enabled": true,
       "window_sec": [-0.5, 0.0],
       "tag": "base"
+    },
+
+    "hilbert": {
+      "enabled": true,
+      "slow_hz": [8, 10],
+      "tag": "hilbert"
     }
   },
 
   "spectral": {
     "input_stage": "08_base",
+
     "psd": {
       "fmin_hz": 1,
       "fmax_hz": 80,
       "window_sec": 2.0,
       "overlap_frac": 0.5,
       "nfft": 0
+    },
+
+    "windows": {
+      "pre_sec": [-1.0, -0.1],
+      "post_sec": [0.1, 0.8]
     },
 
     "alpha": {
@@ -162,7 +174,19 @@
         "legend_max_channels": 16,
         "fmin_hz": 1,
         "fmax_hz": 40
-      }
+      },
+
+    "lep": {
+      "enabled": true,
+      "window_sec": [-0.1, 1.0],
+      "n2_window_sec": [0.10, 0.30],
+      "p2_window_sec": [0.25, 0.45]
+    },
+
+    "phase": {
+      "enabled": true,
+      "n_permutations": 5000
+    }
   },
 
   "source": {

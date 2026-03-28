@@ -36,6 +36,14 @@ Pp.epoch = defaultField(Pp.epoch, 'tmax_sec', 2.0);
 Pp = ensureBlock(Pp, 'baseline', true, 'base');
 Pp.baseline = defaultField(Pp.baseline, 'window_sec', [-0.5 0]);
 
+% Stage 09: Hilbert slow-alpha instantaneous phase
+% Disabled by default. Enable in JSON: "hilbert": {"enabled": true}
+% slow_hz should match cfg.spectral.alpha.slow_hz (both default to [8 10]).
+% preproc_core reads cfg.spectral.alpha.slow_hz first if available, so this
+% value acts only as a fallback when the spectral block is absent from the JSON.
+Pp = ensureBlock(Pp, "hilbert", false, "hilbert");
+Pp.hilbert = defaultField(Pp.hilbert, "slow_hz", [8 10]);
+
 if Pp.epoch.enabled && isempty(Pp.epoch.event_types)
     error('preproc_default:EpochMissingEvents', ...
         'cfg.preproc.epoch.enabled is true, but epoch.event_types is empty.');
