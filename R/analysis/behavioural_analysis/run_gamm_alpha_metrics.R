@@ -255,8 +255,7 @@ if (has_aperiodic) {
         s(global_subjid, bs = "re") +
         s(experiment_id, bs = "re")
 } else {
-    message("[WARN] FOOOF columns (fooof_offset_z, fooof_exponent_z) not found. "
-            "Aperiodic models (m01, m07-m11) will be skipped.")
+    message("[WARN] FOOOF columns (fooof_offset_z, fooof_exponent_z) not found.\nAperiodic models (m01, m07-m11) will be skipped.")
     base_formula_aperiodic <- NULL
 }
 
