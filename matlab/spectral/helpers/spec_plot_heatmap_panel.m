@@ -52,11 +52,11 @@ end
 nPlots = size(items, 1);
 nChan  = numel(chanLabels);
 
-nC = 5;
+nC = 2;
 nR = ceil(nPlots / nC);
 
 % Figure sizing (narrower + taller) 
-figW = 900;                            % reduced width
+figW = 1200;                            % reduced width
 figH = max(1200, 30*nChan + 250*nR);   % taller scaling
 
 h = figure('Visible','off','Units','pixels','Position',[100 100 figW figH]);

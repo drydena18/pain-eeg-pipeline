@@ -111,7 +111,7 @@ for t = 1:nTr
         spec_logmsg(logf, '[PHASE] EEG.epoch.pain_rating all NaN; no ratings available.');
         return;
     end
-    if sum(~isnan(vals)) < ~= nTr
+    if sum(~isnan(vals)) ~= nTr
         spec_logmsg(logf, '[PHASE][WARN] Only %d / %d trials have pain_rating in EEG.epoch', ...
             sum(~isnan(vals)), nTr);
     end
