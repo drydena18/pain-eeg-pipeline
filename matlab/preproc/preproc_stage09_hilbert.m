@@ -92,7 +92,7 @@ for i = 1:numel(subs)
         warning('preproc_stage09_hilbert:LogFail', 'Could not open log: %s', logPath);
         logf = 1;
     end
-    cobj = onCleanup(@() safeClose(logf));   %#ok<NASGU>
+    cobj = onCleanup(@() safeClose(logf));   
 
     logmsg(logf, '===== STAGE09_HILBERT (standalone) START sub-%03d =====', subjid);
     logmsg(logf, 'band=[%.0f %.0f] Hz  input=%s', slowHz(1), slowHz(2), inStage);
