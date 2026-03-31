@@ -1,6 +1,6 @@
 function spectral_core(P, cfg)
 % SPECTRAL_CORE  Trial-wise spectral features + interaction metrics + LEP + phase
-% V 2.0.0
+% V 2.0.1
 %
 % New in V2 vs V1:
 %   - Windowed pre/post-stim PSDs  (spec_compute_windowed_psds)
@@ -11,6 +11,10 @@ function spectral_core(P, cfg)
 %       2nd: computes inline via spec_compute_phase_metric
 %   - LEP per trial + GA waveforms + N2/P2 peak CSV  (spec_compute_lep)
 %   - Subject-level summary CSV with TVI_alpha  (spec_write_subject_summary_csv)
+%
+% V2.0.1 change:
+%   Section 7 now calls spec_compute_tvi_alpha and spec_compute_ga_rcl
+%   before writing, keeping spec_write_subject_summary_csv a pure writer.
 %
 % Output structure per subject:
 %   SPECTRAL/csv/   sub-XXX_spectral_chan_by_trial.csv
@@ -244,12 +248,19 @@ for i = 1:numel(subs)
     spec_write_ga_trial_csv(outGaCSV, subjid, featGA, fooofOut);
 
     % ---------------------------------------------------------------
-    % 7. Subject-level summary CSV  (TVI_alpha + r_cl)
+    % 7. Subject-level summary CSV  (TVI_alpha + GA r_cl)
+    %
+    % Computation is delegated to dedicated helpers so that
+    % spec_write_subject_summary_csv remains a pure writer:
+    %   spec_compute_tvi_alpha  -> tviOut   struct
+    %   spec_compute_ga_rcl     -> gaRclOut struct
     % ---------------------------------------------------------------
     if isfield(featGA, 'bi_pre')
         outSumCSV = fullfile(outCSV, sprintf('sub-%03d_subject_summary.csv', subjid));
         try
-            spec_write_subject_summary_csv(outSumCSV, subjid, featGA, rclTable, logf);
+            tviOut   = spec_compute_tvi_alpha(featGA.bi_pre, logf);
+            gaRclOut = spec_compute_ga_rcl(rclTable, logf);
+            spec_write_subject_summary_csv(outSumCSV, subjid, tviOut, gaRclOut, logf);
         catch ME
             spec_logmsg(logf, '[WARN] Subject summary CSV failed: %s', ME.message);
         end
@@ -279,6 +290,14 @@ for i = 1:numel(subs)
         if isfield(cfg.spectral.qc, 'save_heatmaps') && logical(cfg.spectral.qc.save_heatmaps)
             outPanel = fullfile(outFig, sprintf('sub-%03d_heatmap_panel.png', subjid));
             spec_plot_heatmap_panel(outPanel, featChan, chanLabels, subjid);
+        end
+
+        % Dedicated interaction-metrics figure (BI_pre, LR_pre, CoG_pre,
+        % DELTA_ERD, phase rose, p5 flag, BI_pre autocorrelation).
+        % Gated on interaction metrics having been computed.
+        if isfield(featGA, 'bi_pre')
+            outInteractFig = fullfile(outFig, sprintf('sub-%03d_interaction_summary.png', subjid));
+            spec_plot_interaction_summary(outInteractFig, featChan, featGA, chanLabels, subjid, logf);
         end
 
         if plotMode == "debug" || plotMode == "exhaustive"
