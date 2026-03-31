@@ -36,6 +36,13 @@
   },
 
   "preproc": {
+
+    "concat": {
+      "enabled": true,
+      "n-sessions": 3,
+      "session_pattern": ""
+    },
+
     "filter": {
       "enabled": true,
       "type": "fir",

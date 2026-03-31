@@ -1,8 +1,29 @@
 function preproc_core(P, cfg)
 % PREPROC_CORE Execute preprocessing according to cfg (from JSON)
-% V 2.0.0
+% V 2.1.0
+%
+% V2.1.0 adds Stage 00 — multi-session EEG concatenation.
+%   When cfg.preproc.concat.enabled = true, all session raw files for the
+%   subject are loaded, merged with pop_mergeset (which adjusts event
+%   latencies automatically across sessions), and saved to 00_concat/.
+%   All downstream stages (01-08, 09_hilbert) are completely unaffected.
+%   Single-session experiments (concat.enabled = false, the default) follow
+%   the original code path with zero behavioural change.
+%
+%   Relevant cfg fields (safe defaults in normalize_preproc_defaults):
+%     cfg.preproc.concat.enabled          true | false  (default false)
+%     cfg.preproc.concat.n_sessions       integer       (default 1)
+%     cfg.preproc.concat.session_pattern  printf string relative to P.INPUT.EXP
+%                                         args: (subjid, sess) or (subjid, sess, subjid, sess)
+%                                         Leave blank to use BIDS ses-NN layout or
+%                                         the recursive alphabetical fallback.
+%
+%   Note on trial ordering: pop_mergeset appends sessions in order 1..N.
+%   The participants_singletrial CSV (loaded by spec_load_singletrial_ratings)
+%   must be sorted by (session, trial) for ratings to align correctly.
 %
 % Folder scheme (per subject):
+%   PROJ_ROOT/<exp_out>/sub-XXX/00_concat  (multi-session only)
 %   PROJ_ROOT/<exp_out>/sub-XXX/01_filter
 %   PROJ_ROOT/<exp_out>/sub-XXX/02_notch
 %   PROJ_ROOT/<exp_out>/sub-XXX/03_resample
@@ -36,6 +57,7 @@ for i = 1:numel(subs)
     subRoot = fullfile(expRoot, sprintf('sub-%03d', subjid));
 
     ST = struct();
+    ST.CONCAT   = fullfile(subRoot, '00_concat');
     ST.FILTER   = fullfile(subRoot, '01_filter');
     ST.NOTCH    = fullfile(subRoot, '02_notch');
     ST.RESAMPLE = fullfile(subRoot, '03_resample');
@@ -73,60 +95,140 @@ for i = 1:numel(subs)
     logmsg(logf, 'Out Prefix: %s', string(cfg.exp.out_prefix));
     logmsg(logf, 'Output Root: %s', subRoot);
 
-    % -----------------------
-    % Resolve raw input file
-    % -----------------------
-    rawPath = resolve_raw_file(P, cfg, subjid);
-    if isempty(rawPath) || ~exist(rawPath, 'file')
-        logmsg(logf, '[WARN] Raw file not found for sub-%03d. Skipping.', subjid);
-        continue;
-    end
-    logmsg(logf, 'Raw File: %s', rawPath);
+    % ================================================================
+    % STAGE 00 — Multi-session concatenation  (or single-session load)
+    %
+    % After this block EEG is a continuous, montage-applied,
+    % channel-location-loaded dataset ready for stage 01.
+    % tags is {} (single-session) or {'concat'} (multi-session).
+    % ================================================================
+    doConcat = isfield(cfg.preproc, 'concat') && ...
+               isfield(cfg.preproc.concat, 'enabled') && ...
+               logical(cfg.preproc.concat.enabled);
 
-    rawPath = char(string(rawPath));
-    assert(exist(rawPath, 'file') == 2, 'Raw file missing: %s', rawPath);
+    if doConcat
+        % ----------------------------------------------------------
+        % Multi-session path
+        % ----------------------------------------------------------
+        nSess     = cfg.preproc.concat.n_sessions;
+        concatTag = 'concat';
+        logmsg(logf, '[CONCAT] Multi-session mode: %d sessions.', nSess);
 
-    logmsg(logf, 'RawPath class = %s | isstring = %d', class(rawPath), isstring(rawPath));
+        [EEG, tags, didLoad] = maybe_load_stage(ST.CONCAT, P, subjid, tags, concatTag, logf);
 
-    % -------------------------------------------------
-    % Import raw (.eeg/.bdf) -> EEG struct (no saving)
-    % -------------------------------------------------
-    EEG = pop_biosig(rawPath);
-    EEG = eeg_checkset(EEG);
-
-    EEG = normalize_chan_labels(EEG);
-
-    % -------------------
-    % Montage (optional)
-    % -------------------
-    if isfield(cfg.exp, 'montage') && isfield(cfg.exp.montage, 'enabled') && cfg.exp.montage.enabled
-        EEG = apply_montage_biosemi_from_csv(P, cfg, EEG, logf, subjid, LOGS);
-        EEG = eeg_checkset(EEG);
-    end
-
-    % --------------------------------------
-    % Channel Locations (.elp) if requested
-    % --------------------------------------
-    if isfield(cfg.exp, 'channel_locs') && isfield(cfg.exp.channel_locs, 'use_elp') && cfg.exp.channel_locs.use_elp
-        elpPath = "";
-        if isfield(P, 'CORE') && isfield(P.CORE, 'ELP_FILE')
-            elpPath = string(P.CORE.ELP_FILE);
-        end
-
-        if strlength(elpPath) > 0 && exist(elpPath, 'file')
+        if ~didLoad
             try
-                EEG = pop_chanedit(EEG, 'lookup', char(elpPath));
-                EEG = eeg_checkset(EEG);
-                logmsg(logf, 'Loaded chanlocs from ELP: %s', elpPath);
+                sessPaths = resolve_raw_session_files(P, cfg, subjid, nSess, logf);
             catch ME
-                logmsg(logf, '[WARN] Failed to load chanlocs: %s', ME.message);
+                logmsg(logf, '[CONCAT][ERROR] %s -- skipping subject.', ME.message);
+                continue;
             end
-        else
-            logmsg(logf, '[WARN] ELP file missing: %s', elpPath);
+
+            sessEEGs = cell(nSess, 1);
+            for s = 1:nSess
+                logmsg(logf, '[CONCAT] Loading session %d: %s', s, sessPaths{s});
+                Etmp = pop_biosig(sessPaths{s});
+                Etmp = eeg_checkset(Etmp);
+                Etmp = normalize_chan_labels(Etmp);
+
+                % Montage applied per-session so channel counts match before merge
+                if isfield(cfg.exp, 'montage') && isfield(cfg.exp.montage, 'enabled') && ...
+                        cfg.exp.montage.enabled
+                    Etmp = apply_montage_biosemi_from_csv(P, cfg, Etmp, logf, subjid, LOGS);
+                    Etmp = eeg_checkset(Etmp);
+                end
+
+                % Channel locations per-session (ensures chanlocs present on all)
+                if isfield(cfg.exp, 'channel_locs') && isfield(cfg.exp.channel_locs, 'use_elp') && ...
+                        cfg.exp.channel_locs.use_elp
+                    elpPath = "";
+                    if isfield(P, 'CORE') && isfield(P.CORE, 'ELP_FILE')
+                        elpPath = string(P.CORE.ELP_FILE);
+                    end
+                    if strlength(elpPath) > 0 && exist(elpPath, 'file')
+                        try
+                            Etmp = pop_chanedit(Etmp, 'lookup', char(elpPath));
+                            Etmp = eeg_checkset(Etmp);
+                        catch ME
+                            logmsg(logf, '[CONCAT][WARN] Chanlocs load failed sess %d: %s', s, ME.message);
+                        end
+                    end
+                end
+
+                logmsg(logf, '[CONCAT] Session %d: %d chans  %.1f s  srate=%.0f Hz', ...
+                    s, Etmp.nbchan, Etmp.xmax, Etmp.srate);
+                sessEEGs{s} = Etmp;
+            end
+
+            % Merge: pop_mergeset adjusts event latencies automatically
+            logmsg(logf, '[CONCAT] Merging %d sessions with pop_mergeset...', nSess);
+            EEG = sessEEGs{1};
+            for s = 2:nSess
+                EEG = pop_mergeset(EEG, sessEEGs{s});
+            end
+            EEG = eeg_checkset(EEG);
+
+            logmsg(logf, '[CONCAT] Merged: %d chans  %.1f s  %d events', ...
+                EEG.nbchan, EEG.xmax, length(EEG.event));
+
+            % Provenance record
+            EEG.etc.concat = struct();
+            EEG.etc.concat.n_sessions    = nSess;
+            EEG.etc.concat.session_files = sessPaths;
+
+            tags{end+1} = concatTag;
+            save_stage(ST.CONCAT, P, subjid, tags, EEG, logf);
+        end
+
+    else
+        % ----------------------------------------------------------
+        % Single-session path  (original behaviour, unchanged)
+        % ----------------------------------------------------------
+        rawPath = resolve_raw_file(P, cfg, subjid);
+        if isempty(rawPath) || ~exist(rawPath, 'file')
+            logmsg(logf, '[WARN] Raw file not found for sub-%03d. Skipping.', subjid);
+            continue;
+        end
+        logmsg(logf, 'Raw File: %s', rawPath);
+
+        rawPath = char(string(rawPath));
+        assert(exist(rawPath, 'file') == 2, 'Raw file missing: %s', rawPath);
+
+        logmsg(logf, 'RawPath class = %s | isstring = %d', class(rawPath), isstring(rawPath));
+
+        EEG = pop_biosig(rawPath);
+        EEG = eeg_checkset(EEG);
+        EEG = normalize_chan_labels(EEG);
+
+        % Montage (optional)
+        if isfield(cfg.exp, 'montage') && isfield(cfg.exp.montage, 'enabled') && cfg.exp.montage.enabled
+            EEG = apply_montage_biosemi_from_csv(P, cfg, EEG, logf, subjid, LOGS);
+            EEG = eeg_checkset(EEG);
+        end
+
+        % Channel Locations (.elp) if requested
+        if isfield(cfg.exp, 'channel_locs') && isfield(cfg.exp.channel_locs, 'use_elp') && ...
+                cfg.exp.channel_locs.use_elp
+            elpPath = "";
+            if isfield(P, 'CORE') && isfield(P.CORE, 'ELP_FILE')
+                elpPath = string(P.CORE.ELP_FILE);
+            end
+
+            if strlength(elpPath) > 0 && exist(elpPath, 'file')
+                try
+                    EEG = pop_chanedit(EEG, 'lookup', char(elpPath));
+                    EEG = eeg_checkset(EEG);
+                    logmsg(logf, 'Loaded chanlocs from ELP: %s', elpPath);
+                catch ME
+                    logmsg(logf, '[WARN] Failed to load chanlocs: %s', ME.message);
+                end
+            else
+                logmsg(logf, '[WARN] ELP file missing: %s', elpPath);
+            end
         end
     end
 
-    % Deterministic seed per subject (repro ICA runs)
+    % Deterministic seed per subject (reproducible ICA)
     rng(double(subjid), 'twister');
     logmsg(logf, '[RNG] rng(%d, twister)', subjid);
 
