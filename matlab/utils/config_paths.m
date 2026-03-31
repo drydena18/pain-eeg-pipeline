@@ -18,6 +18,7 @@ function P = config_paths(exp_id, cfg)
 %   P.PROJ_ROOT
 %   P.INPUT.EXP
 %   P.RUN_ROOT
+%   P.SPEC_ROOT
 %   P.RESOURCE
 %   P.CORE.ELP_FILE
 %   P.SUBJECT_DIR(subjid)

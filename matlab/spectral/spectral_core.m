@@ -54,7 +54,7 @@ for i = 1:numel(subs)
     subjid = subs(i);
 
     subRoot = fullfile(string(P.RUN_ROOT), sprintf('sub-%03d', subjid));
-    outRoot = fullfile(subRoot, 'SPECTRAL');
+    outRoot = fullfile(string(P.SPEC_ROOT), sprintf('sub-%03d', subjid));
     outCSV  = fullfile(outRoot, 'csv');
     outFig  = fullfile(outRoot, 'figures');
     outTmp  = fullfile(outRoot, 'tmp');
