@@ -52,7 +52,7 @@ end
 nPlots = size(items, 1);
 nChan  = numel(chanLabels);
 
-nC = 2;
+nC = 5;
 nR = ceil(nPlots / nC);
 
 % Figure sizing (narrower + taller) 
@@ -110,7 +110,8 @@ close(h);
 end
 
 % ================================================================
-% Local: simple blue-white-red diverging colourmap (64 levels)
+% LOCAL: blue-white-red diverging colormap (64 levels)
+% ================================================================
 function cmap = spec_diverging_cmap()
 n    = 32;
 blue = [linspace(0.2, 1, n)', linspace(0.4, 1, n)', ones(n, 1)];

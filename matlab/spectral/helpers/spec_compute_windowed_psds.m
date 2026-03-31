@@ -33,13 +33,11 @@ nPost = nnz(idxPost);
 
 if nPre < 8
     error('spec_compute_windowed_psds:ShortPre', ...
-        'Pre-stim window yields only %d samples (minimum 8). ' ...
-        'Check cfg.spectral.windows.pre_sec and epoch length.', nPre);
+        'Pre-stim window yields only %d samples (minimum 8). ', nPre);
 end
 if nPost < 8
     error('spec_compute_windowed_psds:ShortPost', ...
-        'Post-stim window yields only %d samples (minimum 8). ' ...
-        'Check cfg.spectral.windows.post_sec and epoch length.', nPost);
+        'Post-stim window yields only %d samples (minimum 8).', nPost);
 end
 
 % ---------------------------------------------------------------

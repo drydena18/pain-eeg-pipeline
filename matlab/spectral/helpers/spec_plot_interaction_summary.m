@@ -85,7 +85,7 @@ grid(ax, 'on');
 
 % [1,3] ΔERD – fast v slow alpha desynchronizatio asymmetry
 ax = nexttile(tl, 3);
-plot(ax, trials, geatGA.delta_erd, '-o', 'MarkerSize', 3, 'Color', [0.58 0.40 0.74]);
+plot(ax, trials, featGA.delta_erd, '-o', 'MarkerSize', 3, 'Color', [0.58 0.40 0.74]);
 yline(ax, 0, '--k', 'Equal', 'LabelHorizontalAlignment', 'left', 'FontSize', 9);
 ylabel(ax, '\DeltaERD (ERD_{slow} - ERD_{fast})', 'Interpreter', 'tex');
 xlabel(ax, 'Trial');
@@ -113,7 +113,7 @@ for r = 1:size(heatmap_items, 1)
         imagesc(ax, X);
         axis(ax, 'tight');
         set(ax, 'YDir', 'normal');
-        set(ax, 'YTick', yt, 'YTickLabel', chanLabels(ty), 'FontSize', 9);
+        set(ax, 'YTick', yt, 'YTickLabel', chanLabels(yt), 'FontSize', 9);
         xlabel(ax, 'Trial');
         ylabel(ax, 'Channel');
         colorbar(ax, 'eastoutside');
@@ -128,7 +128,7 @@ for r = 1:size(heatmap_items, 1)
         axis(ax, 'off');
     end
 
-    title(ax, ttl, 'Interptreter', 'tex');
+    title(ax, ttl, 'Interpreter', 'tex');
 end
 
 % ================================================================
@@ -163,7 +163,7 @@ if isfield(featChan, 'p5_flag') && ~isempty(featChan.p5_flag)
     imagesc(ax, F);
     axis(ax, 'tight');
     set(ax, 'YDir', 'normal');
-    set(ax, 'YTick', yt, 'YTickLabel', chanLabels(ty), 'FontSize', 9);
+    set(ax, 'YTick', yt, 'YTickLabel', chanLabels(yt), 'FontSize', 9);
     colormap(ax, [1 1 1; 0.84 0.15 0.16]); % white = ok, red = flagged
     clim(ax, [0 1]);
     cb = colorbar(ax, 'eastoutside');
@@ -216,8 +216,8 @@ end
 % LOCAL: blue-white-red diverging colormap (64 levels)
 % ================================================================
 function cmap = spec_diverging_cmap()
-n = 32;
-blue = [linspace(0.2, 1, n)', linspace(0.4, 1, n)'];
-red = [ones(n, 1), linspace(1, 0.2, n)', linsapce(1, 0.2, n)'];
-cmap(blue; red);
+n    = 32;
+blue = [linspace(0.2, 1, n)', linspace(0.4, 1, n)', ones(n, 1)];
+red  = [ones(n, 1), linspace(1, 0.2, n)', linspace(1, 0.2, n)'];
+cmap = [blue; red];
 end

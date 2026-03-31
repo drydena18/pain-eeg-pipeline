@@ -69,7 +69,7 @@ for i = 1:numel(subs)
     spec_ensure_dir(outLEP);
 
     logf = spec_open_log(outLog, subjid, 'spectral');
-    cobj = onCleanup(@() spec_safe_close(logf));   %#ok<NASGU>
+    cobj = onCleanup(@() spec_safe_close(logf));   
 
     spec_logmsg(logf, '===== SPECTRAL V2 START sub-%03d =====', subjid);
     spec_logmsg(logf, 'Input stage: %s | Plot mode: %s', inStage, plotMode);
