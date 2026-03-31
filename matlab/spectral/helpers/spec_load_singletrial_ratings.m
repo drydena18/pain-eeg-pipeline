@@ -1,11 +1,6 @@
 function ratings = spec_load_singletrial_ratings(csvPath, subjid, nTr, logf)
-<<<<<<< Updated upstream
 % SPEC_LOAD_SINGLETRIAL_RATINGS  Load per-trial pain ratings for one subject
 % V 1.1.0
-=======
-% SPEC_LOAD_SINGLETRIAL_RATINGS Load per-trial pain ratings for one subject
-% V 1.0.0
->>>>>>> Stashed changes
 %
 % Reads the experiment-level participants_singletrial_<experiment>.csv that
 % P.CORE.CSV_SINGLETRIAL points to, filters to the given subjid, and returns
@@ -77,22 +72,11 @@ T.Properties.VariableNames = normNames;
 
 % ---------------------------------------------------------------
 % Locate subject-ID column
-<<<<<<< Updated upstream
 % ---------------------------------------------------------------
 idCands = {'subjid', 'subject_id', 'subjectid', 'id', ...
            'participant', 'participant_id', 'participantid', ...
            'sub', 'sub_id'};
 idCol = find_column(normNames, idCands);
-=======
-% ---------------------------------------------------------
-idCol = '';
-for cand = {'subjid', 'subject_id', 'ID', 'participant', 'participant_id'}
-    if ismember(cand{1}, T.Properties.VariableNames)
-        idCol = cand{1};
-        break;
-    end
-end
->>>>>>> Stashed changes
 
 if isempty(idCol)
     spec_logmsg(logf, '[RATINGS][WARN] No subject-ID column found in %s', csvPath);
@@ -101,7 +85,6 @@ if isempty(idCol)
     return;
 end
 
-<<<<<<< Updated upstream
 % ---------------------------------------------------------------
 % Locate pain-rating column
 % ---------------------------------------------------------------
@@ -109,18 +92,6 @@ ratingCands = {'pain_rating', 'painrating', 'rating', 'pain', ...
                'nrs', 'nrs_score', 'vrs', 'vrs_score', ...
                'vas', 'vas_score', 'response', 'score'};
 ratingCol = find_column(normNames, ratingCands);
-=======
-% ---------------------------------------------------------
-% Locate pain rating column
-% ---------------------------------------------------------
-ratingCol = '';
-for cand = {'pain_rating', 'Painrating', 'rating', 'pain', 'nrs', 'vrs', 'vas', 'response'}
-    if ismember(cand{1}, T.Properties.VariableNames)
-        ratingCol = cand{1};
-        break;
-    end
-end
->>>>>>> Stashed changes
 
 if isempty(ratingCol)
     spec_logmsg(logf, '[RATINGS][WARN] No pain-rating column found in %s', csvPath);
