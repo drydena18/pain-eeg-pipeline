@@ -103,7 +103,13 @@
 
     "epoch": {
       "enabled": true,
-      "event_types": ["54"],
+      "events": [
+        {
+          "code": "54",
+          "condition": "pain",
+          "intensity": "single"
+        }
+      ],
       "tmin_sec": -1.0,
       "tmax_sec": 2.0,
       "tag": "epoch"

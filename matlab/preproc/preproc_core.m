@@ -444,23 +444,133 @@ for i = 1:numel(subs)
         nextTag = char(string(cfg.preproc.epoch.tag));
         [EEG, tags, didLoad] = maybe_load_stage(ST.EPOCH, P, subjid, tags, nextTag, logf, EEG);
         if ~didLoad
-            ev = cfg.preproc.epoch.event_types;
             tmin = cfg.preproc.epoch.tmin_sec;
             tmax = cfg.preproc.epoch.tmax_sec;
 
-            logmsg(logf, '[EPOCH] events = %s window = [%.3f %.3f] sec', strjoin(string(ev), ','), tmin, tmax);
-            if isstring(ev); ev = cellstr(ev); end
+            % ---------------------------------------------
+            % Backward compatible event specification
+            % ----------------------------------------------
+            eventMap = table();
+
+            if isfield(cfg.preproc.epoch, 'events') && ~isempty(cfg.preproc.epoch.events)
+                evSpec = cfg.preproc.epoch.events;
+
+                if isstruct(evSpec)
+                    nEv = numel(evSpec);
+                    code = strings(nEv, 1);
+                    condition = strings(nEv, 1);
+                    intensity = strings(nEv, 1);
+
+                    for ii = 1:nEv
+                        code(ii) = string(evSpec(ii).code);
+
+                        if isfield(evSpec(ii), 'condition') && ~isempty(evSpec(ii).condition)
+                            condition(ii) = string(evSpec(ii).condition);
+                        else
+                            condition(ii) = "unknown";
+                        end
+
+                        if isfield(evSpec(ii), 'intensity') && ~isempty(evSpec(ii).intensity)
+                            intensity(ii) = string(evSpec(ii).intensity);
+                        else
+                            intensity(ii) = "unknown";
+                        end
+                    end
+
+                    eventMap = table(code, condition, intensity);
+                else
+                    error('cfg.preproc.epoch.events must be a struct array.');
+                end
+
+            elseif isfield(cfg.preproc.epoch, 'event_types') && ~isempty(cfg.preproc.epoch.event_types)
+                % Legacy mode
+                ev = cfg.preproc.epoch.event_types;
+                if isstring(ev); ev = cellstr(ev); end
+                code = string(ev(:));
+                condition = repmat("unknown", size(code), 1);
+                intensity = repmat("unknown", size(code), 1);
+                eventMap = table(code, condition, intensity);
+
+            else
+                error('Epoch config must define either preproc.epoch.events or preproc.epoch.event_types.');
+            end
+
+            % Unique event codes used for actual epoching
+            ev = cellstr(unique(eventMap.code, 'stable'));
+
+            logmsg(logf, '[EPOCH] events = %s window = [%.3f %.3f] sec', ...
+                strjoin(string(ev), ', '), tmin, tmax);
 
             validate_events_before_epoch(EEG, ev, logf);
 
             EEG = pop_epoch(EEG, ev, [tmin tmax]);
             EEG = eeg_checkset(EEG);
 
+            % ----------------------------------------------
+            % Save event mapping in EEG.etc
+            % ----------------------------------------------
+            if ~isfield(EEG, 'etc') || isempty(EEG.etc)
+                EEG.etc = struct();
+            end
+
+            EEG.etc.epoch = struct();
+            EEG.etc.event.event_map = eventMap;
+            EEG.etc.epoch.tmin_sec = tmin;
+            EEG.etc.epoch.tmax_sec = tmax;
+
+            % ----------------------------------------------
+            % Per epoch metadata extraction
+            % ----------------------------------------------
+            nEp = EEG.trials;
+            epoch_index = (1:nEp)';
+            event_code = strings(nEp, 1);
+            condition = strings(nEp, 1);
+            intensity = strings(nEp, 1);
+
+            for ep = 1:nEp
+                epochEventType = "";
+
+                % EEGLAB stores per-epoch event types in EEG.epoch(ep).eventtype
+                if isfield(EEG, 'epoch') && numel(EEG.epoch) >= ep && isfield(EEG.epoch(ep), 'eventtype')
+                    et = EEG.epoch(ep).eventtype;
+
+                    if iscell(et)
+                        epochEventType = string(et{1});
+                    else
+                        epochEventType = string(et);
+                    end
+                end
+
+                event_code(ep) = epochEventType;
+
+                idx = find(eventMap.code == epochEventType, 1, 'first');
+                if ~isempty(idx)
+                    condition(ep) = "unknown";
+                    intensity(ep) = "unknown";
+                else
+                    condition(ep) = eventMap.condition(idx);
+                    intensity(ep) = eventMap.intensity(idx);
+                end
+            end
+
+            epochMeta = table(epoch_index, event_code, condition, intensity);
+            EEG.etc.epoch.epoch_metadata = epochMeta;
+
+            % ----------------------------------------------
+            % Save sidecar CSV for downstream joins
+            % ----------------------------------------------
+            try
+                epochCsv = fullfile(ST.EPOCH, sprintf('sub-%03d_epoch_metadata.csv', subjid));
+                writetable(epochMeta, epochCsv);
+                logmsg(logf, '[EPOCH] Wrote epoch metadata CSV: %s', epochCsv);
+            catch ME
+                logmsg(logf, '[WARN] Failed to write epoch metadata CSV: %s', ME.message);
+            end
+
             tags{end+1} = nextTag;
             save_stage(ST.EPOCH, P, subjid, tags, EEG, logf);
         end
     end
-
     %% --------
     % BASELINE
     % ---------
