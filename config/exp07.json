@@ -1,0 +1,282 @@
+{
+  "meta": {
+    "schema": "v1",
+    "config": "exp07_v1.0.0"
+  },
+
+  "paths": {
+    "raw_root": "/cifs/seminowicz/eegPainDatasets/CNED/142ByBiosemi",
+    "proj_root": "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/142ByBiosemi",
+    "da_root": "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis"
+  },
+
+  "exp": {
+    "id": "exp07",
+    "task": "142ByBiosemi",
+    "out_dirname": "142ByBiosemi",
+    "out_prefix": "142BB_62_",
+    "raw": {
+      "pattern": "sub-%03d/eeg/sub-%03d_task-142ByBiosemi_eeg.bdf",
+      "search_recursive": true
+    },
+
+    "montage": {
+      "enabled": true,
+      "csv": "/home/UWO/darsenea/Documents/GitHub/pain-alpha-dynamics/montage_biosemi64_AB_to_1020_v1.csv",
+      "select_ab_only": true,
+      "do_lookup": true
+  },
+    "subjects": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50,
+                 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 
+                 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124],
+    "channel_locs": {
+      "use_elp": true,
+      "elp_path_key": "P.CORE.ELP_FILE"
+    }
+  },
+
+  "preproc": {
+    "filter": {
+      "enabled": true,
+      "type": "fir",
+      "highpass_hz": 0.5,
+      "lowpass_hz": 40,
+      "tag": "fir"
+    },
+
+    "notch": {
+      "enabled": true,
+      "freq_hz": 60,
+      "bw_hz": 2,
+      "tag": "notch60"
+    },
+
+    "resample": {
+      "enabled": true,
+      "target_hz": 500,
+      "tag": "rs500"
+    },
+
+    "reref": {
+      "enabled": true,
+      "mode": "average",
+      "channels": [],
+      "tag": "reref"
+    },
+
+    "initrej": {
+      "enabled": true,
+      "tag": "initrej",
+      "badchan": {
+        "enabled": false,
+        "method": "flatline_or_variance",
+        "flatline_sec": 5,
+        "variance_z": 5
+      },
+      "badseg": {
+        "enabled": true,
+        "method": "threshold",
+        "threshold_uv": 150
+      }
+    },
+
+    "ica": {
+      "enabled": true,
+      "method": "runica",
+      "runica": {
+          "extended": 1
+      },
+      "tag": "ica",
+      "iclabel": {
+        "enabled": true,
+        "tag": "iclabel",
+        "auto_reject": false,
+        "thresholds": {
+          "eye": 0.9,
+          "muscle": 0.9,
+          "heart": 0.9,
+          "line_noise": 0.9,
+          "channel_noise": 0.9,
+          "other": 0.0,
+          "brain_min": 0.0
+        }
+      }
+    },
+
+    "epoch": {
+      "enabled": true,
+      "event_types": ["54"],
+      "tmin_sec": -1.0,
+      "tmax_sec": 2.0,
+      "tag": "epoch"
+    },
+
+    "baseline": {
+      "enabled": true,
+      "window_sec": [-0.5, 0.0],
+      "tag": "base"
+    },
+
+    "hilbert": {
+      "enabled": true,
+      "slow_hz": [8, 10],
+      "tag": "hilbert"
+    }
+  },
+
+  "spectral": {
+    "input_stage": "08_base",
+
+    "psd": {
+      "fmin_hz": 1,
+      "fmax_hz": 80,
+      "window_sec": 2.0,
+      "overlap_frac": 0.5,
+      "nfft": 0
+    },
+
+    "windows": {
+      "pre_sec": [-1.0, -0.1],
+      "post_sec": [0.1, 0.8]
+    },
+
+    "alpha": {
+      "alpha_hz": [8, 12],
+      "slow_hz": [8, 10],
+      "fast_hz": [10, 12]
+    },
+
+    "fooof": {
+      "enabled": true,
+      "python_exe": "/home/UWO/darsenea/fooof_env/bin/python",
+      "script_path": "/home/UWO/darsenea/Documents/GitHub/pain-alpha-dynamics/python/spectral/fooof_bridge.py",
+      "fmin_hz": 2,
+      "fmax_hz": 40,
+      "aperiodic_mode": "fixed",
+      "peak_width_limits": [0.5, 12],
+      "max_n_peaks": 10,
+      "min_peak_height": 0.0,
+      "peak_threshold": 0.5,
+      "alpha_band_hz": [8, 12],
+      "verbose": false
+    },
+
+    "qc": {
+      "plot_mode": "summary",
+      "save_heatmaps": true,
+      "legend_max_channels": 20,
+      "max_debug_trials": 6
+    },
+
+    "trial_spectral": {
+        "enabled": true,
+        "pre_sec": [-0.2, 0.0],
+        "post_sec": [0.0, 0.8],
+        "max_trials": 30,
+        "legend_max_channels": 16,
+        "fmin_hz": 1,
+        "fmax_hz": 40
+      },
+
+    "lep": {
+      "enabled": true,
+      "window_sec": [-0.1, 1.0],
+      "n2_window_sec": [0.10, 0.30],
+      "p2_window_sec": [0.25, 0.45]
+    },
+
+    "phase": {
+      "enabled": true,
+      "n_permutations": 5000
+    }
+  },
+
+  "source": {
+    "enabled": true,
+
+    "input": {
+      "stage_dir": "08_base",
+      "allow_fallback_search": true
+    },
+
+    "template": {
+      "subjects_dir": "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/142ByBiosemi/source"
+    },
+
+    "lambda2": 0.1111111111111111,
+
+    "fsaverage": {
+      "subjects_dir": "/path/to/fsaverage/subjects_dir"
+    },
+
+    "forward": {
+      "spacing": "oct6",
+      "bem": "fsaverage",
+      "mindist_mm": 5.0
+    },
+
+    "inverse": {
+      "method": "sLORETA",
+      "snr": 3.0,
+      "pick_ori": null
+    },
+
+    "roi": {
+      "parcellation": "aparc",
+      "mode": "mean_flip",
+      "use_custom_rois": true,
+
+      "custom_rois": {
+        "lTC": ["lh-superiortemporal", "lh-middletemporal", "lh-inferiortemporal", "lh-bankssts", "lh-transversetemporal", "lh-temporalpole"],
+        "rTC": ["rh-superiortemporal", "rh-middletemporal", "rh-inferiortemporal", "rh-bankssts", "rh-transversetemporal", "rh-temporalpole"],
+
+        "lPC": ["lh-inferiorparietal", "lh-superiorparietal", "lh-supramarginal", "lh-postcentral", "lh-precuneus"],
+        "rPC": ["rh-inferiorparietal", "rh-superiorparietal", "rh-supramarginal", "rh-postcentral", "rh-precuneus"],
+
+        "lFC": ["lh-superiorfrontal", "lh-rostralmiddlefrontal", "lh-caudalmiddlefrontal", "lh-inferiorfrontal", "lh-precentral"],
+        "rFC": ["rh-superiorfrontal", "rh-rostralmiddlefrontal", "rh-caudalmiddlefrontal", "rh-inferiorfrontal", "rh-precentral"],
+
+        "lOC": ["lh-lateraloccipital", "lh-cuneus", "lh-lingual", "lh-pericalcarine"],
+        "rOC": ["rh-lateraloccipital", "rh-cuneus", "rh-lingual", "rh-pericalcarine"]
+      }
+    },
+
+    "spectral": {
+      "fmin": 1.0,
+      "fmax": 40.0,
+      "alpha_band": [8.0, 12.0],
+      "slow_alpha_band": [8.0, 10.0],
+      "fast_alpha_band": [10.0, 12.0]
+    },
+
+    "fooof": {
+      "enabled": true,
+      "mode": "trial_and_ga",
+      "aperiodic_mode": "fixed",
+      "peak_width_limits": [1.0, 12.0],
+      "max_n_peaks": 6,
+      "min_peak_height": 0.1,
+      "peak_threshold": 2.0,
+      "freq_range": [1.0, 40.0]
+    },
+
+    "noise_cov": {
+      "tmin": -0.2,
+      "tmax": 0.0
+    },
+
+    "outputs": {
+      "root": "AUTO",
+      "save_stc": true,
+      "save_roi_csv": true,
+      "save_connectivity": true,
+      "save_brain_images": true
+    },
+
+    "qc": {
+      "save_plots": true,
+      "save_brain_images": true,
+      "brain_snapshot_time_sec": 0.05
+    }
+  }
+}
