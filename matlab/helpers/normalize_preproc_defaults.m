@@ -29,7 +29,7 @@ Pp.ica.iclabel = defaultField(Pp.ica.iclabel, 'auto_reject', false);
 Pp.ica.iclabel = defaultStruct(Pp.ica.iclabel, 'thresholds');
 
 Pp = ensureBlock(Pp, 'epoch', true, 'epoch');
-Pp.epoch = defaultField(Pp.epoch, 'event_types', {});
+Pp.epoch = defaultField(Pp.epoch, 'events', {});
 Pp.epoch = defaultField(Pp.epoch, 'tmin_sec', -1.0);
 Pp.epoch = defaultField(Pp.epoch, 'tmax_sec', 2.0);
 
@@ -44,8 +44,8 @@ Pp.baseline = defaultField(Pp.baseline, 'window_sec', [-0.5 0]);
 Pp = ensureBlock(Pp, "hilbert", false, "hilbert");
 Pp.hilbert = defaultField(Pp.hilbert, "slow_hz", [8 10]);
 
-if Pp.epoch.enabled && isempty(Pp.epoch.event_types)
+if Pp.epoch.enabled && isempty(Pp.epoch.events)
     error('preproc_default:EpochMissingEvents', ...
-        'cfg.preproc.epoch.enabled is true, but epoch.event_types is empty.');
+        'cfg.preproc.epoch.enabled is true, but epoch.events is empty.');
 end
 end
