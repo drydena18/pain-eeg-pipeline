@@ -105,8 +105,8 @@ for t = 1:nTr
         v = ep.pain_rating;
         if iscell(v), v = v{1}; end
         vals(t) = double(v);
-        end
     end
+end
     if all(isnan(vals))
         spec_logmsg(logf, '[PHASE] EEG.epoch.pain_rating all NaN; no ratings available.');
         return;
