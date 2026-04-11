@@ -1,65 +1,82 @@
-function spec_write_chan_trial_csv(outPath, subjid, chanLabels, featChan)
-% SPEC_WRITE_CHAN_TRIAL_CSV  One row per (trial, channel)
-% V 1.1.0  -- bug fixes + new interaction metric and phase columns
+function spec_write_chan_trial_csv(outPath, subjid, chanLabels, feat)
+% SPEC_WRITE_CHAN_TRIAL_CSV Write one row per (trial, channel) to CSV
+% V 2.0.0
 %
-% New columns vs V1.0:
-%   bi_pre, lr_pre, cog_pre, psi_cog  (pre-stim sub-band metrics)
-%   erd_slow, erd_fast, delta_erd     (ERD asymmetry family)
-%   p5_flag                           (unstable-power trial flag)
-%   phase_slow_rad                    (Hilbert instantaneous phase; NaN if unavailable)
+% V2.0.0: dynamically writes every numeric [nChan x nTr] field present in
+% feat, rather than a hardcoded V1-only column list. New fields (bi_pre,
+% lr_pre, cog_pre, psi_cog, erd_slow, erd_fast, delta_erd, p5_flag,
+% phase_slow_rad, and any future additions) are written automatically with
+% no changes required here.
+%
+% Fields that are not [nChan x nTr] (wrong shape, non-numeric, empty) are
+% silently skipped so the function is rubust to partially-computed runs.
+%
+% Column order: subjid, trial, chan_idx, chan_label, <all numeric fields
+% sorted alphabetically for deterministic CSV structure across subjects>.
+%
+% Inputs:
+%   outPath     : full CSV outputh path
+%   subjid      : integer subject ID
+%   chanLabels  : cell or string array of channel labels (length nChan)
+%   feat        : struct of [nChan x nTr] feature arrays
 
-% BUG FIX: original code assigned nChan = numel(chanLabels) then immediately
-% overwrote it with [nChan, nTr] = size(...), making the guard always false.
-nLabels = numel(chanLabels);                       % label count (for validation)
-[nChan, nTr] = size(featChan.paf_cog_hz);
+if isstring(chanLabels), chanLabels = cellstr(chanLabels); end
 
-if nLabels ~= nChan
-    error('spec_write_chan_trial_csv:Mismatch', ...  % BUG FIX: was 'mitmatch'
-        'Channel label count (%d) != feature array rows (%d).', nLabels, nChan);
+% Determine nChan and nTr from the first valid [nChan x nTr] field
+nChan = numel(chanLabels);
+nTr = [];
+fns = fieldnames(feat);
+
+for k = 1:numel(fns)
+    v = feat.(fns{k});
+    if isnumeric(v) && ismatrix(v) && size(v, 1) == nChan && size(v, 2) > 0
+        nTr = size(v, 2);
+        break;
+    end
 end
 
-trialCol   = repelem((1:nTr)',    nChan);
-chanIdxCol = repmat((1:nChan)',   nTr,   1);
-chanLabCol = repmat(string(chanLabels(:)), nTr, 1);
+if isempty(nTr)
+    warning('spec_write_chan_trial_csv:NoValidField', ...
+        'No valid [nChan x nTr] field found in feat for sub-%03d. CSV not written', subjid);
+        return;
+end
 
-% Helper: [chan x trial] -> [nChan*nTr x 1] in trial-major order
-flat = @(X) reshape(X, [nChan * nTr, 1]);
+nRows = nChan * nTr;
 
+% ---------------------------------------------------------------
+% Index columns (always present)
+% ---------------------------------------------------------------
 T = table();
-T.subjid      = repmat(subjid, nChan * nTr, 1);
-T.trial       = trialCol;
-T.chan_idx    = chanIdxCol;
-T.chan_label  = chanLabCol;
+T.subjid = repmat(int32(subjid), nRows, 1);
+T.trial = repelem((1:nTr)', nChan);
+T.chan_idx = repmat((1:nChan)', nTr, 1);
+T.chan_label = repmat(string(chanLabels(:)), nTr, 1);
 
-% ------ Existing full-epoch spectral features ------
-T.paf_cog_hz       = flat(featChan.paf_cog_hz);
-T.pow_slow_alpha   = flat(featChan.pow_slow_alpha);
-T.pow_fast_alpha   = flat(featChan.pow_fast_alpha);
-T.pow_alpha_total  = flat(featChan.pow_alpha_total);
-T.rel_slow_alpha   = flat(featChan.rel_slow_alpha);
-T.rel_fast_alpha   = flat(featChan.rel_fast_alpha);
-T.sf_ratio         = flat(featChan.sf_ratio);
-T.sf_logratio      = flat(featChan.sf_logratio);
-T.sf_balance       = flat(featChan.sf_balance);
-T.slow_alpha_frac  = flat(featChan.slow_alpha_frac);
 
-% ------ Pre-stimulus interaction metrics (new) ------
-if isfield(featChan, 'bi_pre')
-    T.bi_pre     = flat(featChan.bi_pre);
-    T.lr_pre     = flat(featChan.lr_pre);
-    T.cog_pre    = flat(featChan.cog_pre);
-    T.psi_cog    = flat(featChan.psi_cog);
-    T.erd_slow   = flat(featChan.erd_slow);
-    T.erd_fast   = flat(featChan.erd_fast);
-    T.delta_erd  = flat(featChan.delta_erd);
-    T.p5_flag    = flat(featChan.p5_flag);
-end
+% ---------------------------------------------------------------
+% Dynamic feature columns
+% Flatten each valid [nChan x nTr] field in column-major order so
+% rows are grouped as (trial 1, all chans), (trial 2, all chans), ...
+% which matches the trial/chan_idx index columns above
+% ---------------------------------------------------------------
+flat = @(X) reshape(X, [nRows, 1]);
 
-% ------ Slow-alpha Hilbert instantaneous phase (new; optional) ------
-if isfield(featChan, 'phase_slow_rad')
-    T.phase_slow_rad = flat(featChan.phase_slow_rad);
-else
-    T.phase_slow_rad = nan(nChan * nTr, 1);   % NaN sentinel: stage 09 not run
+% Sort field names for deterministic column ordering
+sortedFns = sort(fns);
+
+for k = 1:numel(sortedFns)
+    fn = sortedFns{k};
+    v = feat.(fn);
+
+    % Skip non-numeric, wrong-shape, or empty fields
+    if ~isnumeric(v) && ~islogical(v)
+        continue;
+    end
+    if ~ismatrix(v) || size(v, 1) ~= nChan || size(v, 2) ~= nTr
+        continue;
+    end
+
+    T.(fn) = flat(double(v));
 end
 
 writetable(T, outPath);

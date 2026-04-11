@@ -321,8 +321,11 @@ for i = 1:numel(subs)
         spec_plot_summary(outSummaryFig, f, gaPxx, featGA, fooofOut, alpha, cfg, subjid);
  
         if isfield(cfg.spectral.qc, 'save_heatmaps') && logical(cfg.spectral.qc.save_heatmaps)
-            outPanel = fullfile(outFig, sprintf('sub-%03d_heatmap_panel.png', subjid));
-            spec_plot_heatmap_panel(outPanel, featChan, chanLabels, subjid);
+            % V2: one call produces three separate files:
+            %   sub-NNN_heatmap_prestim.png  (full-epoch + pre-stim metrics)
+            %   sub-NNN_heatmap_poststim.png (ERD metrics)
+            %   sub-NNN_heatmap_phase.png    (phase heatmap + rose)
+            spec_plot_heatmap_panel(outFig, featChan, chanLabels, subjid);
         end
  
         if isfield(featGA, 'bi_pre')
