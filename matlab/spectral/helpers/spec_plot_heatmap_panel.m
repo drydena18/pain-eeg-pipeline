@@ -98,11 +98,11 @@ if ~isempty(preStimItems)
         set(ax, 'YTick', yt, 'YTickLabel', chanLabels(yt), 'FontSize', 8);
         title(ax, ttl, 'Interpreter', 'tex', 'FontSize', 9);
         xlabel(ax, 'Trial', 'FontSize', 8);
-        ylabel(ax, 'Channel', 'FOntSize', 8);
+        ylabel(ax, 'Channel', 'FontSize', 8);
 
         if signed
-            clim_abs = max(abs(X(:)), [], 'omitnan');
-            if clim_abs > 0, clim(ax, [-clim_abs clim_abs]); end
+            clim_abs = max(abs(X(isfinite(X))));
+            if ~isempty(clim_abs) && clim_abs > 0, caxis(ax, [-clim_abs clim_abs]); end
             colormap(ax, spec_diverging_cmap());
         else
             colormap(ax, parula);
@@ -148,13 +148,13 @@ if ~isempty(postStimItems)
         ylabel(ax, 'Channel', 'FontSize', 8);
 
         if signed
-            clim_abs = max(abs(X(:)), [], 'omitnan');
-            if clim_abs > 0, clim(ax, [-clim_abs clim_abs]); end
+            clim_abs = max(abs(X(isfinite(X))));
+            if ~isempty(clim_abs) && clim_abs > 0, caxis(ax, [-clim_abs clim_abs]); end
             colormap(ax, spec_diverging_cmap());
         else
             colormap(ax, parula);
         end
-        colormap(ax, 'Location','eastoutside');
+        colorbar(ax, 'Location', 'eastoutside');
     end
 
     outPost = fullfile(outDir, sprintf('sub-%03d_heatmap_poststim.png', subjid));
@@ -188,13 +188,13 @@ if hasPhase
     % --- Left: channel x trial heatmap ---
     ax1 = nexttile(tl, 1);
     imagesc(ax1, phi_mat);
-    axis(ax1, phi_mat);
+    axis(ax1, 'tight');
     set(ax1, 'YDir', 'normal');
     set(ax1, 'YTick', yt, 'YTickLabel', chanLabels(yt), 'FontSize', 9);
     xlabel(ax1, 'Trial', 'FontSize', 8);
     ylabel(ax1, 'Channel', 'FontSize', 8);
     clim_abs = pi;
-    clim(ax1, [-clim_abs clim_abs]);
+    caxis(ax1, [-clim_abs clim_abs]);
     colormap(ax1, hsv(256));
     cb = colorbar(ax1, 'Location','eastoutside');
     cb.Ticks = [-pi -pi/2 0 pi/2 pi];
