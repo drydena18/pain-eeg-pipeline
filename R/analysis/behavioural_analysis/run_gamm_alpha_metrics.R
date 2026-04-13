@@ -1,24 +1,26 @@
-# ============================================================
+# =========================================================
 # run_gamm_alpha_metrics.R
-# ============================================================
-# Consolidates trial-level GAMM pipeline for alpha-pain analyses
-# across all experiments.
+# ---------------------------------------------------------
+# Pooled trial-level GAMM workflow: baseline + V1 full-epoch
+# alpha metrics + V2 pre-stimulus interaction metrics.
+# V 2.0.0
 #
-# Model set (all models include the same random-effects and
-# covariate base):
-#   m00 baseline (covariates only)
-#   m01 baseline + aperiodic (fooof offset + exponent)
-#   m02 sf_logratio
-#   m03 sf_balance
-#   m04 slow_frac
-#   m05 te(pow_slow, pow_fast) [tensor interaction]
-#   m06 paf_cog_hz
-#   m07 sf_logratio + aperiodic
-#   m08 sf_balance + aperiodic
-#   m09 slow_frac + aperiodic
-#   m10 te(pow_slow, pow_fast) + aperiodic
-#   m11 pow_slow + pow_fast (main effects only) + aperiodic
-# ============================================================
+# V2.0.0 changes:
+#   - Column names updated to match dynamic CSV writer output:
+#       pow_slow_alpha   (was pow_slow)
+#       pow_fast_alpha   (was pow_fast)
+#       pow_alpha_total  (was pow_alpha)
+#       rel_slow_alpha   (was rel_slow)
+#       rel_fast_alpha   (was rel_fast)
+#       slow_alpha_frac  (was slow_frac)
+#   - Added V2 pre-stim metric model candidates:
+#       bi_pre, lr_pre, cog_pre, psi_cog, delta_erd
+#   - Phase (phase_slow_rad) handled via sin/cos decomposition.
+#   - fitted_trial_df and subject_ga_df use any_of() so new
+#     columns are included automatically as they appear.
+#   - Global QC filter requires only identity + core covariates;
+#     per-metric NAs are handled gracefully by fit_metric_gamm.
+# =========================================================
 
 library(readr)
 library(dplyr)
@@ -28,455 +30,417 @@ library(mgcv)
 library(tibble)
 library(ggplot2)
 
-# ============================================================
+# =========================================================
 # USER SETTINGS
-# ============================================================
-data_file         <- "pain-eeg-pipeline/R/analysis/behavioural_analysis/alpha_metrics_data.csv"
-out_dir           <- "pain-eeg-pipeline/R/analysis/behavioural_analysis/gamm_outputs"
-min_fooof_r2      <- 0.80
-max_fooof_error   <- Inf 
-use_discrete      <- TRUE
-nthreads_to_use   <- 4L
+# =========================================================
+data_file        <- "pain-eeg-pipeline/R/analysis/behavioural_analysis/alpha_pain_master.csv"
+out_dir          <- "pain-eeg-pipeline/R/analysis/behavioural_analysis/gamm_outputs"
 
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
-# ============================================================
+min_fooof_r2     <- 0.80
+max_fooof_error  <- Inf
+use_discrete     <- TRUE
+nthreads_to_use  <- 4
+
+# =========================================================
 # HELPERS
-# ============================================================
+# =========================================================
 clean_names_local <- function(x) {
-    x %>%
-        str_trim() %>%
-        str_replace_all("\\s+", "_") %>%
-        str_replace_all("\\^2", "r2") %>%
-        str_replace_all("\\.", "_")
+  x %>%
+    str_trim() %>%
+    str_replace_all("\\s+", "_") %>%
+    str_replace_all("\\^2", "r2") %>%
+    str_replace_all("\\.", "_")
 }
 
-zscore <- function(x) as.numeric(scale(x))
+zscore     <- function(x) as.numeric(scale(x))
 safe_factor <- function(x) as.factor(as.character(x))
 
-# Add a single smooth term to an existing formula
-add_smooth <- function(base_f, var_z, k = 10) {
-    new_term <- paste0("s(", var_z, ", k = ", k, ")")
-    old_rhs <- deparse(base_f[[3L]])
-    new_rhs <- paste(old_rhs, "+", new_term)
-    as.formula(paste(deparse(base_f[[2L]]), "~", new_rhs))
-}
-
-# Add a tensor smooth to an existing formula
-add_tensor <- function(base_f, var1, var2, k = 10) {
-    new_term <- paste0("te(", var1, ", ", var2, ", k = ", k, ")")
-    old_rhs <- deparse(base_f[[3L]])
-    new_rhs <- paste(old_rhs, "+", new_term)
-    as.formula(paste(deparse(base_f[[2L]]), "~", new_rhs))
-}
-
-extract_model_info <- function(mod, nm) {
-    tibble(
-        model_name = nm,
-        AIC = AIC(mod),
-        BIC = BIC(mod),
-        logLik = as.numeric(logLik(mod)),
-        dev_expl = summary(mod)$dev.expl,
-        n = nobs(mod)
-    )
-}
-
-plot_smooth_term <- function(model, term_z, file_name, out_dir) {
-    labels <- sapply(model$smooth, function(s) s$label)
-    pattern <- paste0("(^|,\\s*)", term_z, "(\\s*,|\\))")
-    sel <- which(str_detect(labels, pattern))
-
-    if (length(sel) == 0L) {
-        warning("Term '", term_z, "' not found in model smooths. Skipping plot.")
-        return(invisible(NULL))
-    }
-
-    png(file.path(out_dir, file_name), width = 1600, height = 1200, res = 200)
-    plot(
-        model,
-        select = sel[1L],
-        shade = TRUE,
-        shade.col = "lightblue",
-        main = paste("Effect of", term_z, "on Pain Rating."),
-        xlab = term_z,
-        ylab = "Partial Effect on Pain"
-    )
-    abline(h = 0, lty = 2)
-    dev.off()
-}
-
-fit_bam <- function(formula, data, label) {
-    message("Fitting: ", label)
-    tryCatch(
-        bam(formula = formula,
-        data = data,
-        method = 'fREML',
-        discrete = use_discrete,
-        nthreads = nthreads_to_use),
-        error = function(e) {
-            warning("Model '", label, "' failed: ", conditionMessage(e))
-            NULL
-        }
-    )
-}
-
-# ============================================================
+# =========================================================
 # LOAD DATA
-# ============================================================
-if (!file.exists(data_file)) stop("Data file not found: ", data_file)
-
+# =========================================================
 df <- read_csv(data_file, show_col_types = FALSE)
 names(df) <- clean_names_local(names(df))
 
 required_cols <- c(
-    "experiment_name", "experiment_id", "subjid", "subjid_uid", "global_subjid",
-    "age", "sex", "cap_size", "trial", "trial_index", "laser_power", "pain_rating"
+  "experiment_name", "experiment_id", "subjid", "subjid_uid", "global_subjid",
+  "age", "sex", "cap_size", "trial", "trial_index", "laser_power", "pain_rating"
 )
-missing_cols <- setdiff(required_cols, names(df))
-if (length(missing_cols) > 0) {
-    stop("Missing required columns: ", paste(missing_cols, collapse = ", "))
+
+missing_required <- setdiff(required_cols, names(df))
+if (length(missing_required) > 0) {
+  stop("Missing required columns in alpha_pain_master.csv: ",
+       paste(missing_required, collapse = ", "))
 }
 
 df <- df %>%
+  mutate(
+    experiment_name = safe_factor(experiment_name),
+    experiment_id   = safe_factor(experiment_id),
+    subjid          = as.integer(subjid),
+    subjid_uid      = safe_factor(subjid_uid),
+    global_subjid   = safe_factor(global_subjid),
+    age             = suppressWarnings(as.numeric(age)),
+    sex             = safe_factor(sex),
+    cap_size        = safe_factor(cap_size),
+    trial           = as.integer(trial),
+    trial_index     = as.integer(trial_index),
+    laser_power     = suppressWarnings(as.numeric(laser_power)),
+    pain_rating     = suppressWarnings(as.numeric(pain_rating))
+  )
+
+# =========================================================
+# PHASE DECOMPOSITION
+# Circular predictors cannot enter a GAMM as raw radians.
+# Decompose into sin and cos components (each bounded [-1,1])
+# which are used as linear additive terms.
+# =========================================================
+if ("phase_slow_rad" %in% names(df)) {
+  df <- df %>%
     mutate(
-        experiment_name = safe_factor(experiment_name),
-        experiment_id = safe_factor(experiment_id),
-        subjid = as.integer(subjid),
-        subjid_uid = safe_factor(subjid_uid),
-        global_subjid = safe_factor(global_subjid),
-        age = suppressWarnings(as.numeric(age)),
-        sex = safe_factor(sex),
-        cap_size = safe_factor(cap_size),
-        trial = as.integer(trial),
-        trial_index = as.integer(trial_index),
-        laser_power = suppressWarnings(as.numeric(laser_power)),
-        pain_rating = suppressWarnings(as.numeric(pain_rating))
+      phase_sin = sin(phase_slow_rad),
+      phase_cos = cos(phase_slow_rad)
     )
-
-# ============================================================
-# QC FILTERING
-# ============================================================
-alpha_metrics <- c("pow_slow_alpha", "pow_fast_alpha", "sf_logratio", "sf_balance", "slow_alpha_frac")
-present_alpha <- intersect(alpha_metrics, names(df))
-
-df_model <- df %>%
-    filter(
-        !is.na(pain_rating),
-        !is.na(laser_power),
-        !is.na(trial_index),
-        !is.na(global_subjid),
-        !is.na(experiment_id),
-        !is.na(age),
-        !is.na(sex),
-        !is.na(cap_size)
-    )
-
-# Filter out rows missing ALL alpha metrics
-if (length(present_alpha) > 0) {
-    df_model <- df_model %>%
-        filter(if_any(all_of(present_alpha), ~ !is.na(.)))
 }
+
+# =========================================================
+# QC FILTERING
+# Only required identity + covariate columns are filtered
+# globally.  Spectral metric NAs are handled per-model.
+# =========================================================
+df_model <- df %>%
+  filter(
+    !is.na(pain_rating),
+    !is.na(laser_power),
+    !is.na(trial_index),
+    !is.na(global_subjid),
+    !is.na(experiment_id),
+    !is.na(age),
+    !is.na(sex),
+    !is.na(cap_size)
+  )
 
 if ("fooof_r2" %in% names(df_model)) {
-    df_model <- df_model %>%
-        filter(is.na(fooof_r2) | fooof_r2 >= min_fooof_r2)
+  df_model <- df_model %>%
+    filter(is.na(fooof_r2) | fooof_r2 >= min_fooof_r2)
 }
-
 if ("fooof_error" %in% names(df_model) && is.finite(max_fooof_error)) {
-    df_model <- df_model %>%
-        filter(is.na(fooof_error) | fooof_error <= max_fooof_error)
+  df_model <- df_model %>%
+    filter(is.na(fooof_error) | fooof_error <= max_fooof_error)
 }
 
-message("Rows after QC filtering: ", nrow(df_model))
-
-# ============================================================
-# Z-SCORE CONTINUOUS PREDICTORS
-# ============================================================
-# Core predictors (always present)
-df_model <- df_model %>%
-    mutate(
-        age_z = zscore(age),
-        laser_power_z = zscore(laser_power),
-        trial_index_z = zscore(trial_index)
-    )
-
-# Optional alpha metrics - z-score only if present
-optional_metrics <- c(
-    "paf_cog_hz", "pow_slow_alpha", "pow_fast_alpha",
-    "sf_ratio", "sf_balance", "sf_logratio",
-    "slow_alpha_frac", "rel_slow_alpha", "rel_fast_alpha",
-    "fooof_offset", "fooof_exponent"
+# =========================================================
+# SCALE CONTINUOUS VARIABLES
+# Only z-scores columns that are present in df_model.
+# =========================================================
+metric_candidates <- c(
+  # V1 full-epoch metrics (new canonical names)
+  "paf_cog_hz",
+  "pow_slow_alpha",
+  "pow_fast_alpha",
+  "pow_alpha_total",
+  "rel_slow_alpha",
+  "rel_fast_alpha",
+  "sf_ratio",
+  "sf_logratio",
+  "sf_balance",
+  "slow_alpha_frac",
+  # V2 pre-stim interaction metrics
+  "bi_pre",
+  "lr_pre",
+  "cog_pre",
+  "psi_cog",
+  "delta_erd",
+  # FOOOF aperiodic
+  "fooof_offset",
+  "fooof_exponent"
 )
-for (m in optional_metrics) {
-    if (m %in% names(df_model)) {
-        z_col <- paste0(m, "_z")
-        df_model[[z_col]] <- zscore(df_model[[m]])
-    }
+
+df_model <- df_model %>%
+  mutate(
+    age_z         = zscore(age),
+    laser_power_z = zscore(laser_power),
+    trial_index_z = zscore(trial_index)
+  )
+
+for (metric in metric_candidates) {
+  if (metric %in% names(df_model)) {
+    df_model[[paste0(metric, "_z")]] <- zscore(df_model[[metric]])
+  }
+}
+
+# Phase components are already bounded; z-score for comparability
+if ("phase_sin" %in% names(df_model)) {
+  df_model$phase_sin_z <- zscore(df_model$phase_sin)
+  df_model$phase_cos_z <- zscore(df_model$phase_cos)
 }
 
 write_csv(df_model, file.path(out_dir, "alpha_pain_master_model_input.csv"))
-message("Model input saved: ", file.path(out_dir, "alpha_pain_master_model_input.csv"))
 
-# ============================================================
-# CHECK COLUMN AVAILABILITY
-# ============================================================
-has_col <- function(col) col %in% names(df_model)
+message("Model input rows: ", nrow(df_model))
+message("Subjects: ",         n_distinct(df_model$subjid_uid))
 
-has_slow <- has_col("pow_slow_alpha_z")
-has_fast <- has_col("pow_fast_alpha_z")
-has_sf_logratio <- has_col("sf_logratio_z")
-has_sf_balance <- has_col("sf_balance_z")
-has_slow_frac <- has_col("slow_alpha_frac_z")
-has_paf <- has_col("paf_cog_hz_z")
-has_fooof <- has_col("fooof_offset_z") && has_col("fooof_exponent_z")
-
-# ============================================================
+# =========================================================
 # BASE FORMULAS
-# ============================================================
-base_formula <- pain_rating ~
-    s(laser_power_z, k = 10) +
-    s(trial_index_z, k = 10) +
-    s(age_z, k = 10) +
-    sex +
-    cap_size +
-    s(global_subjid, bs = "re") +
-    s(experiment_id, bs = "re")
+# =========================================================
+baseline_formula <- pain_rating ~
+  s(laser_power_z, k = 10) +
+  s(trial_index_z, k = 10) +
+  s(age_z, k = 10) +
+  sex +
+  s(global_subjid, bs = "re") +
+  s(experiment_id, bs = "re")
 
-# Build aperiodic base formula
-if (has_aperiodic) {
-    base_formula_aperiodic <- pain_rating ~
-        s(laser_power_z, k = 10) +
-        s(trial_index_z, k = 10) +
-        s(age_z, k = 10) +
-        sex +
-        cap_size +
-        s(fooof_offset_z, k = 10) +
-        s(fooof_exponent_z, k = 10) +
-        s(global_subjid, bs = "re") +
-        s(experiment_id, bs = "re")
-} else {
-    message("[WARN] FOOOF columns (fooof_offset_z, fooof_exponent_z) not found.\nAperiodic models (m01, m07-m11) will be skipped.")
-    base_formula_aperiodic <- NULL
-}
+baseline_cap_formula <- pain_rating ~
+  s(laser_power_z, k = 10) +
+  s(trial_index_z, k = 10) +
+  s(age_z, k = 10) +
+  sex +
+  cap_size +
+  s(global_subjid, bs = "re") +
+  s(experiment_id, bs = "re")
 
-# ============================================================
-# FIT MODELS
-# ============================================================
-model_list <- list()
+# =========================================================
+# MODEL FITTER
+# Returns NULL (with warning) when the predictor column is
+# absent or is all-NA after the global filter.
+# =========================================================
+fit_metric_gamm <- function(data, metric_z, model_name,
+                             include_cap = FALSE, extra_terms = NULL) {
+  base_formula <- if (include_cap) baseline_cap_formula else baseline_formula
 
-model_list[["m00_baseline"]] <- fit_bam(base_formula, df_model, "m00_baseline")
-
-if (!is.null(base_formula_aperiodic)) {
-    model_list[["m01_baseline_aperiodic"]] <-
-        fit_bam(base_formula_aperiodic, df_model, "m01_baseline_aperiodic")
-}
-
-if (has_sflog) {
-    model_list[["m02_sf_logratio"]] <-
-        fit_bam(add_smooth(base_formula, "sf_logratio_z"), df_model, "m02_sf_logratio")
-}
-
-if (has_sfbal) {
-    model_list[["m03_sf_balance"]] <-
-        fit_bam(add_smooth(base_formula, "sf_balance_z"), df_model, "m03_sf_balance")
-}
-
-if (has_slowfrac) {
-    model_list[["m04_slow_frac"]] <-
-        fit_bam(add_smooth(base_formula, "slow_alpha_frac_z"), df_model, "m04_slow_frac")
-}
-
-if (has_slow && has_fast) {
-    model_list[["m05_pow_slow_fast_te"]] <-
-        fit_bam(add_tensor(base_formula, "pow_slow_alpha_z", "pow_fast_alpha_z"), df_model, "m05_pow_slow_fast_te")
-}
-
-if (has_paf) {
-    model_list[["m06_paf_cog_hz"]] <-
-        fit_bam(add_smooth(base_formula, "paf_cog_hz_z"), df_model, "m06_paf_cog_hz")
-}
-
-if (!is.null(base_formula_aperiodic)) {
-    if (has_sflog) {
-        model_list[["m07_sf_logratio_aperiodic"]] <-
-            fit_bam(add_smooth(base_formula_aperiodic, "sf_logratio_z"), df_model, "m07_sf_logratio_aperiodic")
+  if (!is.na(metric_z)) {
+    if (!metric_z %in% names(data)) {
+      warning("Skipping ", model_name, ": column not found -> ", metric_z)
+      return(NULL)
     }
-    if (has_sfbal) {
-        model_list[["m08_sf_balance_aperiodic"]] <-
-            fit_bam(add_smooth(base_formula_aperiodic, "sf_balance_z"), df_model, "m08_sf_balance_aperiodic")
+    if (all(is.na(data[[metric_z]]))) {
+      warning("Skipping ", model_name, ": all-NA -> ", metric_z)
+      return(NULL)
     }
-    if (has_slowfrac) {
-        model_list[["m09_slow_frac_aperiodic"]] <-
-            fit_bam(add_smooth(base_formula_aperiodic, "slow_alpha_frac_z"), df_model, "m09_slow_frac_aperiodic")
-    }
-    if (has_slow && has_fast) {
-        model_list[["m10_pow_slow_fast_te_aperiodic"]] <-
-            fit_bam(add_tensor(base_formula_aperiodic, "pow_slow_alpha_z", "pow_fast_alpha_z"), df_model, "m10_pow_slow_fast_te_aperiodic")
-        model_list[["m11_pow_slow_fast_main_aperiodic"]] <-
-            fit_bam(
-                update(base_formula_aperiodic, . ~ . + pow_slow_alpha_z + pow_fast_alpha_z),
-                df_model,
-                "m11_pow_slow_fast_main_aperiodic"
-            )
-    }
-}
-
-# Drop any models that failed to fit
-model_list <- compact(model_list)
-
-if (length(model_list) == 0L) stop("No GAMMs were successfully fit.")
-message(length(model_list), " models fit successfully.")
-
-# ============================================================
-# SAVE SUMMARIES
-# ============================================================
-iwalk(model_list, function(mod, nm) {
-    capture.output(
-        summary(mod),
-        file = file.path(out_dir, paste0(nm, "_summary.txt"))
+    formula_to_fit <- update(
+      base_formula,
+      paste(". ~ . + s(", metric_z, ", k = 10)")
     )
+  } else {
+    formula_to_fit <- base_formula
+  }
+
+  # Extra terms (e.g. phase sin + cos as linear additive)
+  if (!is.null(extra_terms)) {
+    for (term in extra_terms) {
+      formula_to_fit <- update(formula_to_fit,
+                                paste(". ~ . +", term))
+    }
+  }
+
+  # Drop rows NA in the specific predictor before fitting
+  fit_data <- if (!is.na(metric_z)) {
+    data %>% filter(!is.na(.data[[metric_z]]))
+  } else {
+    data
+  }
+
+  if (nrow(fit_data) == 0) {
+    warning("Skipping ", model_name, ": no rows after NA removal.")
+    return(NULL)
+  }
+
+  message("Fitting: ", model_name, "  (n=", nrow(fit_data), ")")
+
+  tryCatch(
+    bam(
+      formula  = formula_to_fit,
+      data     = fit_data,
+      method   = "fREML",
+      discrete = use_discrete,
+      nthreads = nthreads_to_use
+    ),
+    error = function(e) {
+      warning("Model failed [", model_name, "]: ", e$message)
+      NULL
+    }
+  )
+}
+
+# =========================================================
+# MODEL SPECIFICATIONS
+# NA in metric_z = baseline model (no spectral predictor).
+# include_cap adds cap_size as a fixed effect.
+# =========================================================
+model_specs <- tribble(
+  ~model_name,                    ~metric_z,              ~include_cap,
+  # --- Baselines ---
+  "m00_baseline",                 NA_character_,           FALSE,
+  "m01_baseline_cap",             NA_character_,           TRUE,
+  # --- V1 full-epoch metrics ---
+  "m02_paf_cog",                  "paf_cog_hz_z",          FALSE,
+  "m03_pow_slow",                 "pow_slow_alpha_z",      FALSE,
+  "m04_pow_fast",                 "pow_fast_alpha_z",      FALSE,
+  "m05_sf_ratio",                 "sf_ratio_z",            FALSE,
+  "m06_sf_logratio",              "sf_logratio_z",         FALSE,
+  "m07_sf_balance",               "sf_balance_z",          FALSE,
+  "m08_slow_frac",                "slow_alpha_frac_z",     FALSE,
+  "m09_sf_logratio_cap",          "sf_logratio_z",         TRUE,
+  "m10_sf_balance_cap",           "sf_balance_z",          TRUE,
+  "m11_slow_frac_cap",            "slow_alpha_frac_z",     TRUE,
+  # --- V2 pre-stim interaction metrics ---
+  "m12_bi_pre",                   "bi_pre_z",              FALSE,
+  "m13_lr_pre",                   "lr_pre_z",              FALSE,
+  "m14_cog_pre",                  "cog_pre_z",             FALSE,
+  "m15_psi_cog",                  "psi_cog_z",             FALSE,
+  "m16_delta_erd",                "delta_erd_z",           FALSE,
+  "m17_bi_pre_cap",               "bi_pre_z",              TRUE,
+  "m18_psi_cog_cap",              "psi_cog_z",             TRUE
+)
+
+# Phase model handled separately (two linear terms, no smooth z column)
+model_list <- pmap(
+  model_specs,
+  function(model_name, metric_z, include_cap) {
+    fit_metric_gamm(
+      data        = df_model,
+      metric_z    = metric_z,
+      model_name  = model_name,
+      include_cap = include_cap
+    )
+  }
+)
+names(model_list) <- model_specs$model_name
+
+# Phase model: sin(phase) + cos(phase) as linear additive terms
+if (all(c("phase_sin_z", "phase_cos_z") %in% names(df_model))) {
+  model_list[["m19_phase_sincos"]] <- fit_metric_gamm(
+    data        = df_model %>% filter(!is.na(phase_sin_z), !is.na(phase_cos_z)),
+    metric_z    = NA_character_,
+    model_name  = "m19_phase_sincos",
+    include_cap = FALSE,
+    extra_terms = c("phase_sin_z", "phase_cos_z")
+  )
+}
+
+# Drop failed models
+valid_idx  <- !map_lgl(model_list, is.null)
+model_list <- model_list[valid_idx]
+
+if (length(model_list) == 0) stop("No GAMMs were successfully fit.")
+message("Successfully fit models: ", paste(names(model_list), collapse = ", "))
+
+# =========================================================
+# SAVE SUMMARIES
+# =========================================================
+iwalk(model_list, function(mod, nm) {
+  capture.output(summary(mod),
+                 file = file.path(out_dir, paste0(nm, "_summary.txt")))
 })
 
-# ============================================================
+# =========================================================
 # MODEL COMPARISON TABLE
-# ============================================================
+# =========================================================
+extract_model_info <- function(mod, nm) {
+  tibble(
+    model_name = nm,
+    AIC        = AIC(mod),
+    BIC        = BIC(mod),
+    logLik     = as.numeric(logLik(mod)),
+    dev_expl   = summary(mod)$dev.expl,
+    n          = nobs(mod)
+  )
+}
+
 model_comparison <- imap_dfr(model_list, extract_model_info) %>%
-    arrange(AIC) %>%
-    mutate(delta_AIC = AIC - min(AIC))
+  arrange(AIC)
 
 write_csv(model_comparison, file.path(out_dir, "model_comparison.csv"))
 message("Model comparison saved.")
-print(model_comparison)
 
-# ============================================================
-# SMOOTH EFFECTS PLOTS
-# ============================================================
-smooth_plots <- list(
-    m02_sf_logratio = "sf_logratio_z",
-    m03_sf_balance = "sf_balance_z",
-    m04_slow_frac = "slow_alpha_frac_z",
-    m06_paf_cog_hz = "paf_cog_hz_z",
-    m07_sf_logratio_aperiodic = "sf_logratio_z",
-    m08_sf_balance_aperiodic = "sf_balance_z",
-    m09_slow_frac_aperiodic = "slow_alpha_frac_z"
+# =========================================================
+# FITTED VALUES  (all spectral columns included via any_of)
+# =========================================================
+spectral_passthrough <- c(
+  "paf_cog_hz", "pow_slow_alpha", "pow_fast_alpha", "pow_alpha_total",
+  "rel_slow_alpha", "rel_fast_alpha", "sf_ratio", "sf_logratio",
+  "sf_balance", "slow_alpha_frac",
+  "bi_pre", "lr_pre", "cog_pre", "psi_cog", "erd_slow", "erd_fast",
+  "delta_erd", "p5_flag", "phase_slow_rad",
+  "fooof_offset", "fooof_exponent", "fooof_r2", "fooof_error",
+  "fooof_alpha_cf", "fooof_alpha_pw", "fooof_alpha_bw"
 )
 
-for (nm in names(smooth_plots)) {
-    if (nm %in% names(model_list)) {
-        plot_smooth_term(
-            model = model_list[[nm]],
-            term_z = smooth_plots[[nm]],
-            file_name = paste0(nm, "_effect.png"),
-            out_dir = out_dir
-        )
-    }
-}
-
-# ============================================================
-# INTERACTION PLOTS (if tensor terms were fit)
-# ============================================================
-tensor_models <- c("m05_pow_slow_fast_te", "m10_pow_slow_fast_te_aperiodic")
-
-for (nm in tensor_models) {
-    if (nm %in% names(model_list)) {
-        png(file.path(out_dir, paste0(nm, "_surface.png")),
-        width = 1800, height = 1400, res = 200)
-    vis.gam(
-        model_list[[nm]],
-        view = c("pow_slow_alpha_z", "pow_fast_alpha_z"),
-        plot.type = "contour",
-        too.far = 0.05,
-        main = paste("Slow-Fast Alpha Tensor:", nm)
-    )
-    dev.off()
-    }
-}
-
-# ============================================================
-# FITTED VALUES / RESIDUALS
-# ============================================================
-# Selected output columns that actually exist
-fitted_base_cols <- c(
-    "experiment_name", "experiment_id",
-    "subjid", "subjid_uid", "global_subjid",
-    "age", "sex", "cap_size",
-    "trial", "trial_index", "laser_power", "pain_rating"
-)
-fitted_optional_cols <- c(
-    "paf_cog_hz", "pow_slow_alpha", "pow_fast_alpha",
-    "sf_ratio", "sf_balance", "sf_logratio",
-    "slow_alpha_frac", "fooof_offset", "fooof_exponent"
-)
-
-fitted_trials_df <- df_model %>%
-    select(all_of(fitted_base_cols), any_of(fitted_optional_cols))
+fitted_trial_df <- df_model %>%
+  select(
+    experiment_name, experiment_id, subjid, subjid_uid, global_subjid,
+    age, sex, cap_size, trial, trial_index, laser_power, pain_rating,
+    any_of(spectral_passthrough)
+  )
 
 for (nm in names(model_list)) {
-    fitted_trial_df[[paste0(nm, "_fitted")]] <- fitted(model_list[[nm]])
-    fitted_trial_df[[paste0(nm, "_resid")]] <- residuals(model_list[[nm]])
+  # Fitted values may be on a subset of rows; align by row name
+  fit_vals  <- rep(NA_real_, nrow(fitted_trial_df))
+  resid_vals <- rep(NA_real_, nrow(fitted_trial_df))
+  mod_rows  <- as.integer(rownames(model_list[[nm]]$model))
+  # bam() preserves original row indices in model$model
+  common    <- intersect(mod_rows, seq_len(nrow(fitted_trial_df)))
+  if (length(common) > 0) {
+    fit_vals[common]   <- fitted(model_list[[nm]])
+    resid_vals[common] <- residuals(model_list[[nm]])
+  }
+  fitted_trial_df[[paste0(nm, "_fitted")]] <- fit_vals
+  fitted_trial_df[[paste0(nm, "_resid")]]  <- resid_vals
 }
 
 write_csv(fitted_trial_df, file.path(out_dir, "trial_level_fitted_values.csv"))
-message("Trial-level fitted values saved.")
 
-# Subject-level grand average summary
+# Subject-level GA summary
 subject_ga_df <- fitted_trial_df %>%
-    group_by(
-        experiment_name, experiment_id,
-        subjid, subjid_uid, global_subjid,
-        age, sex, cap_size
-    ) %>%
-    summarise(
-        n_trials = n(),
-        mean_pain_rating = mean(pain_rating, na.rm = TRUE),
-        mean_laser_power = mean(laser_power, na.rm = TRUE),
-        across(any_of(fitted_optional_cols), ~ mean(.x, na.rm = TRUE), .names = "mean_{col}"),
-        across(ends_with("_fitted"), ~ mean(.x, na.rm = TRUE), .names = "ga_{col}"),
-        .groups = "drop"
-    )
+  group_by(experiment_name, experiment_id, subjid, subjid_uid,
+           global_subjid, age, sex, cap_size) %>%
+  summarise(
+    n_trials         = n(),
+    mean_pain_rating = mean(pain_rating, na.rm = TRUE),
+    mean_laser_power = mean(laser_power, na.rm = TRUE),
+    across(any_of(spectral_passthrough), ~ mean(.x, na.rm = TRUE),
+           .names = "mean_{.col}"),
+    across(ends_with("_fitted"),         ~ mean(.x, na.rm = TRUE),
+           .names = "ga_{.col}"),
+    .groups = "drop"
+  )
 
 write_csv(subject_ga_df, file.path(out_dir, "subject_level_ga_fitted_values.csv"))
-message("Subject-level GA fitted values saved.")
 
-# ============================================================
-# DIAGNOSTICS
-# ============================================================
+# =========================================================
+# DIAGNOSTICS + OBSERVED VS FITTED
+# =========================================================
 iwalk(model_list, function(mod, nm) {
-    png(file.path(out_dir, paste0(nm, "_diagnostics.png")),
-    width = 1800, height = 1400, res = 180)
-    gam.check(mod)
-    dev.off()
+  png(file.path(out_dir, paste0(nm, "_diagnostics.png")),
+      width = 1800, height = 1400, res = 180)
+  gam.check(mod)
+  dev.off()
 })
 
-# Observed v Fitted scatter plts
 for (nm in names(model_list)) {
-    p <- ggplot(
-        fitted_trial_df,
-        aes(x = .data[[paste0(nm, "_fitted")]], y = pain_rating)
-    ) +
-    geom_point(alpha = 0.15, size = 0.8) +
-    geom_smooth(method = "lm", se = FALSE, color = "steelblue") +
-    labs(
-        title = paste("Observed vs Fitted:", nm),
-        x = "Fitted pain rating",
-        y = "Observed pain rating"
-    ) +
+  fitted_col <- paste0(nm, "_fitted")
+  if (!fitted_col %in% names(fitted_trial_df)) next
+  p <- ggplot(
+    fitted_trial_df %>% filter(!is.na(.data[[fitted_col]])),
+    aes(x = .data[[fitted_col]], y = pain_rating)
+  ) +
+    geom_point(alpha = 0.15) +
+    geom_smooth(method = "lm", se = FALSE) +
+    labs(title = paste("Observed vs Fitted:", nm),
+         x = "Fitted pain rating", y = "Observed pain rating") +
     theme_minimal()
 
-ggsave(
-    filename = file.path(out_dir, paste0(nm, "_observed_vs_fitted.png")),
-    plot = p,
-    width = 7,
-    height = 5,
-    dpi = 300
-)
+  ggsave(file.path(out_dir, paste0(nm, "_observed_vs_fitted.png")),
+         plot = p, width = 7, height = 5, dpi = 300)
 }
 
-# ============================================================
+# =========================================================
 # SAVE MODEL OBJECTS
-# ============================================================
+# =========================================================
 iwalk(model_list, function(mod, nm) {
-    saveRDS(mod, file.path(out_dir, paste0(nm, ".rds")))
+  saveRDS(mod, file.path(out_dir, paste0(nm, ".rds")))
 })
 
-message("GAMM pipeline complete. Output: ", out_dir)
+message("Done. Outputs saved to: ", out_dir)
