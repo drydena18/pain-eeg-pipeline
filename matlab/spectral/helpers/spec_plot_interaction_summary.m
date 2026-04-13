@@ -127,9 +127,9 @@ for r = 1:size(heatmap_items, 1)
         ylabel(ax, 'Channel');
         colorbar(ax, 'Location', 'eastoutside');
         colormap(ax, spec_diverging_cmap());
-        clim_abs = max(abs(X(:)), [], 'omitnan');
-        if clim_abs > 0
-            clim(ax, [-clim_abs, clim_abs]);
+        clim_abs = max(abs(X(isfinite(X))));   % isfinite drops NaN+Inf; no toolbox needed
+        if ~isempty(clim_abs) && clim_abs > 0
+            caxis(ax, [-clim_abs, clim_abs]);   % caxis works R2014b+; clim is R2022a only
         end
     else
         text(ax, 0.5, 0.5, 'not available', 'Units', 'normalized', ...
@@ -190,7 +190,7 @@ if hasFlag
     set(ax, 'YDir', 'normal');
     set(ax, 'YTick', yt, 'YTickLabel', chanLabels(yt), 'FontSize', 9);
     colormap(ax, [1 1 1; 0.84 0.15 0.16]);   % white = ok, red = flagged
-    clim(ax, [0 1]);
+    caxis(ax, [0 1]);
     cb = colorbar(ax, 'Location', 'eastoutside');
     cb.Ticks = [0 1]; cb.TickLabels = {'ok', 'flagged'};
     xlabel(ax, 'Trial'); ylabel(ax, 'Channel');
