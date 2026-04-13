@@ -25,7 +25,7 @@ end
 
 logmsg(logf, '[ICA-TRAIN] Detected %d intervals (%.2f%% of samples).', segInfo.n_intervals, segInfo.pct_time);
 
-doRemove = prompt_yesno('Remove detected bad segments from ICA training copy? (y/n) [n]:', false);
+doRemove = prompt_yesno('Remove detected bad segments from ICA training copy? (y/n) [n]: ', false);
 if ~doRemove
     logmsg(logf, '[ICA-TRAIN] Keeping all segments (manual decision).');
     return;

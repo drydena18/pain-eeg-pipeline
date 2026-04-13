@@ -204,7 +204,7 @@ for i = 1:numel(subs)
                     % r_cl from pre-loaded phaseMat + CSV ratings
                     if ~isempty(ratings)
                         rclTable = spec_compute_rcl_from_phase( ...
-                            phaseMat, ratings, chanLabels, phCfg, logf);
+                            phaseMat, ratings, chanLabels, phCfg, logf, P, subjid);
                     else
                         spec_logmsg(logf, '[PHASE] No ratings available; r_cl skipped for 09_hilbert path.');
                     end

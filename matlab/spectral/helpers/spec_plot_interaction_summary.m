@@ -125,7 +125,7 @@ for r = 1:size(heatmap_items, 1)
         set(ax, 'YTick', yt, 'YTickLabel', chanLabels(yt), 'FontSize', 9);
         xlabel(ax, 'Trial');
         ylabel(ax, 'Channel');
-        colorbar(ax, 'eastoutside');
+        colorbar(ax, 'Location', 'eastoutside');
         colormap(ax, spec_diverging_cmap());
         clim_abs = max(abs(X(:)), [], 'omitnan');
         if clim_abs > 0
@@ -191,7 +191,7 @@ if hasFlag
     set(ax, 'YTick', yt, 'YTickLabel', chanLabels(yt), 'FontSize', 9);
     colormap(ax, [1 1 1; 0.84 0.15 0.16]);   % white = ok, red = flagged
     clim(ax, [0 1]);
-    cb = colorbar(ax, 'eastoutside');
+    cb = colorbar(ax, 'Location', 'eastoutside');
     cb.Ticks = [0 1]; cb.TickLabels = {'ok', 'flagged'};
     xlabel(ax, 'Trial'); ylabel(ax, 'Channel');
     pct = 100 * mean(F(:));

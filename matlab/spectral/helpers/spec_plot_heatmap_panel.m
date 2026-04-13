@@ -45,18 +45,18 @@ preStimItems = {
     'sf_logratio', 'Slow/Fast Log Ratio', true;
     'sf_balance', 'Slow-Fast Balance', true;
     'slow_alpha_frac', 'Slow \alpha Fraction', false;
-    'bi_pre', 'BI_{pre}: Pre-stim Balance Index', true;
-    'lr_pre', 'LR_{pre}: Pre-stim Log Ratio', true;
-    'cog_pre', 'CoG_{pre}: Pre-stim CoG (Hz)', false;
-    'psi_cog', '\Pst_{cog}: BI x (CoG - 10)', true;
+    'bi_pre', 'BI_{pre} | Pre-stim Balance Index', true;
+    'lr_pre', 'LR_{pre} | Pre-stim Log Ratio', true;
+    'cog_pre', 'CoG_{pre} | Pre-stim CoG (Hz)', false;
+    'psi_cog', '\Psi_{cog} | BI x (CoG - 10)', true;
     'p5_flag', 'p5 Flag (unstable pre-stim power)', false;
 };
 
 % --- Group 2: Post-stim / ERD metrics ---
 postStimItems = {
-    'erd_slow', 'ERD_{slow}: Slow-\alpha ERD', true;
-    'erd_fast', 'ERD_{fast}: Fast-\alpha ERD', true;
-    'delta_erd', '\DeltaERD: ERD_{slow} - ERD_{fast}', true;
+    'erd_slow', 'ERD_{slow} | Slow-\alpha ERD', true;
+    'erd_fast', 'ERD_{fast} | Fast-\alpha ERD', true;
+    'delta_erd', '\DeltaERD | ERD_{slow} - ERD_{fast}', true;
 };
 
 % ---------------------------------------------------------------
@@ -107,7 +107,7 @@ if ~isempty(preStimItems)
         else
             colormap(ax, parula);
         end
-        colorbar(ax, 'eastoutside');
+        colorbar(ax, 'Location', 'eastoutside');
     end
 
     ourPre = fullfile(outDir, sprintf('sub-%03d_heatmap_prestim.png', subjid));
@@ -154,7 +154,7 @@ if ~isempty(postStimItems)
         else
             colormap(ax, parula);
         end
-        colormap(ax, 'eastoutside');
+        colormap(ax, 'Location','eastoutside');
     end
 
     outPost = fullfile(outDir, sprintf('sub-%03d_heatmap_poststim.png', subjid));
@@ -196,7 +196,7 @@ if hasPhase
     clim_abs = pi;
     clim(ax1, [-clim_abs clim_abs]);
     colormap(ax1, hsv(256));
-    cb = colorbar(ax1, 'eastoutside');
+    cb = colorbar(ax1, 'Location','eastoutside');
     cb.Ticks = [-pi -pi/2 0 pi/2 pi];
     cb.TickLabels = {'-\pi', '-\pi/2', '0', '\pi/2', '\pi'};
 

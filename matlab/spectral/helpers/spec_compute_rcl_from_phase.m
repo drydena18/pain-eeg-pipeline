@@ -1,4 +1,4 @@
-function rclTable = spec_compute_rcl_from_phase(phaseMat, ratings, chanLabels, phCfg, logf)
+function rclTable = spec_compute_rcl_from_phase(phaseMat, ratings, chanLabels, phCfg, logf, P, subjid)
 % SPEC_COMPUTE_RCL_FROM_PHASE Per-channel circular-linear correlation
 % V 1.0.0
 %
@@ -41,6 +41,51 @@ function rclTable = spec_compute_rcl_from_phase(phaseMat, ratings, chanLabels, p
 if nargin < 5, logf = 1; end
 
 rclTable = table();
+try
+    rt = readtable(P.CORE.CSV_SINGLETRIAL, ...
+        'VariableNamingRule', 'preserve');
+    % Normalize column names
+    rt.Properties.VariableNames = regexprep(...
+        rt.Properties.VariableNames, '[^a-zA-Z0-9_]', '_');
+
+    % Discover the subject column by case-insensitive matching 
+    % mirrors the logic in extract_subject_column so both stay in sync
+    vn = lower(string(rt.Properties.VariableNames));
+    candidates = ["subjid", "participant_id", "id", "subject"];
+    subColName = "";
+    for c = candidates
+        hit = find(vn == c, 1);
+        if ~isempty(hit)
+            subColName = rt.Properties.VariableNames{hit};
+            break;
+        end
+    end
+
+    if strlength(subColName) == 0
+        spec_logmsg(logf, '[PHASE][WARN] No subject column found in ratings CSV. Columns: %s',  ...
+            strjoin(rt.Properties.VariableNames, ', '));
+        error('no_subject_col');
+    end
+
+    % Filter to this subject. Handle numeric vs string storage
+    colVals = rt.(subColName);
+    if isnumeric(colVals)
+        mask = colVals == subjid;
+    else
+        mask = str2double(regexprep(string(colVals), '[^0-9]', '')) == subjid;
+    end
+
+    rcl_table = rt(mask, :);
+
+    if isempty(rcl_table)
+        spec_logmsg(logf, '[PHASE][WARN] Ratings CSV loaded but no rows match subjid = %d', subjid);
+    else
+        spec_logmsg(logf, '[PHASE] Loaded %d rating rows for subjid = %d', height(rcl_table), subjid);
+    end
+
+catch ME
+    spec_logmsg(logf, '[PHASE][WARN] Could not load ratings: %s', ME.message);
+end
 
 nChan = size(phaseMat, 1);
 
@@ -102,7 +147,7 @@ r_cs = corr(y, s, 'type', 'Pearson');
 r_cc = corr(y, c, 'type', 'Pearson');
 r_sc = corr(s, c, 'type', 'Pearson');
 denom = 1 - r_sc^2;
-if abd(denom) < eps
+if abs(denom) < eps
     r = 0; return;
 end
 r2 = (r_cs^2 + r_cc^2 - 2*r_cs*r_cc*r_sc) / denom;

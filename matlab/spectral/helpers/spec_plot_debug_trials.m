@@ -1,4 +1,4 @@
-function spec_plot_debug_trials(outFirDir, f, Pxx, featChan, chanLabels, alpha, cfg,subjid, plotMode)
+function spec_plot_debug_trials(outFigDir, f, Pxx, featChan, chanLabels, alpha, cfg,subjid, plotMode)
 % Debug/exhaustive plots:
 %   - Select subset of trials (debug) or all trials (exhaustive)
 %   - Plot multi-channel PSD overlay wth limited legend
