@@ -56,9 +56,12 @@ epochStartMs = double(EEG.times(1)); % ms relative to event (negative = pre-stim
 % Convert to samples
 win   = max(8, round(winSec * fs));
 nover = min(win - 1, round(win * ovrFrac));
-nfft  = (nfft_cfg > 0) ...
-      ? max(nfft_cfg, win) ...
-      : max(2^nextpow2(win), win);
+
+if nfft_cfg > 0
+    nfft = max(nfft_cfg, win);
+else
+    nfft = max(2^nextpow2(win), win);
+end
 
 spec_logmsg(logf, '[TRIALSPEC] Spectrogram: win=%d samp (%.3fs), noverlap=%d, nfft=%d, frange=[%.0f %.0f] Hz', ...
     win, win/fs, nover, nfft, fmin, fmax);
