@@ -77,7 +77,7 @@ if ~isempty(preStimItems)
 
     % Wide figure: each panel ~320px wide; height from channel count
     panelH = max(250, 14*nChan + 80);
-    figW = nC * 320;
+    figW = nC * 750;
     figH = nR * panelH;
 
     h = figure('Visible', 'off', 'Units', 'pixels', 'Position', [50 50 figW figH]);
@@ -124,7 +124,7 @@ if ~isempty(postStimItems)
     nR = 1;
 
     panelH = max(350, 14*nChan + 80);
-    figW = nC * 380;
+    figW = nC * 750;
     figH = panelH;
 
     h = figure('Visible', 'off', 'Units', 'pixels', 'Position', [50 50 figW figH]);
