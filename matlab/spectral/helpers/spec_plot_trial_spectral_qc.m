@@ -1,110 +1,119 @@
 function spec_plot_trial_spectral_qc(outDir, EEG, cfg, subjid, logf)
-% Saves one figure per trial: Pre-stim vs post-stim PSD (all channels)
-% Uses a COMMON Welch window/nfft for pre+post so frequency grids match.
+% SPEC_PLOT_TRIAL_SPECTRAL_QC
+% Saves one spectrogram figure per trial: Hz on Y, time (ms) on X,
+% power (dB) on colour.  Channels are averaged in the linear power domain
+% before plotting so the result is the grand-average (GA) spectrogram.
+%
+% Replaces the old pre/post Welch PSD split.  The full epoch is used so
+% that pre-stimulus alpha and post-stimulus broadband suppression are both
+% visible in one panel.
+%
+% Config keys read (all under cfg.spectral.trial_spectral):
+%   max_trials             - cap on number of trials saved  (default 20)
+%   fmin_hz / fmax_hz      - frequency display range        (default 1/40)
+%   spectrogram_win_sec    - STFT window length in seconds  (default 0.5)
+%   spectrogram_overlap    - overlap fraction 0-1           (default 0.90)
+%
+% Config keys NO LONGER USED (kept in JSON for backward compat, ignored):
+%   pre_sec, post_sec, legend_max_channels
 
-ts = cfg.spectral.trial_spectral;
+ts  = cfg.spectral.trial_spectral;
+psd = cfg.spectral.psd;
 
-preSec   = ts.pre_sec;
-postSec  = ts.post_sec;
-maxTrials = ts.max_trials;
-fmin = ts.fmin_hz;
-fmax = ts.fmax_hz;
-
-psd = cfg.spectral.psd; % uses window_sec/overlap_frac/nfft as "desired"
-
-legendMax = 16;
-if isfield(ts, 'legend_max_channels'), legendMax = ts.legend_max_channels; end
-
+% ---- Basic guards -------------------------------------------------------
 if EEG.trials <= 1
-    spec_logmsg(logf, '[TRIALSPEC][WARN] EEG not epoched. Skipping...');
+    spec_logmsg(logf, '[TRIALSPEC][WARN] EEG not epoched. Skipping.');
     return;
 end
 
 if ~isfield(EEG, 'times') || isempty(EEG.times)
-    error('spec_plot_trial_spectral_qc:MissingTimes', 'EEG.times is missing; cannot split pre/post.');
-end
-
-timesSec = double(EEG.times(:))' / 1000; % seconds
-idxPre  = timesSec >= preSec(1)  & timesSec <= preSec(2);
-idxPost = timesSec >= postSec(1) & timesSec <= postSec(2);
-
-nPre  = nnz(idxPre);
-nPost = nnz(idxPost);
-
-if nPre < 8 || nPost < 8
-    spec_logmsg(logf, '[TRIALSPEC][WARN] Not enough samples in pre/post windows. pre=%d post=%d', nPre, nPost);
+    spec_logmsg(logf, '[TRIALSPEC][WARN] EEG.times missing. Skipping.');
     return;
 end
 
-fs = EEG.srate;
+% ---- Params -------------------------------------------------------------
+maxTrials = defaultFieldVal(ts, 'max_trials', 20);
+fmin      = defaultFieldVal(ts, 'fmin_hz',    1);
+fmax      = defaultFieldVal(ts, 'fmax_hz',    40);
 
-% ---- Desired Welch window from cfg ----
-winS = psd.window_sec;
-if isempty(winS) || winS <= 0, winS = 2.0; end
-win_desired = max(8, round(winS * fs));
+% Spectrogram-specific window: shorter than the PSD window to give useful
+% time resolution.  0.5 s → ~2 Hz freq resolution at typical EEG rates,
+% which is sufficient to resolve the 8-10 and 10-12 Hz sub-bands.
+winSec  = defaultFieldVal(ts, 'spectrogram_win_sec', 0.5);
+ovrFrac = defaultFieldVal(ts, 'spectrogram_overlap',  0.90);
 
-ovr = psd.overlap_frac;
-if isempty(ovr) || ovr <= 0 || ovr >= 1, ovr = 0.5; end
-
-nfft_cfg = psd.nfft;
-if isempty(nfft_cfg) || nfft_cfg <= 0, nfft_cfg = 0; end
-
-% ---- COMMON window based on the SHORTER segment (pre usually) ----
-win = min(win_desired, min(nPre, nPost));
-win = max(win, 8);
-
-nover = round(win * ovr);
-if nover >= win, nover = max(0, win - 1); end
-
-if nfft_cfg > 0
-    nfft = max(nfft_cfg, win);
-else
-    nfft = max(2^nextpow2(win), win);
+% Fall back to psd.nfft if set, otherwise auto
+nfft_cfg = 0;
+if isfield(psd, 'nfft') && ~isempty(psd.nfft) && psd.nfft > 0
+    nfft_cfg = psd.nfft;
 end
 
-spec_logmsg(logf, '[TRIALSPEC] Welch common params: win=%d samp (%.3fs), nover=%d, nfft=%d', ...
-    win, win/fs, nover, nfft);
-
-chanLabels = spec_get_chanlabels(EEG);
+fs   = EEG.srate;
 nChan = EEG.nbchan;
-nTr = EEG.trials;
+nTr   = EEG.trials;
+epochStartMs = double(EEG.times(1)); % ms relative to event (negative = pre-stim)
+
+% Convert to samples
+win   = max(8, round(winSec * fs));
+nover = min(win - 1, round(win * ovrFrac));
+nfft  = (nfft_cfg > 0) ...
+      ? max(nfft_cfg, win) ...
+      : max(2^nextpow2(win), win);
+
+spec_logmsg(logf, '[TRIALSPEC] Spectrogram: win=%d samp (%.3fs), noverlap=%d, nfft=%d, frange=[%.0f %.0f] Hz', ...
+    win, win/fs, nover, nfft, fmin, fmax);
+
+alpha = cfg.spectral.alpha;
 
 nDo = min(nTr, maxTrials);
 if nDo < nTr
-    spec_logmsg(logf, '[TRIALSPEC] Limiting trials: %d/%d', nDo, nTr);
+    spec_logmsg(logf, '[TRIALSPEC] Capping at %d/%d trials.', nDo, nTr);
 end
 
+% ---- Per-trial loop -----------------------------------------------------
 for t = 1:nDo
     try
-        Xpre  = double(EEG.data(:, idxPre,  t));  % [chan x nPre]
-        Xpost = double(EEG.data(:, idxPost, t));  % [chan x nPost]
+        X = double(EEG.data(:, :, t)); % [nChan x nSamp]
 
-        % Prealloc based on first channel
-        [pxx0, ff] = pwelch(Xpre(1,:), win, nover, nfft, fs);
-        keep = (ff >= fmin) & (ff <= fmax);
-        f = ff(keep)';
-
-        pPre  = nan(nChan, numel(f));
-        pPost = nan(nChan, numel(f));
-
-        pPre(1,:) = pxx0(keep);
-
-        % Remaining channels
-        for ch = 2:nChan
-            pxx = pwelch(Xpre(ch,:), win, nover, nfft, fs);
-            pPre(ch,:) = pxx(keep);
-        end
+        % Accumulate linear power across channels
+        GA_S = [];
+        f    = [];
+        tMs  = [];
 
         for ch = 1:nChan
-            pxx = pwelch(Xpost(ch,:), win, nover, nfft, fs);
-            pPost(ch,:) = pxx(keep);
+            [S, f_raw, t_raw] = spectrogram(X(ch, :), win, nover, nfft, fs);
+
+            if ch == 1
+                % Define frequency mask once
+                fkeep = (f_raw >= fmin) & (f_raw <= fmax);
+                f     = f_raw(fkeep);             % [nF x 1]
+                % t_raw is seconds from first sample; shift to epoch ms
+                tMs   = epochStartMs + t_raw(:)' * 1000; % [1 x nFrames]
+                GA_S  = zeros(sum(fkeep), numel(t_raw));
+            end
+
+            GA_S = GA_S + abs(S(fkeep, :)).^2; % accumulate power
         end
 
-        outPath = fullfile(outDir, sprintf('sub-%03d_trial-%03d_prepost_psd.png', subjid, t));
-        spec_plot_trial_prepost_psd(outPath, f, pPre, f, pPost, chanLabels, subjid, t, legendMax);
+        GA_S = GA_S / nChan; % channel average
+
+        outPath = fullfile(outDir, ...
+            sprintf('sub-%03d_trial-%03d_spectrogram.png', subjid, t));
+
+        spec_plot_trial_spectrogram(outPath, GA_S, f, tMs, alpha, subjid, t);
 
     catch ME
         spec_logmsg(logf, '[TRIALSPEC][WARN] Trial %d failed: %s', t, ME.message);
     end
 end
+
+end % ---- end main -------------------------------------------------------
+
+% ---- Local helper (avoids dependency on defaultField) -------------------
+function v = defaultFieldVal(s, fn, def)
+    if isfield(s, fn) && ~isempty(s.(fn))
+        v = s.(fn);
+    else
+        v = def;
+    end
 end
