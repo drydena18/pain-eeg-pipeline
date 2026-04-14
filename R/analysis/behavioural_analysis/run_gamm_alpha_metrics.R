@@ -3,23 +3,38 @@
 # ---------------------------------------------------------
 # Pooled trial-level GAMM workflow: baseline + V1 full-epoch
 # alpha metrics + V2 pre-stimulus interaction metrics.
-# V 2.0.0
+# V 3.0.0
 #
 # V2.0.0 changes:
-#   - Column names updated to match dynamic CSV writer output:
-#       pow_slow_alpha   (was pow_slow)
-#       pow_fast_alpha   (was pow_fast)
-#       pow_alpha_total  (was pow_alpha)
-#       rel_slow_alpha   (was rel_slow)
-#       rel_fast_alpha   (was rel_fast)
-#       slow_alpha_frac  (was slow_frac)
-#   - Added V2 pre-stim metric model candidates:
-#       bi_pre, lr_pre, cog_pre, psi_cog, delta_erd
+#   - Column names updated to match dynamic CSV writer output.
+#   - Added V2 pre-stim metric model candidates.
 #   - Phase (phase_slow_rad) handled via sin/cos decomposition.
-#   - fitted_trial_df and subject_ga_df use any_of() so new
-#     columns are included automatically as they appear.
-#   - Global QC filter requires only identity + core covariates;
-#     per-metric NAs are handled gracefully by fit_metric_gamm.
+#   - fitted_trial_df and subject_ga_df use any_of().
+#   - Global QC filter requires only identity + core covariates.
+#
+# V3.0.0 changes:
+#   - safe_k(): k is computed from actual unique values in the
+#     fit data, clamped to [k_min, k_max]. Prevents mgcv error
+#     "fewer unique covariate combinations than specified maximum
+#     degrees of freedom" when laser_power or other covariates
+#     have fewer unique values than the hardcoded k=10.
+#   - build_baseline_formula(): formula is constructed
+#     dynamically from fit_data after per-metric NA removal, so
+#     adaptive k is always computed on the real sample.
+#     Also guards against single-level sex and cap_size factors,
+#     which cause "contrasts not defined for 0 degrees of freedom"
+#     when only one sex or one cap size is present in the data.
+#   - select=TRUE added to all bam() calls. This is NOT the same
+#     as k=-1 (which just uses mgcv's default k). select=TRUE
+#     applies a double penalty that can shrink individual smooth
+#     terms toward zero if the data do not support them, giving
+#     automatic smooth term selection via fREML without requiring
+#     manual model comparison for each term.
+#   - model_specs uses tibble::tibble() with explicit vectors
+#     instead of tribble(), which fails on older tibble versions.
+#   - age_z is a linear fixed effect (not a smooth) because age
+#     is constant within subject and cannot support a nonlinear
+#     smooth with small N; restore s(age_z) once N >> 50.
 # =========================================================
 
 library(readr)
@@ -33,15 +48,15 @@ library(ggplot2)
 # =========================================================
 # USER SETTINGS
 # =========================================================
-data_file        <- "pain-eeg-pipeline/R/analysis/behavioural_analysis/alpha_pain_master.csv"
-out_dir          <- "pain-eeg-pipeline/R/analysis/behavioural_analysis/gamm_outputs"
+data_file       <- "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/R/alpha_pain_master.csv"
+out_dir         <- "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/R/gamms_v1"
 
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
-min_fooof_r2     <- 0.80
-max_fooof_error  <- Inf
-use_discrete     <- TRUE
-nthreads_to_use  <- 4
+min_fooof_r2    <- 0.80
+max_fooof_error <- Inf
+use_discrete    <- TRUE
+nthreads_to_use <- 4
 
 # =========================================================
 # HELPERS
@@ -50,12 +65,49 @@ clean_names_local <- function(x) {
   x %>%
     str_trim() %>%
     str_replace_all("\\s+", "_") %>%
-    str_replace_all("\\^2", "r2") %>%
-    str_replace_all("\\.", "_")
+    str_replace_all("\\^2",  "r2") %>%
+    str_replace_all("\\.",   "_")
 }
 
-zscore     <- function(x) as.numeric(scale(x))
+zscore      <- function(x) as.numeric(scale(x))
 safe_factor <- function(x) as.factor(as.character(x))
+
+# safe_k: returns the largest k that won't exceed the number of
+# unique values in x, clamped to [k_min, k_max].
+# k is the upper bound on smooth complexity; the actual effective
+# degrees of freedom are estimated from data via fREML penalisation.
+safe_k <- function(x, k_max = 10, k_min = 3) {
+  n_unique <- length(unique(na.omit(x)))
+  max(k_min, min(k_max, n_unique - 1L))
+}
+
+# build_baseline_formula: constructs the baseline formula from the
+# actual fit_data so that adaptive k and factor-level guards are
+# applied to the real sample, not the full df_model.
+build_baseline_formula <- function(data, include_cap = FALSE) {
+  k_laser <- safe_k(data$laser_power_z)
+  k_trial <- safe_k(data$trial_index_z)
+
+  # Fixed effects: only include factors with >1 level
+  fixed_terms <- "age_z"
+  if (nlevels(data$sex) > 1)
+    fixed_terms <- c(fixed_terms, "sex")
+  if (include_cap && nlevels(data$cap_size) > 1)
+    fixed_terms <- c(fixed_terms, "cap_size")
+
+  rhs <- paste(
+    c(
+      sprintf("s(laser_power_z, k = %d)", k_laser),
+      sprintf("s(trial_index_z, k = %d)", k_trial),
+      fixed_terms,
+      "s(global_subjid, bs = 're')",
+      "s(experiment_id,  bs = 're')"
+    ),
+    collapse = " + "
+  )
+
+  as.formula(paste("pain_rating ~", rhs))
+}
 
 # =========================================================
 # LOAD DATA
@@ -92,9 +144,9 @@ df <- df %>%
 
 # =========================================================
 # PHASE DECOMPOSITION
-# Circular predictors cannot enter a GAMM as raw radians.
-# Decompose into sin and cos components (each bounded [-1,1])
-# which are used as linear additive terms.
+# Circular predictors (radians) cannot enter a GAMM directly.
+# Decompose into sin and cos components (bounded [-1, 1]) as
+# linear additive terms — a standard approach for phase data.
 # =========================================================
 if ("phase_slow_rad" %in% names(df)) {
   df <- df %>%
@@ -107,7 +159,7 @@ if ("phase_slow_rad" %in% names(df)) {
 # =========================================================
 # QC FILTERING
 # Only required identity + covariate columns are filtered
-# globally.  Spectral metric NAs are handled per-model.
+# globally. Per-metric NAs are handled inside fit_metric_gamm.
 # =========================================================
 df_model <- df %>%
   filter(
@@ -132,29 +184,18 @@ if ("fooof_error" %in% names(df_model) && is.finite(max_fooof_error)) {
 
 # =========================================================
 # SCALE CONTINUOUS VARIABLES
-# Only z-scores columns that are present in df_model.
+# Z-scores only columns present in df_model.
 # =========================================================
 metric_candidates <- c(
-  # V1 full-epoch metrics (new canonical names)
+  # V1 full-epoch metrics (canonical names from spec_write_ga_trial_csv)
   "paf_cog_hz",
-  "pow_slow_alpha",
-  "pow_fast_alpha",
-  "pow_alpha_total",
-  "rel_slow_alpha",
-  "rel_fast_alpha",
-  "sf_ratio",
-  "sf_logratio",
-  "sf_balance",
-  "slow_alpha_frac",
-  # V2 pre-stim interaction metrics
-  "bi_pre",
-  "lr_pre",
-  "cog_pre",
-  "psi_cog",
-  "delta_erd",
+  "pow_slow_alpha", "pow_fast_alpha", "pow_alpha_total",
+  "rel_slow_alpha", "rel_fast_alpha",
+  "sf_ratio", "sf_logratio", "sf_balance", "slow_alpha_frac",
+  # V2 pre-stimulus interaction metrics
+  "bi_pre", "lr_pre", "cog_pre", "psi_cog", "delta_erd",
   # FOOOF aperiodic
-  "fooof_offset",
-  "fooof_exponent"
+  "fooof_offset", "fooof_exponent"
 )
 
 df_model <- df_model %>%
@@ -170,7 +211,6 @@ for (metric in metric_candidates) {
   }
 }
 
-# Phase components are already bounded; z-score for comparability
 if ("phase_sin" %in% names(df_model)) {
   df_model$phase_sin_z <- zscore(df_model$phase_sin)
   df_model$phase_cos_z <- zscore(df_model$phase_cos)
@@ -180,36 +220,33 @@ write_csv(df_model, file.path(out_dir, "alpha_pain_master_model_input.csv"))
 
 message("Model input rows: ", nrow(df_model))
 message("Subjects: ",         n_distinct(df_model$subjid_uid))
-
-# =========================================================
-# BASE FORMULAS
-# =========================================================
-baseline_formula <- pain_rating ~
-  s(laser_power_z, k = 10) +
-  s(trial_index_z, k = 10) +
-  s(age_z, k = 10) +
-  sex +
-  s(global_subjid, bs = "re") +
-  s(experiment_id, bs = "re")
-
-baseline_cap_formula <- pain_rating ~
-  s(laser_power_z, k = 10) +
-  s(trial_index_z, k = 10) +
-  s(age_z, k = 10) +
-  sex +
-  cap_size +
-  s(global_subjid, bs = "re") +
-  s(experiment_id, bs = "re")
+message("Experiments: ",      n_distinct(df_model$experiment_id))
+message("Unique laser_power values: ",
+        length(unique(na.omit(df_model$laser_power))))
 
 # =========================================================
 # MODEL FITTER
-# Returns NULL (with warning) when the predictor column is
-# absent or is all-NA after the global filter.
+# ---------------------------------------------------------
+# Per-metric NA rows are dropped BEFORE formula construction
+# so that safe_k and factor-level guards operate on the
+# actual sample being fit, not the full df_model.
+#
+# select=TRUE enables automatic smooth term selection: each
+# smooth gets a second penalty that can shrink it to zero.
+# This is the correct mechanism for adaptive complexity —
+# NOT k=-1, which merely uses mgcv's default k.
 # =========================================================
 fit_metric_gamm <- function(data, metric_z, model_name,
                              include_cap = FALSE, extra_terms = NULL) {
-  base_formula <- if (include_cap) baseline_cap_formula else baseline_formula
 
+  # Guard: cap models need at least two cap levels
+  if (include_cap && nlevels(data$cap_size) < 2) {
+    warning("Skipping ", model_name,
+            ": cap_size has only 1 level in current data.")
+    return(NULL)
+  }
+
+  # Guard: metric column must exist and not be all-NA
   if (!is.na(metric_z)) {
     if (!metric_z %in% names(data)) {
       warning("Skipping ", model_name, ": column not found -> ", metric_z)
@@ -219,23 +256,9 @@ fit_metric_gamm <- function(data, metric_z, model_name,
       warning("Skipping ", model_name, ": all-NA -> ", metric_z)
       return(NULL)
     }
-    formula_to_fit <- update(
-      base_formula,
-      paste(". ~ . + s(", metric_z, ", k = 10)")
-    )
-  } else {
-    formula_to_fit <- base_formula
   }
 
-  # Extra terms (e.g. phase sin + cos as linear additive)
-  if (!is.null(extra_terms)) {
-    for (term in extra_terms) {
-      formula_to_fit <- update(formula_to_fit,
-                                paste(". ~ . +", term))
-    }
-  }
-
-  # Drop rows NA in the specific predictor before fitting
+  # Drop per-metric NAs BEFORE building formula
   fit_data <- if (!is.na(metric_z)) {
     data %>% filter(!is.na(.data[[metric_z]]))
   } else {
@@ -247,6 +270,28 @@ fit_metric_gamm <- function(data, metric_z, model_name,
     return(NULL)
   }
 
+  # Build baseline formula from actual fit_data (adaptive k, level guards)
+  base_formula <- build_baseline_formula(fit_data, include_cap)
+
+  # Add metric smooth with adaptive k
+  if (!is.na(metric_z)) {
+    k_metric      <- safe_k(fit_data[[metric_z]])
+    formula_to_fit <- update(
+      base_formula,
+      as.formula(sprintf(". ~ . + s(%s, k = %d)", metric_z, k_metric))
+    )
+  } else {
+    formula_to_fit <- base_formula
+  }
+
+  # Extra linear terms (e.g., phase sin + cos)
+  if (!is.null(extra_terms)) {
+    for (term in extra_terms) {
+      formula_to_fit <- update(formula_to_fit,
+                               as.formula(paste(". ~ . +", term)))
+    }
+  }
+
   message("Fitting: ", model_name, "  (n=", nrow(fit_data), ")")
 
   tryCatch(
@@ -254,6 +299,7 @@ fit_metric_gamm <- function(data, metric_z, model_name,
       formula  = formula_to_fit,
       data     = fit_data,
       method   = "fREML",
+      select   = TRUE,           # automatic smooth term selection
       discrete = use_discrete,
       nthreads = nthreads_to_use
     ),
@@ -266,36 +312,49 @@ fit_metric_gamm <- function(data, metric_z, model_name,
 
 # =========================================================
 # MODEL SPECIFICATIONS
-# NA in metric_z = baseline model (no spectral predictor).
-# include_cap adds cap_size as a fixed effect.
+# NA in metric_z → baseline model (no spectral predictor).
+# include_cap adds cap_size as a fixed effect (skipped
+# automatically when cap_size has only one level).
 # =========================================================
-model_specs <- tribble(
-  ~model_name,                    ~metric_z,              ~include_cap,
-  # --- Baselines ---
-  "m00_baseline",                 NA_character_,           FALSE,
-  "m01_baseline_cap",             NA_character_,           TRUE,
-  # --- V1 full-epoch metrics ---
-  "m02_paf_cog",                  "paf_cog_hz_z",          FALSE,
-  "m03_pow_slow",                 "pow_slow_alpha_z",      FALSE,
-  "m04_pow_fast",                 "pow_fast_alpha_z",      FALSE,
-  "m05_sf_ratio",                 "sf_ratio_z",            FALSE,
-  "m06_sf_logratio",              "sf_logratio_z",         FALSE,
-  "m07_sf_balance",               "sf_balance_z",          FALSE,
-  "m08_slow_frac",                "slow_alpha_frac_z",     FALSE,
-  "m09_sf_logratio_cap",          "sf_logratio_z",         TRUE,
-  "m10_sf_balance_cap",           "sf_balance_z",          TRUE,
-  "m11_slow_frac_cap",            "slow_alpha_frac_z",     TRUE,
-  # --- V2 pre-stim interaction metrics ---
-  "m12_bi_pre",                   "bi_pre_z",              FALSE,
-  "m13_lr_pre",                   "lr_pre_z",              FALSE,
-  "m14_cog_pre",                  "cog_pre_z",             FALSE,
-  "m15_psi_cog",                  "psi_cog_z",             FALSE,
-  "m16_delta_erd",                "delta_erd_z",           FALSE,
-  "m17_bi_pre_cap",               "bi_pre_z",              TRUE,
-  "m18_psi_cog_cap",              "psi_cog_z",             TRUE
+model_specs <- tibble::tibble(
+  model_name = c(
+    # Baselines
+    "m00_baseline",        "m01_baseline_cap",
+    # V1 full-epoch metrics
+    "m02_paf_cog",         "m03_pow_slow",         "m04_pow_fast",
+    "m05_sf_ratio",        "m06_sf_logratio",       "m07_sf_balance",
+    "m08_slow_frac",
+    # V1 cap-controlled
+    "m09_sf_logratio_cap", "m10_sf_balance_cap",    "m11_slow_frac_cap",
+    # V2 pre-stimulus interaction metrics
+    "m12_bi_pre",          "m13_lr_pre",            "m14_cog_pre",
+    "m15_psi_cog",         "m16_delta_erd",
+    # V2 cap-controlled
+    "m17_bi_pre_cap",      "m18_psi_cog_cap"
+  ),
+  metric_z = c(
+    NA_character_,         NA_character_,
+    "paf_cog_hz_z",        "pow_slow_alpha_z",      "pow_fast_alpha_z",
+    "sf_ratio_z",          "sf_logratio_z",          "sf_balance_z",
+    "slow_alpha_frac_z",
+    "sf_logratio_z",       "sf_balance_z",           "slow_alpha_frac_z",
+    "bi_pre_z",            "lr_pre_z",               "cog_pre_z",
+    "psi_cog_z",           "delta_erd_z",
+    "bi_pre_z",            "psi_cog_z"
+  ),
+  include_cap = c(
+    FALSE, TRUE,
+    FALSE, FALSE, FALSE,
+    FALSE, FALSE, FALSE, FALSE,
+    TRUE,  TRUE,  TRUE,
+    FALSE, FALSE, FALSE, FALSE, FALSE,
+    TRUE,  TRUE
+  )
 )
 
-# Phase model handled separately (two linear terms, no smooth z column)
+# =========================================================
+# FIT MODELS
+# =========================================================
 model_list <- pmap(
   model_specs,
   function(model_name, metric_z, include_cap) {
@@ -311,8 +370,9 @@ names(model_list) <- model_specs$model_name
 
 # Phase model: sin(phase) + cos(phase) as linear additive terms
 if (all(c("phase_sin_z", "phase_cos_z") %in% names(df_model))) {
+  phase_data <- df_model %>% filter(!is.na(phase_sin_z), !is.na(phase_cos_z))
   model_list[["m19_phase_sincos"]] <- fit_metric_gamm(
-    data        = df_model %>% filter(!is.na(phase_sin_z), !is.na(phase_cos_z)),
+    data        = phase_data,
     metric_z    = NA_character_,
     model_name  = "m19_phase_sincos",
     include_cap = FALSE,
@@ -320,7 +380,7 @@ if (all(c("phase_sin_z", "phase_cos_z") %in% names(df_model))) {
   )
 }
 
-# Drop failed models
+# Drop failed / skipped models
 valid_idx  <- !map_lgl(model_list, is.null)
 model_list <- model_list[valid_idx]
 
@@ -331,8 +391,10 @@ message("Successfully fit models: ", paste(names(model_list), collapse = ", "))
 # SAVE SUMMARIES
 # =========================================================
 iwalk(model_list, function(mod, nm) {
-  capture.output(summary(mod),
-                 file = file.path(out_dir, paste0(nm, "_summary.txt")))
+  capture.output(
+    summary(mod),
+    file = file.path(out_dir, paste0(nm, "_summary.txt"))
+  )
 })
 
 # =========================================================
@@ -356,14 +418,21 @@ write_csv(model_comparison, file.path(out_dir, "model_comparison.csv"))
 message("Model comparison saved.")
 
 # =========================================================
-# FITTED VALUES  (all spectral columns included via any_of)
+# FITTED VALUES
+# Spectral columns are passed through via any_of() so new
+# metrics appear automatically as they enter the pipeline.
+# Fitted/residual values are aligned by original row index
+# because bam() may have been fit on a metric-NA-dropped
+# subset; unfitted rows receive NA.
 # =========================================================
 spectral_passthrough <- c(
-  "paf_cog_hz", "pow_slow_alpha", "pow_fast_alpha", "pow_alpha_total",
-  "rel_slow_alpha", "rel_fast_alpha", "sf_ratio", "sf_logratio",
-  "sf_balance", "slow_alpha_frac",
-  "bi_pre", "lr_pre", "cog_pre", "psi_cog", "erd_slow", "erd_fast",
-  "delta_erd", "p5_flag", "phase_slow_rad",
+  "paf_cog_hz",
+  "pow_slow_alpha", "pow_fast_alpha", "pow_alpha_total",
+  "rel_slow_alpha", "rel_fast_alpha",
+  "sf_ratio", "sf_logratio", "sf_balance", "slow_alpha_frac",
+  "bi_pre", "lr_pre", "cog_pre", "psi_cog",
+  "erd_slow", "erd_fast", "delta_erd", "p5_flag",
+  "phase_slow_rad",
   "fooof_offset", "fooof_exponent", "fooof_r2", "fooof_error",
   "fooof_alpha_cf", "fooof_alpha_pw", "fooof_alpha_bw"
 )
@@ -376,12 +445,10 @@ fitted_trial_df <- df_model %>%
   )
 
 for (nm in names(model_list)) {
-  # Fitted values may be on a subset of rows; align by row name
-  fit_vals  <- rep(NA_real_, nrow(fitted_trial_df))
+  fit_vals   <- rep(NA_real_, nrow(fitted_trial_df))
   resid_vals <- rep(NA_real_, nrow(fitted_trial_df))
-  mod_rows  <- as.integer(rownames(model_list[[nm]]$model))
-  # bam() preserves original row indices in model$model
-  common    <- intersect(mod_rows, seq_len(nrow(fitted_trial_df)))
+  mod_rows   <- as.integer(rownames(model_list[[nm]]$model))
+  common     <- intersect(mod_rows, seq_len(nrow(fitted_trial_df)))
   if (length(common) > 0) {
     fit_vals[common]   <- fitted(model_list[[nm]])
     resid_vals[common] <- residuals(model_list[[nm]])
@@ -392,17 +459,21 @@ for (nm in names(model_list)) {
 
 write_csv(fitted_trial_df, file.path(out_dir, "trial_level_fitted_values.csv"))
 
-# Subject-level GA summary
+# Subject-level grand-average summary
 subject_ga_df <- fitted_trial_df %>%
-  group_by(experiment_name, experiment_id, subjid, subjid_uid,
-           global_subjid, age, sex, cap_size) %>%
+  group_by(
+    experiment_name, experiment_id, subjid, subjid_uid,
+    global_subjid, age, sex, cap_size
+  ) %>%
   summarise(
     n_trials         = n(),
-    mean_pain_rating = mean(pain_rating, na.rm = TRUE),
-    mean_laser_power = mean(laser_power, na.rm = TRUE),
-    across(any_of(spectral_passthrough), ~ mean(.x, na.rm = TRUE),
+    mean_pain_rating = mean(pain_rating,   na.rm = TRUE),
+    mean_laser_power = mean(laser_power,   na.rm = TRUE),
+    across(any_of(spectral_passthrough),
+           ~ mean(.x, na.rm = TRUE),
            .names = "mean_{.col}"),
-    across(ends_with("_fitted"),         ~ mean(.x, na.rm = TRUE),
+    across(ends_with("_fitted"),
+           ~ mean(.x, na.rm = TRUE),
            .names = "ga_{.col}"),
     .groups = "drop"
   )
@@ -410,7 +481,7 @@ subject_ga_df <- fitted_trial_df %>%
 write_csv(subject_ga_df, file.path(out_dir, "subject_level_ga_fitted_values.csv"))
 
 # =========================================================
-# DIAGNOSTICS + OBSERVED VS FITTED
+# DIAGNOSTICS + OBSERVED VS FITTED PLOTS
 # =========================================================
 iwalk(model_list, function(mod, nm) {
   png(file.path(out_dir, paste0(nm, "_diagnostics.png")),
@@ -428,12 +499,24 @@ for (nm in names(model_list)) {
   ) +
     geom_point(alpha = 0.15) +
     geom_smooth(method = "lm", se = FALSE) +
-    labs(title = paste("Observed vs Fitted:", nm),
-         x = "Fitted pain rating", y = "Observed pain rating") +
-    theme_minimal()
+    labs(
+      title = paste("Observed vs Fitted:", nm),
+      x     = "Fitted pain rating",
+      y     = "Observed pain rating"
+    ) +
+    theme_minimal(base_size = 13) +
+    theme(
+      plot.background = element_rect(fill = "white", color = NA),
+      panel.background = element_rect(fill = "white", color = NA)
+    )
 
-  ggsave(file.path(out_dir, paste0(nm, "_observed_vs_fitted.png")),
-         plot = p, width = 7, height = 5, dpi = 300)
+  ggsave(
+    file.path(out_dir, paste0(nm, "_observed_vs_fitted.png")),
+    plot   = p,
+    width  = 7,
+    height = 5,
+    dpi    = 300
+  )
 }
 
 # =========================================================

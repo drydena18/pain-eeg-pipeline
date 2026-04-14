@@ -29,25 +29,21 @@ library(tibble)
 # =========================================================
 # USER SETTINGS
 # =========================================================
-spectral_root  <- "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/"
-behav_file     <- "pain-eeg-pipeline/R/analysis/behavioural_analysis/behavioural_demo_master.csv"
-output_file    <- "pain-eeg-pipeline/R/analysis/behavioural_analysis/alpha_pain_master.csv"
+spectral_root  <- "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis"
+behav_file     <- "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/R/behavioural_demo_master.csv"
+output_file    <- "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/R/alpha_pain_master.csv"
 spectral_pattern <- "_ga_by_trial\\.csv$"
 
 # =========================================================
 # FIXED EXPERIMENT LOOKUP
 # =========================================================
-experiment_lookup <- tibble::tribble(
-  ~experiment_name,   ~experiment_id,
-  "26ByBiosemi",      1,
-  "29ByANT",          2,
-  "39ByBP",           3,
-  "30ByANT",          4,
-  "65ByANT",          5,
-  "95ByBP",           6,
-  "142ByBiosemi",     7,
-  "223ByBP",          8,
-  "29ByBP",           9
+experiment_lookup <- tibble::tibble(
+  experiment_name = c(
+    "26ByBiosemi", "29ByANT", "39ByBP",
+    "30ByANT", "65ByANT", "95ByBP",
+    "142ByBiosemi", "223ByBP", "29ByBP"
+  ),
+  experiment_id = 1:9
 )
 
 # =========================================================
@@ -72,7 +68,7 @@ safe_rename <- function(df, new_name, candidates) {
 }
 
 extract_experiment_name <- function(file_path) {
-  exp_name <- str_match(file_path, "da-analysis/([^/]+)/preproc/")[, 2]
+  exp_name <- str_match(file_path, "da-analysis/([^/]+)/spec/")[, 2]
   if (is.na(exp_name)) {
     stop("Could not extract experiment_name from path: ", file_path)
   }
@@ -125,19 +121,19 @@ read_one_spectral <- function(file_path, experiment_lookup) {
     stop("Spectral file missing required columns (subjid/trial): ", file_path)
   }
 
-  experiment_name <- extract_experiment_name(file_path)
+  exp_name_val <- extract_experiment_name(file_path)
 
   experiment_id <- experiment_lookup %>%
-    filter(experiment_name == !!experiment_name) %>%
+    filter(experiment_name == !!exp_name_val) %>%
     pull(experiment_id)
 
   if (length(experiment_id) != 1) {
-    stop("Experiment name not found in lookup table: ", experiment_name)
+    stop("Experiment name not found in lookup table: ", exp_name_val)
   }
 
   df %>%
     mutate(
-      experiment_name = experiment_name,
+      experiment_name = exp_name_val,
       experiment_id   = experiment_id,
       subjid          = as.integer(subjid),
       trial           = as.integer(trial),

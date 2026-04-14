@@ -14,23 +14,21 @@ library(tibble)
 # ============================================================
 # USER SETTINGS
 # ============================================================
-behav_dir = "pain-eeg-pipeline/R/analysis/behavioural_analysis/experiment"
-output_file = "pain-eeg-pipeline/R/analysis/behavioural_analysis/behavioural_master.csv"
+setwd("/home/UWO/darsenea/Documents/GitHub/pain-alpha-dynamics")
+
+behav_dir = "/home/UWO/darsenea/Documents/GitHub/pain-alpha-dynamics/R/analysis/experiment"
+output_file = "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/R/behavioural_master.csv"
 
 # ============================================================
 # EXPERIMENT LOOKUP
 # ============================================================
-experiment_lookup = tibble::tibble(
-  ~experiment_name, ~experiment_id,
-  "26ByBiosemi", 1L,
-  "29ByANT", 2L,
-  "39ByBP", 3L,
-  "30ByANT", 4L,
-  "65ByANT", 5L,
-  "95ByBP", 6L,
-  "142ByBiosemi", 7L,
-  "223ByBP", 8L,
-  "29ByBP", 9L
+experiment_lookup <- tibble::tibble(
+  experiment_name = c(
+    "26ByBiosemi", "29ByANT", "39ByBP",
+    "30ByANT", "65ByANT", "95ByBP",
+    "142ByBiosemi", "223ByBP", "29ByBP"
+  ),
+  experiment_id = 1:9
 )
 
 # ============================================================
@@ -85,7 +83,7 @@ standardize_behaviour <- function(file_path, exp_lookup) {
     stop("Missing required columns (", paste0(missing, collapse = ", "), ") in: ", file_path)
   }
 
-  exp_name <- extract_experiment_name_from_file(file_path, exp_lookup$experiment_name)
+  exp_name <- extract_experiment_name(file_path, exp_lookup$experiment_name)
   exp_id <- exp_lookup$experiment_id[exp_lookup$experiment_name == exp_name]
 
   df %>%
@@ -107,8 +105,16 @@ standardize_behaviour <- function(file_path, exp_lookup) {
 # ============================================================
 # READ + MERGE
 # ============================================================
-files <- list.files(behav_dir, pattern = "\\.csv$", full.names = TRUE)
-if (length(files) == 0L) stop("No behavioural CSVs found in: ", behav_dir)
+message("Working directory: ", getwd())
+message("behav_dir exists: ", file.exists(behav_dir))
+
+files <- list.files(
+  behav_dir,
+  pattern = "_behaviour\\.csv$",
+  full.names = TRUE,
+  recursive = TRUE
+)
+if (length(files) == 0) stop("No behavioural CSVs found in: ", behav_dir)
 
 behaviour_master <- map(files, standardize_behaviour, exp_lookup = experiment_lookup) %>%
   bind_rows()
@@ -138,4 +144,3 @@ write_csv(behaviour_master, output_file)
 message("Behavioural master saved: ", output_file)
 message(" Rows :", nrow(behaviour_master))
 message(" Subjects: ", n_distinct(behaviour_master$subjid_uid))
-

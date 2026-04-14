@@ -23,25 +23,21 @@ library(tibble)
 # =========================================================
 # USER SETTINGS
 # =========================================================
-participants_root <- "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/"
-behav_file   <- "pain-eeg-pipeline/R/analysis/behavioural_analysis/behavioural_master.csv"
-capsize_file <- "pain-eeg-pipeline/R/analysis/behavioural_analysis/cap_size.csv"
-output_file  <- "pain-eeg-pipeline/R/analysis/behavioural_analysis/behavioural_demo_master.csv"
+participants_root <- "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis"
+behav_file   <- "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/R/behavioural_master.csv"
+capsize_file <- "/home/UWO/darsenea/Documents/GitHub/pain-alpha-dynamics/R/analysis/behavioural_analysis/cap_size.csv"
+output_file  <- "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/R/behavioural_demo_master.csv"
 
 # =========================================================
 # FIXED EXPERIMENT LOOKUP
 # =========================================================
-experiment_lookup <- tibble::tribble(
-  ~experiment_name,  ~experiment_id,
-  "26ByBiosemi",     1L,
-  "29ByANT",         2L,
-  "39ByBP",          3L,
-  "30ByANT",         4L,
-  "65ByANT",         5L,
-  "95ByBP",          6L,
-  "142ByBiosemi",    7L,
-  "223ByBP",         8L,
-  "29ByBP",          9L
+experiment_lookup <- tibble::tibble(
+  experiment_name = c(
+    "26ByBiosemi", "29ByANT", "39ByBP",
+    "30ByANT", "65ByANT", "95ByBP",
+    "142ByBiosemi", "223ByBP", "29ByBP"
+  ),
+  experiment_id = 1:9
 )
 
 # =========================================================
@@ -78,8 +74,14 @@ harmonize_sex <- function(x) {
   )
 }
 
+rename_col_if_present <- function(df, new_name, candidates) {
+  found <- intersect(candidates, names(df))
+  if (length(found) == 0) return(df)
+  rename(df, !!new_name := !!found[1])
+}
+
 read_participants <- function(exp_name_val, exp_id_val, root_dir) {
-  file_path <- file.path(root_dir, exp_name_val, "participants.tsv")
+  file_path <- file.path(root_dir, exp_name_val, "resource", "participants.tsv")
 
   if (!file.exists(file_path)) {
     warning("participants.tsv not found for: ", exp_name_val)
@@ -131,13 +133,17 @@ names(behaviour_master) <- clean_names_local(names(behaviour_master))
 participants_master <- pmap(
   experiment_lookup,
   function(experiment_name, experiment_id) {
-    # FIX: renamed args to avoid collision with tibble column names
-    read_participants(experiment_name, experiment_id, participants_root)
+    tryCatch(
+      read_participants(experiment_name, experiment_id, participants_root),
+      error = function(e) {
+        warning("Failed to read participants for ", experiment_name, "-", conditionMessage(e))
+        NULL
+      }
+    )
   }
-) |>
-  compact() |>
-  bind_rows() |>
-  distinct(experiment_name, experiment_id, subjid, .keep_all = TRUE)
+) %>%
+  compact() %>%
+  bind_rows()
 
 # =========================================================
 # READ CAP SIZE
