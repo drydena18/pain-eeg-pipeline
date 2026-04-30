@@ -1,122 +1,221 @@
+"""
+source_default.py  –  Config validation, safe defaults, and dispatch.
+V 2.0.0
+
+Call chain:
+    exp01_source.py  ->  source_default()  ->  source_core()
+
+Mirrors spectral_default.m:
+    - Hard errors for genuinely required fields
+    - Safe defaults for everything else (no JSON changes needed for a basic run)
+    - Run-header print before dispatch
+
+Config key: cfg["source"]  (parallel to cfg["spectral"])
+"""
+
 from __future__ import annotations
 
 import os
-import json
 from copy import deepcopy
 
 from source_core import source_core
 
-def _get(d, path, default = None):
+
+# =============================================================================
+# HELPERS
+# =============================================================================
+
+def _d(d: dict, key: str, val):
+    """Set d[key] = val only if key is absent (equivalent to defaultField)."""
+    d.setdefault(key, val)
+    return d
+
+
+def _require(d: dict, key: str, label: str):
+    """Raise a clear ValueError if a required key is missing or empty."""
+    v = d.get(key, None)
+    if v is None or v == "" or v == [] or v == {}:
+        raise ValueError(f"Required config field missing or empty: {label}")
+
+
+def _get(d: dict, path: list, default=None):
+    """Safe nested dict access."""
     cur = d
     for k in path:
         if not isinstance(cur, dict) or k not in cur:
             return default
         cur = cur[k]
     return cur
-    
-def _ensure_dir(p: str):
-    os.makedirs(p, exist_ok = True)
 
-def source_default(exp_id: str, cfg_in: dict, subjects_override = None):
+
+# =============================================================================
+# ENTRY POINT
+# =============================================================================
+
+def source_default(exp_id: str, cfg_in: dict, subjects_override=None):
+    """
+    Validate config, fill safe defaults, then dispatch to source_core().
+
+    Args:
+        exp_id            : Experiment identifier (e.g. "exp01").
+        cfg_in            : Raw dict loaded from the experiment JSON.
+        subjects_override : Optional iterable of integer subject IDs.
+                            Overrides cfg["exp"]["subjects"] when provided.
+    """
     cfg = deepcopy(cfg_in)
 
-    if "exp" not in cfg:
-        raise ValueError("Missing cfg.exp in JSON")
-    if "source" not in cfg:
-        raise ValueError("Missing cfg.source in JSON")
-    
-    # exp_id fallback
-    cfg["exp"]["id"] = str(cfg["exp"].get("id", exp_id))
+    # ── Required top-level blocks ─────────────────────────────────────────────
+    _require(cfg, "exp",    "cfg.exp")
+    _require(cfg, "source", "cfg.source")
 
-    # subjects
-    if subjects_override is not None and len(subjects_override) > 0:
-        cfg["exp"]["subjects"] = [int(s) for s in subjects_override]
+    # ── Experiment block ──────────────────────────────────────────────────────
+    exp = cfg["exp"]
+    exp["id"] = str(exp.get("id", exp_id))
+
+    _require(exp, "out_prefix",
+             "cfg.exp.out_prefix  (e.g. '26BB_62_' — needed to resolve .set filenames)")
+
+    if subjects_override is not None and len(list(subjects_override)) > 0:
+        exp["subjects"] = [int(s) for s in subjects_override]
     else:
-        if "subjects" not in cfg["exp"] or not cfg["exp"]["subjects"]:
-            raise ValueError("cfg.exp.subjects is empty. (For now) please provide subjects explicitly.")
-        cfg["exp"]["subjects"] = [int(s) for s in cfg["exp"]["subjects"]]
+        _require(exp, "subjects", "cfg.exp.subjects (list of integer subject IDs)")
+        exp["subjects"] = [int(s) for s in exp["subjects"]]
 
-    # ---- Source defaults ----
+    if len(exp["subjects"]) == 0:
+        raise ValueError("cfg.exp.subjects resolved to an empty list.")
+
+    # ── Path resolution ───────────────────────────────────────────────────────
+    da_root = _get(cfg, ["paths", "da_root"],
+                   "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis")
+    exp_out = exp.get("out_dirname") or exp.get("id")
+    if not exp_out:
+        raise ValueError(
+            "Cannot resolve experiment output folder. "
+            "Provide cfg.exp.out_dirname (recommended) or cfg.exp.id."
+        )
+
+    # ── Source block defaults ─────────────────────────────────────────────────
     src = cfg["source"]
-    src["enabled"] = bool(src.get("enabled", True))
+    _d(src, "enabled", True)
 
-    # input
-    src.setdefault("input", {})
-    src["input"].setdefault("stage_dir", "08_base")
-    src["input"].setdefault("allow_fallback_search", True)
+    # Input
+    _d(src, "input", {})
+    _d(src["input"], "stage_dir",            "08_base")
+    _d(src["input"], "allow_fallback_search", True)
 
-    # paths: da-anaysis root
-    # Let JSON define da_root and exp_out
-    da_root = _get(cfg, ["paths", "da_root"], "/cifs/seminowic/eegPainDatasets/CNED/da-analysis")
-    exp_out = _get(cfg, ["exp", "out_dirname"], None) or _get(cfg, ["exp", "id"], None)
-    if exp_out is None:
-        raise ValueError("Need cfg.exp.out_dirname (recommended) or cfg.exp.id to infer exp_out folder name.")
-    
-    # output root
-    src.setdefault("outputs", {})
-    out_root = src["outputs"].get("root", "AUTO")
-    if out_root == "AUTO":
-        out_root = os.path.join(da_root, exp_out, "source")
-    src["outputs"]["root"] = out_root
+    # Output root
+    _d(src, "outputs", {})
+    if src["outputs"].get("root", "AUTO") == "AUTO":
+        src["outputs"]["root"] = os.path.join(da_root, exp_out, "source")
 
-    # fsaverage assets (bundled inside repo or on server)
-    src.setdefault("fsaverage", {})
-    if "subjects_dir" not in src["fsaverage"] or not src["fsaverage"]["subjects_dir"]:
-        raise ValueError('cfg.source.fsaverage.subjects_dir is required (path that contains "fsaverage/").')
-    
-    # Core MNE params
-    src.setdefault("lambda2", 1.0 / 9.0)
-    src.setdefault("forward", {})
-    src["forward"].setdefault("mindist_mm", 5.0)
+    # fsaverage assets (no safe default — must be explicit)
+    _d(src, "fsaverage", {})
+    _require(src["fsaverage"], "subjects_dir",
+             "cfg.source.fsaverage.subjects_dir  "
+             "(path containing fsaverage/; obtain via mne.datasets.fetch_fsaverage())")
 
-    src.setdefault("inverse", {})
-    src["inverse"].setdefault("method", "sLORETA")
-    src["inverse"].setdefault("snr", 3.0)
-    src["inverse"].setdefault("pick_ori", None)
+    # Forward solution
+    _d(src, "forward", {})
+    _d(src["forward"], "mindist_mm", 5.0)
 
-    src.setdefault("noise_cov", {})
-    src["noise_cov"].setdefault("tmin", -0.2)
-    src["noise_cov"].setdefault("tmax", 0.0)
+    # Inverse operator
+    _d(src, "inverse", {})
+    _d(src["inverse"], "method",   "sLORETA")
+    _d(src["inverse"], "snr",      3.0)
+    _d(src["inverse"], "loose",    0.2)
+    _d(src["inverse"], "depth",    0.8)
+    _d(src["inverse"], "pick_ori", None)
 
-    # ROI defaults
-    src.setdefault("roi", {})
-    src["roi"].setdefault("parcellation", "aparc")
-    src["roi"].setdefault("mode", "mean_flip")
-    src["roi"].setdefault("use_custom_rois", True)
-    src["roi"].setdefault("custom_rois", [])
+    # Noise covariance baseline window
+    _d(src, "noise_cov", {})
+    _d(src["noise_cov"], "tmin", -0.2)
+    _d(src["noise_cov"], "tmax",  0.0)
 
-    # Spectral defaults for source-space features
-    src.setdefault("spectral", {})
-    src["spectral"].setdefault("fmin", 1.0)
-    src["spectral"].setdefault("fmax", 40.0)
-    src["spectral"].setdefault("alpha_band", [8.0, 12.0])
-    src["spectral"].setdefault("slow_alpha_band", [8.0, 10.0])
-    src["spectral"].setdefault("fast_alpha_band", [10.0, 12.0])
+    # Pre-stimulus window
+    _d(src, "prestim", {})
+    _d(src["prestim"], "tmin", -0.5)
+    _d(src["prestim"], "tmax",  0.0)
 
-    # FOOOF defaults
-    src.setdefault("fooof", {})
-    src["fooof"].setdefault("enabled", True)
-    src["fooof"].setdefault("mode", "ga-only") # "ga-only" or "trial-and-ga"
-    src["fooof"].setdefault("aperiodic_mode", "fixed") # fixed or knee
-    src["fooof"].setdefault("peak_width_limits", [1.0, 12.0])
-    src["fooof"].setdefault("max_n_peaks", 6)
-    src["fooof"].setdefault("min_peak_height", 0.1)
-    src["fooof"].setdefault("peak_threshold", 2.0)
-    src["fooof"].setdefault("freq_range", [1.0, 40.0])
+    # Post-stimulus window
+    _d(src, "poststim", {})
+    _d(src["poststim"], "tmin",        0.1)   # avoid stimulus artefact
+    _d(src["poststim"], "tmax",        0.8)
+    _d(src["poststim"], "phase_ref_t", 0.2)   # time at which post-stim phase is sampled
 
-    # QC defaults
-    src.setdefault("qc", {})
-    src["qc"].setdefault("save_plots", True)
-    src["qc"].setdefault("save_brain_images", True)
-    src["qc"].setdefault("brain_snapshot_time_sec", 0.05)
+    # LEP (laser-evoked potential) windows
+    _d(src, "lep", {})
+    _d(src["lep"], "n2_window", [0.15, 0.35])
+    _d(src["lep"], "p2_window", [0.25, 0.50])
 
-    _ensure_dir(src["outputs"]["root"])
+    # ROI (region of interest) settings
+    _d(src, "roi", {})
+    _d(src["roi"], "parcellation",    "aparc")
+    _d(src["roi"], "mode",            "mean_flip")
+    _d(src["roi"], "use_custom_rois",  False)
+    _d(src["roi"], "custom_rois",      {})
 
-    print(f"[{cfg['exp']['id']}] SOURCE subjects ({len(cfg['exp']['subjects'])}): {cfg['exp']['subjects']}")
-    print(f"Source input stage_dir: {src['input']['stage_dir']}")
-    print(f"Source output root: {src['outputs']['root']}")
+    # Spectral parameters
+    _d(src, "spectral", {})
+    _d(src["spectral"], "fmin",             1.0)
+    _d(src["spectral"], "fmax",            40.0)
+    _d(src["spectral"], "alpha_band",      [8.0, 12.0])
+    _d(src["spectral"], "slow_alpha_band", [8.0, 10.0])
+    _d(src["spectral"], "fast_alpha_band", [10.0, 12.0])
 
+    # FOOOF (Fitting Oscillations & One Over F)
+    _d(src, "fooof", {})
+    _d(src["fooof"], "enabled",           True)
+    _d(src["fooof"], "aperiodic_mode",    "fixed")   # "fixed" or "knee"
+    _d(src["fooof"], "peak_width_limits", [1.0, 12.0])
+    _d(src["fooof"], "max_n_peaks",       6)
+    _d(src["fooof"], "min_peak_height",   0.1)
+    _d(src["fooof"], "peak_threshold",    2.0)
+    _d(src["fooof"], "freq_range",        [1.0, 40.0])
+
+    # Quality control / 2-D plots
+    _d(src, "qc", {})
+    _d(src["qc"], "save_plots", True)
+
+    # 3-D brain rendering
+    _d(src, "render", {})
+    _d(src["render"], "enabled",      False)   # opt-in; requires pyvista
+    _d(src["render"], "use_mesa",     False)   # True on headless HPC servers
+    _d(src["render"], "stc_enabled",  True)    # render GA STC at pre/N2/P2
+    _d(src["render"], "stc_clim_pct", [50, 99])  # percentile colour scale bounds
+    _d(src["render"], "roi_enabled",  True)    # render ROI scalar maps
+    _d(src["render"], "roi_metrics",          # which GA metrics to paint
+       ["BI_pre", "LR_pre", "CoG_pre", "delta_ERD", "n2p2_amp"])
+
+    # Validate inverse method
+    if str(src["inverse"]["method"]).lower() != "sloreta":
+        raise ValueError(
+            f"cfg.source.inverse.method = '{src['inverse']['method']}' is not supported. "
+            "Only 'sLORETA' is currently implemented."
+        )
+
+    os.makedirs(src["outputs"]["root"], exist_ok=True)
+
+    # ── Run header ────────────────────────────────────────────────────────────
+    print(f"\n[{exp['id']}] SOURCE  subjects ({len(exp['subjects'])}): {exp['subjects']}")
+    print(f"  Input stage    : {src['input']['stage_dir']}")
+    print(f"  Output root    : {src['outputs']['root']}")
+    print(f"  Parcellation   : {src['roi']['parcellation']}"
+          + (" (custom ROIs)" if src["roi"]["use_custom_rois"] else ""))
+    print(f"  Pre-stim       : {src['prestim']['tmin']:.3f} – {src['prestim']['tmax']:.3f} s")
+    print(f"  Post-stim      : {src['poststim']['tmin']:.3f} – {src['poststim']['tmax']:.3f} s "
+          f"  (phase ref @ {src['poststim']['phase_ref_t']:.3f} s)")
+    print(f"  Noise cov      : {src['noise_cov']['tmin']:.3f} – {src['noise_cov']['tmax']:.3f} s")
+    print(f"  LEP N2 window  : {src['lep']['n2_window']}")
+    print(f"  LEP P2 window  : {src['lep']['p2_window']}")
+    print(f"  FOOOF          : {'enabled (' + src['fooof']['aperiodic_mode'] + ')' if src['fooof']['enabled'] else 'disabled'}")
+    if src["render"]["enabled"]:
+        print(f"  3-D renders    : STC={'on' if src['render']['stc_enabled'] else 'off'}  "
+              f"ROI={'on' if src['render']['roi_enabled'] else 'off'}  "
+              f"Mesa={'on' if src['render']['use_mesa'] else 'off'}  "
+              f"metrics={src['render']['roi_metrics']}")
+
+    # ── Dispatch ──────────────────────────────────────────────────────────────
     if src["enabled"]:
-        source_core(cfg, da_root = da_root, exp_out = exp_out)
+        source_core(cfg, da_root=da_root, exp_out=exp_out)
     else:
-        print(f"[{cfg['exp']['id']}] cfg.source.enabled = false (skipping)")
+        print(f"[{exp['id']}] cfg.source.enabled = false — skipping.")

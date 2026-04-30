@@ -1,514 +1,372 @@
+"""
+source_core.py  –  Per-subject orchestration loop for sLORETA source analysis.
+V 2.0.0
+
+Call chain:
+    exp01_source.py  ->  source_default.py  ->  source_core()
+
+This file is intentionally thin: it unpacks config, directs each subject
+through the helper modules, and handles per-subject error recovery.
+All computation lives in the src_*.py helper modules.
+
+Per-subject output layout
+──────────────────────────
+    <out_root>/sub-XXX/
+        csv/
+            sub-XXX_source_trial.csv          all per-trial metrics
+            sub-XXX_source_ga.csv             grand-average metrics + TVI + ITC
+            sub-XXX_source_ga_fooof.csv       FOOOF aperiodic (if enabled)
+        figures/
+            sub-XXX_source_GA_roi_psd.png
+            sub-XXX_source_GA_<ROI>_fooof.png
+            sub-XXX_source_trial_erd.png
+            sub-XXX_source_GA_lep.png
+            sub-XXX_source_phase_prestim.png
+            sub-XXX_source_phase_poststim.png
+            sub-XXX_source_GA_brain_t<T>s.png (if save_brain_images)
+        fwd/
+            sub-XXX_fwd.fif                   cached forward solution
+        logs/
+            sub-XXX_source_<timestamp>.log
+"""
+
 from __future__ import annotations
 
 import os
-import glob
+import traceback
+
 import numpy as np
 import pandas as pd
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 
-import mne
+from src_io       import src_open_log, src_logmsg, src_close_log, src_find_set, src_read_epochs
+from src_assets   import src_load_fsaverage_assets, src_load_labels, src_build_custom_rois
+from src_inverse  import src_make_inverse_operator, src_apply_inverse_epochs, src_apply_inverse_evoked
+from src_prestim  import src_compute_prestim_metrics, src_compute_ga_prestim_metrics, src_compute_tvi_alpha
+from src_poststim import src_compute_poststim_metrics, src_compute_itc
+from src_lep      import src_compute_lep_trial, src_compute_lep_ga
+from src_fooof    import fooof_available, fooof_package_name, src_compute_fooof_ga
+from src_write    import src_write_trial_csv, src_write_ga_csv, src_write_fooof_csv
+from src_render   import src_render_stc_timepoints, src_render_roi_scalar
+from src_plot     import (src_plot_ga_psd, src_plot_fooof, src_plot_erd,
+                          src_plot_lep_ga, src_plot_phase_polar, src_plot_brain)
 
-from fooof import FOOOF
 
-# ------------
-# IO Helpers
-# ------------
-def src_find_preproc_set(da_root: str, exp_out: str, stage_dir: str, out_prefix: str, sub: int, allow_fallback: bool) -> str:
-    """
-    Pattern:
-        /preproc/08_base/<out_prefix>_<sub-XXX>_fir_notch60_rs500_reref_initrej_ica_iclabel_epoch_base.set
+# =============================================================================
+# HELPERS
+# =============================================================================
 
-    Root:
-        <da_root>/<exp_out>/preproc/<stage_dir>
-    
-    We search the stage_dir for either:
-        <stage_dir>/<out_prefix>*sub-XXX*_base.set
-    and require exactly one match unless fallback is enabled.
-    """
-    sub_str = f"sub-{sub:03d}"
-    preproc_root = os.path.join(da_root, exp_out, "preproc", stage_dir)
+def _crop(tc_full: np.ndarray, t_full: np.ndarray,
+          tmin: float, tmax: float, label: str):
+    """Crop tc_full to the [tmin, tmax] time window. Raises ValueError if empty."""
+    mask = (t_full >= tmin) & (t_full <= tmax)
+    if not np.any(mask):
+        raise ValueError(
+            f"{label} window [{tmin:.3f}, {tmax:.3f}]s has no samples "
+            f"in epoch range [{t_full[0]:.3f}, {t_full[-1]:.3f}]s."
+        )
+    return tc_full[:, :, mask], t_full[mask]
 
-    # strict glob
-    pat = os.path.join(preproc_root, f"{out_prefix}*{sub_str}*_base.set")
-    hits = glob.glob(pat)
 
-    if len(hits) == 1:
-        return hits[0]
-    
-    if len(hits) == 0 and allow_fallback:
-        # fallback: any .set containing sub-XXX and ending with _base.set
-        pat2 = os.path.join(preproc_root, f"*{sub_str}*_base.set")
-        hits = glob.glob(pat2)
+# =============================================================================
+# MAIN LOOP
+# =============================================================================
 
-    if len(hits) == 0:
-        raise FileNotFoundError(f"No .set found for {sub_str} in {preproc_root} using pattern: {pat}")
-
-    # choose newest
-    hits.sort(key = lambda p: os.path.getmtime(p), reverse = True)
-    return hits[0]
-
-def src_read_epochs_eeglab_set(set_path: str) -> mne.Epochs:
-    if hasattr(mne.io, "read_epochs_eeglab"):
-        ep = mne.io.read_epochs_eeglab(set_path, verbose = "ERROR")
-        ep.load_data()
-        return ep
-    if hasattr(mne, "read_epochs_eeglab"):
-        ep = mne.read_epochs_eeglab(set_path, verbose = "ERROR")
-        ep.load_data()
-        return ep
-    raise RuntimeError("MNE lacks read_epochs_eeglab(). Upgrade MNE or export epochs to FIF.")
-
-# -------------
-# ROI Helpers
-# -------------
-def src_load_labels(subjects_dir: str, parc: str):
-    labels = mne.read_labels_from_annot(
-        subjects = "fsaverage", parc = parc, subjects_dir = subjects_dir, verbose = "ERROR"
-    )
-    by_name = {lab.name: lab for lab in labels}
-    return labels, by_name
-
-def src_build_custom_rois(by_name: dict, custom_rois: dict):
-    """
-    custom_rois example:
-        "lTC": ["superiortempotal-lh",...] (note MNE/DK uses "-lh"/"-rh" endings)
-    You can supply these either:
-        - MNE style: "superiortemporal-lh"
-        - My style: "lh-superiortemporal"
-    We'll normalize.
-    """
-    def normalize(lbl: str) -> str:
-        s = lbl.strip()
-        if s.startswith("lh-"):
-            return s.replace("lh-", "") + "-lh"
-        if s.startswith("rh-"):
-            return s.replace("rh-", "") + "-rh"
-        return s
-    
-    macro_labels = []
-    macro_names = []
-
-    for macro, parts in custom_rois.items():
-        parts_n = [normalize(p) for p in parts]
-        labs = []
-        missing = []
-        for p in parts_n:
-            if p in by_name:
-                labs.append(by_name[p])
-            else:
-                missing.append(p)
-        if missing:
-            print(f"[WARN] ROI {macro}: missing labels: {missing}")
-        if not labs:
-            print(f"[WARN] ROI {macro}: no labels found, skipping.")
-            continue
-
-        combined = labs[0]
-        for lab in labs[1:]:
-            combined = combined + lab
-        combined.name = macro
-
-        macro_labels.append(combined)
-        macro_names.append(macro)
-
-    return macro_labels, macro_names
-
-# --------------------------
-# Spectral + alpha metrics
-# --------------------------
-def src_psd_welch_1d(x: np.ndarray, sfreq: float, fmin: float, fmax: float):
-    psd, freqs = mne.time_frequency.psd_array_welch(
-        x, sfreq = sfreq, fmin = fmin, fmax = fmax, average = "mean", verbose = "ERROR"
-    )
-    return freqs, psd
-
-def src_bandpower(freqs: np.ndarray, psd: np.ndarray, lo: float, hi: float) -> float:
-    idx = (freqs >= lo) & (freqs <= hi)
-    if not np.any(idx):
-        return float("nan")
-    return float(np.trapezoid(psd[idx], freqs[idx]))
-
-def src_cog(freqs: np.ndarray, psd: np.ndarray, lo: float, hi: float) -> float:
-    idx = (freqs >= lo) & (freqs <= hi)
-    f = freqs[idx]
-    p = psd[idx]
-    denom = np.sum(p)
-    if denom <= 0 or len(f) == 0:
-        return float("nan")
-    return float(np.sum(f * p) / denom)
-
-def src_alpha_metrics(freqs, psd, slow, fast, alpha):
-    slow_p = src_bandpower(freqs, psd, slow[0], slow[1])
-    fast_p = src_bandpower(freqs, psd, fast[0], fast[1])
-    alpha_p = src_bandpower(freqs, psd, alpha[0], alpha[1])
-    paf = src_cog(freqs, psd, alpha[0], alpha[1])
-
-    eps = 1e-20
-    out = {
-        "slow_alpha_power": slow_p,
-        "fast_alpha_power": fast_p,
-        "alpha_power": alpha_p,
-        "paf_cog_hz": paf,
-        "sf_ratio": (slow_p / fast_p) if (fast_p not in [0, np.nan] and fast_p > 0) else np.nan,
-        "sf_log_ratio": float(np.log(slow_p + eps) / np.log(fast_p + eps)),
-        "sf_diff": float(slow_p - fast_p),
-        "sf_normdiff": float((slow_p - fast_p) / (slow_p + fast_p + eps)),
-        "sf_frac_slow": float(slow_p / (slow_p + fast_p + eps)),
-        "sf_frac_fast": float(fast_p / (slow_p + fast_p + eps)),
-    }
-    return out
-
-# -------------
-# FOOOF
-# -------------
-def src_run_fooof(freqs: np.ndarray, psd: np.ndarray, fooof_cfg: dict):
-    fm = FOOOF(
-        aperiodic_mode = fooof_cfg.get("aperiodic_mode", "fixed"),
-        peak_width_limits = tuple(fooof_cfg.get("peak_width_limits", [1.0, 12.0])),
-        max_n_peaks = int(fooof_cfg.get("man_n_peaks", 6)),
-        min_peak_height = float(fooof_cfg.get("min_peak_height", 0.1)),
-        peak_threshold = float(fooof_cfg.get("peak_threshold", 2.0)),
-        verbose = False,
-    )
-    fr = fooof_cfg.get("freq_range", [1.0, 40.0])
-    fm.fit(freqs, psd, fr)
-
-    ap = fm.get_params("aperiodic_params") # [offset, exponent] or [offset, knee, exponent]
-    out = {}
-
-    if fooof_cfg.get("aperiodic_mode", "fixed") == "fixed":
-        out["fooof_offset"] = float(ap[0])
-        out["fooof_exponent"] = float(ap[1])
-        out["fooof_knee"] = np.nan
-    else:
-        out["fooof_offset"] = float(ap[0])
-        out["fooof_knee"] = float(ap[1])
-        out["fooof_exponent"] = float(ap[2])
-
-    # alpha peak extraction (best effort)
-    # We'll pick the strongest peak whose CF is inside 8-12
-    peaks = fm.get_params("peak_params")
-    alpha_peaks = []
-    for (cf, pw, bw) in peaks:
-        if 8.0 <= cf <= 12.0:
-            alpha_peaks.append((cf, pw, bw))
-    if alpha_peaks:
-        # strongest by pw
-        alpha_peaks.sort(key = lambda t: t[1], reverse = True)
-        cf, pw, bw = alpha_peaks[0]
-        out["fooof_alpha_cf"] = float(cf)
-        out["fooof_alpha_pw"] = float(pw)
-        out["fooof_alpha_bw"] = float(bw)
-    else:
-        out["fooof_alpha_cf"] = np.nan
-        out["fooof_alpha_pw"] = np.nan
-        out["fooof_alpha_bw"] = np.nan
-
-    return out, fm
-
-def src_save_fooof_plot(path_png: str, fm: FOOOF, title: str):
-    fig = fm.plot(plot_peaks = "shade", add_legend = True)
-    fig.axes[0].set_title(title)
-    fig.tight_layout()
-    fig.savefig(path_png, dpi = 150)
-    plt.close(fig)
-
-# ----------------
-# Figure helpers
-# ----------------
-def src_corr_matrix(X: np.ndarray) -> np.ndarray:
-    """
-    X: (n_rois, n_times)
-    returns: (n_rois, n_rois) Pearson correlation
-    """
-    if X.ndim != 2:
-        raise ValueError("X must be 2D (n_rois, n_times)")
-    return np.corrcoef(X)
-
-def src_save_corr_csv(path_csv: str, C: np.ndarray, roi_names: list[str]):
-    df = pd.DataFrame(C, index = roi_names, columns = roi_names)
-    df.to_csv(path_csv)
-
-def src_save_corr_png(path_png: str, C: np.ndarray, roi_names: list[str], title: str):
-    plt.figure(figsize = (8, 7))
-    im = plt.imshow(C, vmin = 1, vmax = 1, interpolation = "nearest", aspect = "equal")
-    plt.colorbar(im, fraction = 0.046, psd = 0.04)
-    plt.xticks(range(len(roi_names)), roi_names, rotation = 90, fontsize = 8)
-    plt.yticks(range(len(roi_names)), roi_names, fontsize = 8)
-    plt.title(title)
-    plt.tight_layout()
-    plt.savefig(path_png, dpi = 150)
-    plt.close()
-
-def src_save_stc_snapshot_matplotlib(stc, subjects_dir: str, out_png: str, t_sec: float, title: str):
-    """
-    Saves a 2D snapshot using MNE's matplotlib backend.
-    """
-    brain = stc.plot(
-        subject = "fsaverage",
-        subjects_dir = subjects_dir,
-        initial_time = t_sec,
-        hemi = "split",
-        views = "lat",
-        backend = "matplotlib",
-        time_viewer = False,
-        colorbar = True,
-        size = (900, 400),
-        show = False,
-    )
-    # brain is a matplotlib figure for backend = "matplotlib"
-    brain.suptitle(title)
-    brain.savefig(out_png, dpi = 150)
-    plt.close(brain)
-
-# -----------------
-# Core Execution
-# -----------------
 def source_core(cfg: dict, da_root: str, exp_out: str):
+    """
+    Per-subject sLORETA source localization loop.
+    Called by source_default() after config validation and path resolution.
+    """
     src_cfg = cfg["source"]
     exp_cfg = cfg["exp"]
 
-    out_prefix = str(exp_cfg.get("out_prefix", ""))
-    if not out_prefix:
-        raise ValueError("cfg.exp.out_prefix is required for strict filename resolving.")
-    
-    stage_dir = src_cfg["input"]["stage_dir"]
-    allow_fallback = bool(src_cfg["input"]["allow_fallback_search"])
-    out_root = src_cfg["outputs"]["root"]
-    os.makedirs(out_root, exist_ok = True)
-    
+    # ── Config ────────────────────────────────────────────────────────────────
+    out_prefix   = str(exp_cfg.get("out_prefix", ""))
+    stage_dir    = src_cfg["input"]["stage_dir"]
+    allow_fb     = bool(src_cfg["input"]["allow_fallback_search"])
+    out_root     = src_cfg["outputs"]["root"]
     subjects_dir = src_cfg["fsaverage"]["subjects_dir"]
     os.environ["SUBJECTS_DIR"] = subjects_dir
 
-    parc = src_cfg["roi"]["parcellation"]
-    roi_mode = "custom" if src_cfg["roi"].get("use_custom_rois", True) else "aparc_all"
-    roi_extract_mode = src_cfg["roi"].get("mode", "mean_flip")
+    parc       = src_cfg["roi"]["parcellation"]
+    use_custom = bool(src_cfg["roi"].get("use_custom_rois", False))
+    roi_mode   = src_cfg["roi"].get("mode", "mean_flip")
 
-    # spectral params
-    fmin =  float(src_cfg["spectra"]["fmin"])
-    fmax =  float(src_cfg["spectra"]["fmax"])
-    slow = tuple(src_cfg["spectra"]["slow_alpha_band"])
-    fast = tuple(src_cfg["spectra"]["fast_alpha_band"])
-    alpha = tuple(src_cfg["spectra"]["alpha_band"])
+    fmin  = float(src_cfg["spectral"]["fmin"])
+    fmax  = float(src_cfg["spectral"]["fmax"])
+    alpha = tuple(src_cfg["spectral"]["alpha_band"])
+    slow  = tuple(src_cfg["spectral"]["slow_alpha_band"])
+    fast  = tuple(src_cfg["spectral"]["fast_alpha_band"])
 
-    # inverse params
-    method = src_cfg["inverse"]["method"]
-    if method.lower() != "sloreta":
-        raise ValueError(f"Unsupported inverse method: {method}. Only sLORETA is currently supported.")
-    snr = float(src_cfg["inverse"].get("snr", 3.0))
-    lambda2 = 1.0 / (snr ** 2)
+    pre_tmin   = float(src_cfg["prestim"]["tmin"])
+    pre_tmax   = float(src_cfg["prestim"]["tmax"])
+    post_tmin  = float(src_cfg["poststim"]["tmin"])
+    post_tmax  = float(src_cfg["poststim"]["tmax"])
+    post_ref_t = float(src_cfg["poststim"].get("phase_ref_t", 0.2))
+    noise_tmin = float(src_cfg["noise_cov"]["tmin"])
+    noise_tmax = float(src_cfg["noise_cov"]["tmax"])
 
-    pick_ori = src_cfg["inverse"].get("pick_ori", None)
-    if isinstance(pick_ori, str) and pick_ori.lower() == "none":
-        pick_ori = None
+    n2_window = tuple(src_cfg["lep"]["n2_window"])
+    p2_window = tuple(src_cfg["lep"]["p2_window"])
 
-    # Noise cov window
-    tmin = float(src_cfg["noise_cov"]["tmin"])
-    tmax = float(src_cfg["noise_cov"]["tmax"])
+    mindist_mm   = float(src_cfg["forward"]["mindist_mm"])
+    loose        = float(src_cfg["inverse"].get("loose", 0.2))
+    depth        = float(src_cfg["inverse"].get("depth", 0.8))
+    snr          = float(src_cfg["inverse"].get("snr", 3.0))
+    lambda2      = 1.0 / (snr ** 2)
+    pick_ori_raw = src_cfg["inverse"].get("pick_ori", None)
+    pick_ori     = None if (pick_ori_raw is None or
+                            str(pick_ori_raw).lower() == "none") \
+                       else str(pick_ori_raw)
 
-    # fsaverage BEM / trans / src
-    # we assume these exist under subjects_dir/fsaverage/bem
-    bem_sol = os.path.join(subjects_dir, "fsaverage", "bem", "fsaverage-5120-5120-5120-bem-sol.fif")
-    trans = os.path.join(subjects_dir, "fsaverage", "bem", "fsaverage-trans.fif")
-    src_space = os.path.join(subjects_dir, "fsaverage", "bem", "fsaverage-ico-5-src.fif")
-    
-    for p in [bem_sol, trans, src_space]:
-        if not os.path.exists(p):
-            raise FileNotFoundError(f"Missing fsaverage asset: {p}")
-        
-    # labels
-    labels_all, by_name = src_load_labels(subjects_dir, parc)
+    fooof_cfg  = src_cfg.get("fooof", {})
+    do_fooof   = bool(fooof_cfg.get("enabled", True))
+    save_plots  = bool(src_cfg["qc"].get("save_plots", True))
 
-    if roi_mode == "custom":
+    rnd_cfg     = src_cfg.get("render", {})
+    do_render   = bool(rnd_cfg.get("enabled",     False))
+    use_mesa    = bool(rnd_cfg.get("use_mesa",    False))
+    do_stc      = bool(rnd_cfg.get("stc_enabled", True))
+    stc_clim    = tuple(rnd_cfg.get("stc_clim_pct", [50, 99]))
+    do_roi_rnd  = bool(rnd_cfg.get("roi_enabled", True))
+    roi_metrics = list(rnd_cfg.get("roi_metrics",
+                       ["BI_pre", "LR_pre", "CoG_pre", "delta_ERD", "n2p2_amp"]))
+
+    os.makedirs(out_root, exist_ok=True)
+
+    # ── Load shared assets once ───────────────────────────────────────────────
+    bem_sol, trans, src_space = src_load_fsaverage_assets(subjects_dir)
+    labels_all, by_name       = src_load_labels(subjects_dir, parc)
+
+    if use_custom and src_cfg["roi"].get("custom_rois"):
         labels, roi_names = src_build_custom_rois(by_name, src_cfg["roi"]["custom_rois"])
     else:
-        labels = labels_all
-        roi_names = [l.name for l in labels]
+        labels    = labels_all
+        roi_names = [lab.name for lab in labels]
 
-    fooof_cfg = src_cfg.get("fooof", {})
-    do_fooof = bool(fooof_cfg.get("enabled", True))
-    fooof_mode = str(fooof_cfg.get("mode", "ga_only")).lower()
+    print(f"[LABELS] {len(labels)} ROIs: {roi_names}")
 
-    for sub in exp_cfg["subjects"]:
-        sub = int(sub)
+    # ── Subject loop ──────────────────────────────────────────────────────────
+    for sub in [int(s) for s in exp_cfg["subjects"]]:
         sub_str = f"sub-{sub:03d}"
-        print(f"\n===== SOURCE START {sub_str} =====")
+        print(f"\n{'='*60}\n  SOURCE START  {sub_str}\n{'='*60}")
 
         sub_out = os.path.join(out_root, sub_str)
+        csv_dir = os.path.join(sub_out, "csv")
         fig_dir = os.path.join(sub_out, "figures")
-        os.makedirs(fig_dir, exist_ok = True)
+        fwd_dir = os.path.join(sub_out, "fwd")
+        log_dir = os.path.join(sub_out, "logs")
+        for d in [sub_out, csv_dir, fig_dir, fwd_dir, log_dir]:
+            os.makedirs(d, exist_ok=True)
 
-        set_path = src_find_preproc_set(da_root, exp_out, stage_dir, out_prefix, sub, allow_fallback)
-        print(f"[INPUT] {set_path}")
+        logf = src_open_log(log_dir, sub)
 
-        epochs = src_read_epochs_eeglab_set(set_path)
-        sfreq = float(epochs.info["sfreq"])
-        print(f"[EPOCHS] n = {len(epochs)} sfreq = {sfreq:.2f} t = ({epochs.tmin:.3f}, {epochs.tmax:.3f})")
+        try:
+            # 1. Load epochs ──────────────────────────────────────────────────
+            set_path = src_find_set(da_root, exp_out, stage_dir, out_prefix, sub, allow_fb)
+            src_logmsg(logf, "[LOAD] %s", set_path)
 
-        noise_cov = mne.compute_covariance(
-            epochs, tmin = tmin, tmax = tmax, method = "empirical", rank = None, verbose = "ERROR"
-        )
+            epochs = src_read_epochs(set_path)
+            sfreq  = float(epochs.info["sfreq"])
+            src_logmsg(logf, "[EPOCHS] n=%d  sfreq=%.1f Hz  t=(%.3f, %.3f)s",
+                       len(epochs), sfreq, epochs.tmin, epochs.tmax)
 
-        fwd = mne.make_forward_solution(
-            info = epochs.info,
-            trans = trans,
-            src = src_space,
-            bem = bem_sol,
-            eeg = True,
-            meg = False,
-            mindist = float(src_cfg["forward"].get("mindist_mm", 5.0)),
-            verbose = "ERROR",
-        )
+            if len(epochs) == 0:
+                src_logmsg(logf, "[SKIP] No epochs — skipping subject.")
+                continue
 
-        inv = mne.minimum_norm.make_inverse_operator(
-            epochs.info, fwd, noise_cov, loose = 0.2, depth = 0.8, verbose = "ERROR"
-        )
-
-        stcs = mne.minimum_norm.apply_inverse_epochs(
-            epochs,
-            inv,
-            lambda2 = lambda2,
-            method = "sLORETA",
-            pick_ori = pick_ori,
-            verbose = "ERROR",
-        )
-
-        tc = mne.extract_label_time_course(
-            stcs, labels = labels, src = fwd["src"], mode = roi_extract_mode, verbose = "ERROR"
-        )
-        tc = np.asarray(tc) # (n_epochs, n_rois, n_times)
-
-        # ----- trial-wise features -----
-        trial_rows = []
-        fooof_trial_rows = []
-
-        for ei in range(tc.shape[0]):
-            for ri, roi in enumerate(roi_names):
-                x = tc[ei, ri, :]
-                freqs, psd = src_psd_welch_1d(x, sfreq, fmin, fmax)
-                am = src_alpha_metrics(freqs, psd, slow, fast, alpha)
-
-                row = {"subject": sub, "trial": ei + 1, "roi": roi, "sfreq": sfreq, **am}
-                trial_rows.append(row)
-                
-                if do_fooof and fooof_mode == "trial_and_ga":
-                    f_out, fm = src_run_fooof(freqs, psd, fooof_cfg)
-                    fooof_trial_rows.append({"subeject": sub, "trial": ei + 1, "roi": roi, **f_out})
-
-        trial_df = pd.DataFrame(trial_rows)
-        trial_csv = os.path.join(sub_out, f"{sub_str}_trialwise_roi_source_spectral.csv")
-        trial_df.to_csv(trial_csv, index = False)
-        print(f"[SAVE] {trial_csv}")
-
-        if do_fooof and fooof_mode == "trial_and_ga":
-            f_trial_df = pd.DataFrame(fooof_trial_rows)
-            f_trial_csv = os.path.join(sub_out, f"{sub_str}_trialwise_roi_fooof.csv")
-            f_trial_df.to_csv(f_trial_csv, index = False)
-            print(f"[SAVE] {f_trial_csv}")
-
-        # ----- GA features -----
-        ga_rows = []
-        fooof_ga_rows = []
-
-        psd_by_roi = {}
-        for ri, roi in enumerate(roi_names):
-            x_ga = np.mean(tc[:, ri, :], axis = 0)
-            freqs, psd = src_psd_welch_1d(x_ga, sfreq, fmin, fmax)
-            psd_by_roi[roi] = psd
-
-            am = src_alpha_metrics(freqs, psd, slow, fast, alpha)
-            ga_rows.append({"subject": sub, "roi": roi, "sfreq": sfreq, **am})
-
-            if do_fooof:
-                f_out, fm = src_run_fooof(freqs, psd, fooof_cfg)
-                fooof_ga_rows.append({"subject": sub, "roi": roi, **f_out})
-
-                # optional per ROI FOOOF plot (can be many; keep it GA only)
-                if src_cfg["gc"].get("save_plots", True) and roi_mode == "custom":
-                    png = os.path.join(fig_dir, f"{sub_str}_GA_{roi}_fooof.png")
-                    src_save_fooof_plot(png, fm, title = f"{sub_str} GA {roi} FOOOF")
-
-        ga_df = pd.DataFrame(ga_rows)
-        ga_csv = os.path.join(sub_out, f"{sub_str}_GA_roi_source_spectral.csv")
-        ga_df.to_csv(ga_csv, index = False)
-        print(f"[SAVE] {ga_csv}")
-
-        if do_fooof:
-            f_ga_df = pd.DataFrame(fooof_ga_rows)
-            f_ga_csv = os.path.join(sub_out, f"{sub_str}_GA_roi_fooof.csv")
-            f_ga_df.to_csv(f_ga_csv, index = False)
-            print(f"[SAVE] {f_ga_csv}")
-
-        # QC: GA PSD overlay (custom ROIs only, otherwise too many lines)
-        if src_cfg["qc"].get("save_plots", True) and roi_mode == "custom":
-            plt.figure(figsize = (10, 6))
-            for roi in roi_names:
-                plt.plot(freqs, 10 * np.log10(psd_by_roi[roi] + 1e-20), label = roi)
-            plt.xlabel('Frequency (Hz)')
-            plt.ylabel('Power (dB)')
-            plt.title(f"{sub_str} GA ROI PSD (sLORETA)")
-            plt.legend(fontsize = 8, ncol = 2)
-            plt.tight_layout()
-            out_png = os.path.join(fig_dir, f"{sub_str}_GA_roi_psd.png")
-            plt.savefig(out_png, dpi = 150)
-            plt.close()
-            print(f"[SAVE] {out_png}")
-
-        # QC: ROI correlation matrix (custom ROIs only)
-        save_conn = bool(src_cfg["outputs"].get("save_connectivity", True))
-        if save_conn:
-            conn_dir = os.path.join(sub_out, "connectivity")
-            os.makedirs(conn_dir, exist_ok = True)
-
-            # ---- Trial-wise corr ----
-            for ei in range(tc.shape[0]):
-                X = tc[ei, :, :] # (n_rois, n_times)
-                C = src_corr_matrix(X)
-
-                csv_path = os.path.join(conn_dir, f"{sub_str}_trial-{ei+1:04d}_roi_corr.csv")
-                png_path = os.path.join(conn_dir, f"{sub_str}_trial-{ei+1:04d}_roi_corr.png")
-
-                src_save_corr_csv(csv_path, C, roi_names)
-                if src_cfg["qc"].get("save_plots", True):
-                    src_save_corr_png(png_path, C, roi_names, title = f"{sub_str} Trial {ei+1} ROI Corr (sLORETA)")
-
-            # ---- GA corr (mean over trials) ----
-            Xga = np.mean(tc, axis = 0) # (n_rois, n_times)
-            Cga = src_corr_matrix(Xga)
-
-            csv_path = os.path.join(conn_dir, f"{sub_str}_GA_roi_corr.csv")
-            png_path = os.path.join(conn_dir, f"{sub_str}_GA_roi_corr.png")
-
-            src_save_corr_csv(csv_path, Cga, roi_names)
-            if src_cfg["qc"].get("save_plots", True):
-                src_save_corr_png(png_path, Cga, roi_names, title = f"{sub_str} GA ROI Corr (sLORETA)")
-
-        save_brain = bool(src_cfg["qc"].get("save_brain_images", False)) or bool(src_cfg["outputs"].get("save_brain_images", False))
-        t_snap = float(src_cfg["qc"].get("brain_snapshot_time_sec", 0.05))
-
-        if save_brain:
-            # GA/evoked STC
-            evoked = epochs.average()
-            stc_ga = mne.minimum_norm.apply_inverse(
-                evoked, inv, lambda2 = lambda2, method = "sLORETA", pick_ori = pick_ori, verbose = "ERROR"
+            # 2. Forward solution + inverse operator ──────────────────────────
+            fwd_cache = os.path.join(fwd_dir, f"{sub_str}_fwd.fif")
+            inv, fwd  = src_make_inverse_operator(
+                epochs, bem_sol, trans, src_space,
+                noise_tmin, noise_tmax, mindist_mm, loose, depth,
+                fwd_cache_path=fwd_cache, logf=logf,
             )
 
-            img_dir = os.path.join(sub_out, "brain_images")
-            os.makedirs(img_dir, exist_ok = True)
-            out_png = os.path.join(img_dir, f"{sub_str}_GA_sLORETA_t{t_snap:.3f}s_png")
+            # 3. Apply sLORETA to all epochs ───────────────────────────────────
+            tc, times = src_apply_inverse_epochs(
+                epochs, inv, fwd, labels, lambda2, pick_ori, roi_mode, logf
+            )
+            src_logmsg(logf, "[TC] shape: %s  (epochs × ROIs × times)", str(tc.shape))
 
-            try:
-                src_save_stc_snapshot_matplotlib(
-                    stc_ga,
-                    subjects_dir = subjects_dir,
-                    out_png = out_png,
-                    t_sec = t_snap,
-                    title = f"{sub_str} GA sLORETA @ {t_snap:.3f}s",
+            # 4. Crop windows ──────────────────────────────────────────────────
+            tc_pre,  times_pre  = _crop(tc, times, pre_tmin,  pre_tmax,  "Pre-stim")
+            tc_post, times_post = _crop(tc, times, post_tmin, post_tmax, "Post-stim")
+            src_logmsg(logf, "[PRE]  %.3f – %.3f s  (%d samples)",
+                       times_pre[0],  times_pre[-1],  len(times_pre))
+            src_logmsg(logf, "[POST] %.3f – %.3f s  (%d samples)",
+                       times_post[0], times_post[-1], len(times_post))
+
+            # 5. Pre-stimulus metrics ──────────────────────────────────────────
+            src_logmsg(logf, "[FEAT] Pre-stimulus metrics...")
+            prestim_rows   = src_compute_prestim_metrics(
+                tc_pre, tc, times, sfreq, alpha, slow, fast, fmin, fmax,
+            )
+            ga_prestim_rows, psd_by_roi = src_compute_ga_prestim_metrics(
+                tc_pre, sfreq, alpha, slow, fast, fmin, fmax,
+            )
+
+            # TVI_alpha — one scalar per ROI from the per-trial BI_pre sequence
+            tvi_by_roi: dict = {}
+            pre_df = pd.DataFrame(prestim_rows)
+            for ri in range(len(roi_names)):
+                bi_seq = pre_df.loc[pre_df["roi_idx"] == ri, "BI_pre"].values
+                tvi_by_roi[ri] = src_compute_tvi_alpha(bi_seq)
+
+            # 6. Post-stimulus metrics ─────────────────────────────────────────
+            src_logmsg(logf, "[FEAT] Post-stimulus metrics + ITC...")
+            poststim_rows = src_compute_poststim_metrics(
+                tc_pre, tc_post, tc, times, sfreq,
+                alpha, slow, fast, fmin, fmax, post_ref_t,
+            )
+            itc_rows = src_compute_itc(tc, times, sfreq, slow, post_tmin, post_tmax)
+
+            # GA post-stim — apply metric computation to the mean time course
+            tc_pre_ga  = np.mean(tc_pre,  axis=0, keepdims=True)
+            tc_post_ga = np.mean(tc_post, axis=0, keepdims=True)
+            tc_ga      = np.mean(tc,      axis=0, keepdims=True)
+            ga_poststim_raw = src_compute_poststim_metrics(
+                tc_pre_ga, tc_post_ga, tc_ga, times, sfreq,
+                alpha, slow, fast, fmin, fmax, post_ref_t,
+            )
+            # Strip the dummy trial=1 key for GA rows
+            ga_poststim_rows = [{k: v for k, v in r.items() if k != "trial"}
+                                for r in ga_poststim_raw]
+
+            # 7. LEP features ─────────────────────────────────────────────────
+            src_logmsg(logf, "[FEAT] LEP features (N2/P2)...")
+            lep_trial_rows = src_compute_lep_trial(tc_post, times_post, n2_window, p2_window)
+            ga_lep_rows    = src_compute_lep_ga(tc_post, times_post, n2_window, p2_window)
+
+            # 8. FOOOF ─────────────────────────────────────────────────────────
+            fooof_rows: list = []
+            fm_by_roi:  dict = {}
+            if do_fooof:
+                if not fooof_available():
+                    src_logmsg(logf,
+                               "[WARN] FOOOF enabled but neither 'specparam' nor 'fooof' "
+                               "is installed. Skipping.")
+                else:
+                    src_logmsg(logf, "[FOOOF] Fitting GA PSDs (%s)...", fooof_package_name())
+                    fooof_rows, fm_by_roi = src_compute_fooof_ga(
+                        psd_by_roi, len(roi_names), sub, fooof_cfg,
+                    )
+
+            # 9. Write CSVs ────────────────────────────────────────────────────
+            src_write_trial_csv(
+                os.path.join(csv_dir, f"{sub_str}_source_trial.csv"),
+                sub, roi_names,
+                prestim_rows, poststim_rows, lep_trial_rows, logf,
+            )
+            src_write_ga_csv(
+                os.path.join(csv_dir, f"{sub_str}_source_ga.csv"),
+                sub, roi_names,
+                ga_prestim_rows, ga_poststim_rows, ga_lep_rows,
+                tvi_by_roi, itc_rows, logf,
+            )
+            if fooof_rows:
+                src_write_fooof_csv(
+                    os.path.join(csv_dir, f"{sub_str}_source_ga_fooof.csv"),
+                    roi_names, fooof_rows, logf,
                 )
-                print(f"[SAVE] {out_png}")
-            except Exception as e:
-                print(f"[WARN] Brain snapshot failed (matplotlib): {e}")
 
-        print(f"===== SOURCE DONE {sub_str} =====")
+            # 10. QC plots ─────────────────────────────────────────────────────
+            if save_plots:
+                src_plot_ga_psd(
+                    os.path.join(fig_dir, f"{sub_str}_source_GA_roi_psd.png"),
+                    psd_by_roi, roi_names, sub_str, fmin, fmax, logf,
+                )
+                for ri, fm in fm_by_roi.items():
+                    roi = roi_names[ri] if ri < len(roi_names) else str(ri)
+                    src_plot_fooof(
+                        os.path.join(fig_dir, f"{sub_str}_source_GA_{roi}_fooof.png"),
+                        fm, title=f"{sub_str} GA {roi} FOOOF", logf=logf,
+                    )
+                src_plot_erd(
+                    os.path.join(fig_dir, f"{sub_str}_source_trial_erd.png"),
+                    poststim_rows, roi_names, sub_str, logf,
+                )
+                src_plot_lep_ga(
+                    os.path.join(fig_dir, f"{sub_str}_source_GA_lep.png"),
+                    tc_post, times_post, roi_names,
+                    n2_window, p2_window, sub_str, logf,
+                )
+                src_plot_phase_polar(
+                    os.path.join(fig_dir, f"{sub_str}_source_phase_prestim.png"),
+                    prestim_rows, roi_names,
+                    phase_col="slow_phase",
+                    sub_str=sub_str,
+                    title_suffix="slow-α pre-stim onset",
+                    logf=logf,
+                )
+                src_plot_phase_polar(
+                    os.path.join(fig_dir, f"{sub_str}_source_phase_poststim.png"),
+                    poststim_rows, roi_names,
+                    phase_col="slow_phase_post",
+                    sub_str=sub_str,
+                    title_suffix=f"slow-α post-stim @ {post_ref_t:.2f}s",
+                    logf=logf,
+                )
+
+            if do_brain:
+                stc_ga = src_apply_inverse_evoked(epochs, inv, lambda2, pick_ori, logf)
+                src_plot_brain(
+                    os.path.join(fig_dir,
+                                 f"{sub_str}_source_GA_brain_t{t_snap:.3f}s.png"),
+                    stc_ga, subjects_dir, t_snap, sub_str, logf,
+                )
+
+            # 11. 3-D brain renders ───────────────────────────────────────────
+            if do_render:
+                render_dir = os.path.join(fig_dir, "renders")
+                os.makedirs(render_dir, exist_ok=True)
+
+                if do_stc:
+                    stc_ga = src_apply_inverse_evoked(epochs, inv, lambda2, pick_ori, logf)
+                    src_render_stc_timepoints(
+                        stc_ga       = stc_ga,
+                        ga_lep_rows  = ga_lep_rows,
+                        roi_names    = roi_names,
+                        times        = stc_ga.times,
+                        pre_tmin     = pre_tmin,
+                        pre_tmax     = pre_tmax,
+                        subjects_dir = subjects_dir,
+                        fig_dir      = render_dir,
+                        sub_str      = sub_str,
+                        clim_pct     = stc_clim,
+                        use_mesa     = use_mesa,
+                        logf         = logf,
+                    )
+
+                if do_roi_rnd:
+                    # Build ga_rows list-of-dicts from the GA CSV data structures
+                    import pandas as _pd
+                    ga_df      = _pd.DataFrame(
+                        [{"roi": roi_names[r["roi_idx"]], **r}
+                         for r in ga_prestim_rows + ga_poststim_rows + ga_lep_rows
+                         if "roi_idx" in r]
+                    ).groupby("roi").first().reset_index()
+                    ga_rows_combined = ga_df.to_dict("records")
+
+                    src_render_roi_scalar(
+                        ga_rows      = ga_rows_combined,
+                        roi_names    = roi_names,
+                        labels       = labels,
+                        metric_cols  = roi_metrics,
+                        subjects_dir = subjects_dir,
+                        fig_dir      = render_dir,
+                        sub_str      = sub_str,
+                        use_mesa     = use_mesa,
+                        logf         = logf,
+                    )
+
+            src_logmsg(logf, "===== SOURCE DONE %s =====", sub_str)
+
+        except FileNotFoundError as e:
+            src_logmsg(logf, "[SKIP] %s — file not found: %s", sub_str, str(e))
+        except ValueError as e:
+            src_logmsg(logf, "[SKIP] %s — config/data issue: %s", sub_str, str(e))
+        except Exception:
+            src_logmsg(logf, "[ERROR] %s — unexpected error:\n%s",
+                       sub_str, traceback.format_exc())
+        finally:
+            src_close_log(logf)
