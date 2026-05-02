@@ -42,7 +42,7 @@ from src_io       import src_open_log, src_logmsg, src_close_log, src_find_set, 
 from src_assets   import src_load_fsaverage_assets, src_load_labels, src_build_custom_rois
 from src_inverse  import src_make_inverse_operator, src_apply_inverse_epochs, src_apply_inverse_evoked
 from src_prestim  import src_compute_prestim_metrics, src_compute_ga_prestim_metrics, src_compute_tvi_alpha
-from src_poststim import src_compute_poststim_metrics, src_compute_itc
+from src_poststim import src_compute_poststim_metrics, src_compute_ga_poststim_metrics, src_compute_itc
 from src_lep      import src_compute_lep_trial, src_compute_lep_ga
 from src_fooof    import fooof_available, fooof_package_name, src_compute_fooof_ga
 from src_write    import src_write_trial_csv, src_write_ga_csv, src_write_fooof_csv
@@ -220,17 +220,15 @@ def source_core(cfg: dict, da_root: str, exp_out: str):
             )
             itc_rows = src_compute_itc(tc, times, sfreq, slow, post_tmin, post_tmax)
 
-            # GA post-stim — apply metric computation to the mean time course
+            # GA post-stim — dedicated function avoids the vacuous percentile
+            # threshold guard that causes all-NaN ERD when applied to n=1 trial
             tc_pre_ga  = np.mean(tc_pre,  axis=0, keepdims=True)
             tc_post_ga = np.mean(tc_post, axis=0, keepdims=True)
             tc_ga      = np.mean(tc,      axis=0, keepdims=True)
-            ga_poststim_raw = src_compute_poststim_metrics(
+            ga_poststim_rows = src_compute_ga_poststim_metrics(
                 tc_pre_ga, tc_post_ga, tc_ga, times, sfreq,
                 alpha, slow, fast, fmin, fmax, post_ref_t,
             )
-            # Strip the dummy trial=1 key for GA rows
-            ga_poststim_rows = [{k: v for k, v in r.items() if k != "trial"}
-                                for r in ga_poststim_raw]
 
             # 7. LEP features ─────────────────────────────────────────────────
             src_logmsg(logf, "[FEAT] LEP features (N2/P2)...")
@@ -307,8 +305,12 @@ def source_core(cfg: dict, da_root: str, exp_out: str):
                     logf=logf,
                 )
 
-            if do_brain:
+            # Compute GA STC once — shared by the 2D brain plot and the 3D renders
+            stc_ga = None
+            if (save_plots and do_brain) or do_render:
                 stc_ga = src_apply_inverse_evoked(epochs, inv, lambda2, pick_ori, logf)
+
+            if save_plots and do_brain and stc_ga is not None:
                 src_plot_brain(
                     os.path.join(fig_dir,
                                  f"{sub_str}_source_GA_brain_t{t_snap:.3f}s.png"),
@@ -320,8 +322,7 @@ def source_core(cfg: dict, da_root: str, exp_out: str):
                 render_dir = os.path.join(fig_dir, "renders")
                 os.makedirs(render_dir, exist_ok=True)
 
-                if do_stc:
-                    stc_ga = src_apply_inverse_evoked(epochs, inv, lambda2, pick_ori, logf)
+                if do_stc and stc_ga is not None:
                     src_render_stc_timepoints(
                         stc_ga       = stc_ga,
                         ga_lep_rows  = ga_lep_rows,

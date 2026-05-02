@@ -148,11 +148,30 @@ def source_default(exp_id: str, cfg_in: dict, subjects_override=None):
     _d(src["lep"], "p2_window", [0.25, 0.50])
 
     # ROI (region of interest) settings
+    # Default custom ROIs cover the core pain neuromatrix in the Desikan-Killiany
+    # (aparc) parcellation.  Labels are bilateral (lh + rh merged).
+    # To use all parcels instead, set use_custom_rois = false.
+    #
+    # Parcellation label reference (aparc):
+    #   S1  — postcentral         (primary somatosensory cortex)
+    #   M1  — precentral          (primary motor cortex)
+    #   ACC — caudalanteriorcingulate + rostralanteriorcingulate
+    #   Ins — insula               (insular cortex)
+    #   SII — supramarginal        (secondary somatosensory / parietal operculum proxy)
+    #   dlPFC — rostralmiddlefrontal  (dorsolateral prefrontal — descending modulation)
     _d(src, "roi", {})
     _d(src["roi"], "parcellation",    "aparc")
     _d(src["roi"], "mode",            "mean_flip")
-    _d(src["roi"], "use_custom_rois",  False)
-    _d(src["roi"], "custom_rois",      {})
+    _d(src["roi"], "use_custom_rois",  True)
+    _d(src["roi"], "custom_rois", {
+        "S1":   ["postcentral-lh",              "postcentral-rh"],
+        "M1":   ["precentral-lh",               "precentral-rh"],
+        "ACC":  ["caudalanteriorcingulate-lh",   "caudalanteriorcingulate-rh",
+                 "rostralanteriorcingulate-lh",  "rostralanteriorcingulate-rh"],
+        "Ins":  ["insula-lh",                   "insula-rh"],
+        "SII":  ["supramarginal-lh",             "supramarginal-rh"],
+        "dlPFC":["rostralmiddlefrontal-lh",      "rostralmiddlefrontal-rh"],
+    })
 
     # Spectral parameters
     _d(src, "spectral", {})
