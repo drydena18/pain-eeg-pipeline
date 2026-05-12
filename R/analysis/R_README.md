@@ -1,262 +1,265 @@
-# R Analysis Pipeline
+# CNED EEG Analysis Pipeline (R)
 
-This page documents the R workflow: how raw behavioural data is merged, how demographics and EEG spectral features are incorporated, and how the GAMM models are structured.
+**Author:** Dryden Arseneau  
+**Affiliations:** Schabrun Lab · Seminowicz Lab  
+**Dataset:** CNED – Zhao et al., Sci Data (2025)  
+https://doi.org/10.1038/s41597-025-05900-1
 
 ---
 
-## Overview
+## 1. Overview
 
-The R pipeline has three sequential merge steps followed by two GAMM workflows.
+This R pipeline takes the outputs of the MATLAB preprocessing/spectral pipeline and the Python source localization pipeline, merges them with behavioural and demographic data, and fits a comprehensive set of statistical models. Two parallel analytical streams — **channel-space** (scalp EEG) and **source-space** (sLORETA ROI time courses) — run side by side, enabling a formal comparison of whether localizing alpha oscillations to anatomical sources improves the prediction of pain perception.
+
+The primary statistical tool is the **generalized additive mixed model (GAMM)**, which is well-suited to trial-level pain data because it: (a) accommodates nonlinear predictor–outcome relationships without imposing a functional form, (b) handles deeply nested random effects (trials within subjects within experiments), and (c) supports multiple simultaneous predictors with adaptive smoothness selection via `select = TRUE`.
+
+Classical inferential tests (paired t-tests, repeated-measures ANOVA, Rayleigh test) complement the GAMMs by answering questions the GAMMs do not address directly — effect existence, spatial distribution across ROIs, and phase clustering.
+
+---
+
+## 2. Pipeline Architecture
+
+The pipeline has two merge streams feeding into parallel model-fitting streams, plus a cross-stream comparison and classical tests layer.
 
 ```
-merge_behavioural.R
-    ↓  behavioural_master.csv
-merge_participants_into_behavioural.R
-    ↓  behavioural_demo_master.csv
-merge_spectral_behaviour.R
-    ↓  alpha_pain_master.csv
-        ├── run_gamm_alpha_metrics.R        (v1: metric-by-metric)
-        └── run_gamm_alpha_metrics_v2.R     (v2: interaction + aperiodic)
+MATLAB spectral outputs               Python source outputs
+(chan_trial_*.csv per subject)        (sub-XXX_source_trial.csv per subject)
+            ↓                                       ↓
+  merge_behavioural.R                    merge_source_spectral.R
+  merge_participants_into_behavioural.R  merge_source_ga.R
+  merge_spectral_behaviour.R                       ↓
+            ↓                              source_pain_master.csv
+  alpha_pain_master.csv                  source_ga_master.csv
+  behavioural_demo_master.csv            source_ga_fooof_master.csv
+            ↓                                       ↓
+  run_gamm_alpha_metrics_v2.R          run_gamm_source.R
+  gamm_outputs_v2/                     gamm_outputs_source/<ROI>/
+            ↓                                       ↓
+            └──────────────────┬────────────────────┘
+                               ↓
+                  compare_channel_source_gamm.R
+                  run_classical_tests.R
 ```
 
 ---
 
-## Experiment Lookup Table
+## 3. File Reference
 
-All R scripts share a fixed experiment lookup table:
+### Merge Layer
 
-| experiment_name | experiment_id |
-|-----------------|---------------|
-| 26ByBiosemi | 1 |
-| 29ByANT | 2 |
-| 39ByBP | 3 |
-| 30ByANT | 4 |
-| 65ByANT | 5 |
-| 95ByBP | 6 |
-| 142ByBiosemi | 7 |
-| 223ByBP | 8 |
-| 29ByBP | 9 |
+| File | Input | Output | Role |
+|---|---|---|---|
+| `merge_behavioural.R` | Per-experiment behavioural CSVs | `behavioural_master.csv` | Standardizes and concatenates raw behavioural data across all experiments |
+| `merge_participants_into_behavioural.R` | `behavioural_master.csv`, `participants.tsv`, `cap_size.csv` | `behavioural_demo_master.csv` | Adds age, sex, and EEG cap size; assigns `global_subjid` and `subjid_uid` cross-experiment identifiers |
+| `merge_spectral_behaviour.R` | MATLAB `chan_trial_*.csv` files, `behavioural_demo_master.csv` | `alpha_pain_master.csv` | Merges channel-space spectral metrics with behavioural/demographic master; upserts on `(experiment_id, subjid, trial)` |
+| `merge_source_spectral.R` | Python `sub-XXX_source_trial.csv` files, `behavioural_demo_master.csv`, `sub-XXX_source_ga_fooof.csv` | `source_pain_master.csv` | Same merge pattern for source-space data; broadcasts GA FOOOF metrics to every trial row so FOOOF-controlled GAMMs have access to aperiodic parameters |
+| `merge_source_ga.R` | Python `sub-XXX_source_ga.csv` and `sub-XXX_source_ga_fooof.csv` files | `source_ga_master.csv`, `source_ga_fooof_master.csv` | Collates grand-average source metrics (TVI_alpha, ITC, FOOOF) across subjects into group-level tables |
 
-This lookup is reproduced in each script as a `tibble::tribble`. Experiment IDs are used to construct globally unique subject identifiers (`subjid_uid = sprintf("E%02d_S%03d", experiment_id, subjid)`).
+### Model-Fitting Layer
 
----
+| File | Input | Output | Role |
+|---|---|---|---|
+| `run_gamm_alpha_metrics_v2.R` | `alpha_pain_master.csv` | `gamm_outputs_v2/` | Fits the channel-space GAMM model family; 14 models per dataset ranging from baseline covariates through FOOOF-controlled alpha metrics |
+| `run_gamm_source.R` | `source_pain_master.csv` | `gamm_outputs_source/<ROI>/` | Fits the same GAMM model family in source space, iterating over every ROI; produces per-ROI comparison tables and a cross-ROI summary |
 
-## Step 1: `merge_behavioural.R`
+### Comparison and Classical Tests Layer
 
-**Input:** Individual per-experiment behavioural CSVs in `R/analysis/experiment/`
-
-**Output:** `behavioural_master.csv`
-
-Each CSV is matched to an experiment name by checking whether the experiment name appears in the filename. The script standardizes column names via flexible `rename(any_of(...))`, tolerating column name variation across experiments.
-
-Required output columns:
-
-| Column | Description |
-|--------|-------------|
-| `experiment_name` | Experiment identifier string |
-| `experiment_id` | Integer (from lookup) |
-| `subjid` | Integer subject ID within experiment |
-| `subjid_uid` | Globally unique: `E01_S001` format |
-| `global_subjid` | Integer row number across all subjects (used as random effect) |
-| `trial` | Trial number as recorded in the raw CSV |
-| `trial_index` | Within-subject sequential trial counter (1-based) |
-| `laser_power` | Stimulus intensity |
-| `pain_rating` | Subjective pain rating |
-
-`trial_index` is computed as `row_number()` within each subject after sorting by trial, which handles missing or non-sequential trial numbers.
+| File | Input | Output | Role |
+|---|---|---|---|
+| `compare_channel_source_gamm.R` | `gamm_outputs_v2/`, `gamm_outputs_source/` | `gamm_comparison/` | Three-layer comparison: AIC/deviance fit quality, smooth-term significance, and partial-effect concordance (shape correlation) between channel and source estimates |
+| `run_classical_tests.R` | `source_pain_master.csv`, `alpha_pain_master.csv`, fitted model RDS files | `classical_tests/` | Five targeted inferential tests: ERD significance, channel vs source R², rmANOVA on metrics across ROIs, ANOVA on deviance across ROIs, Rayleigh phase uniformity |
 
 ---
 
-## Step 2: `merge_participants_into_behavioural.R`
+## 4. Key Data Files
 
-**Inputs:**
-- `behavioural_master.csv`
-- One `participants.tsv` per experiment (from `da-analysis/<experiment_name>/`)
-- `cap_size.csv`
+| File | Rows | Description |
+|---|---|---|
+| `behavioural_demo_master.csv` | 1 per (experiment, subject, trial) | Pain ratings, laser power, trial index, age, sex, cap size, cross-experiment IDs |
+| `alpha_pain_master.csv` | 1 per (experiment, subject, trial) | Channel-space alpha metrics + behavioural data |
+| `source_pain_master.csv` | 1 per (experiment, subject, trial, ROI) | Source-space trial metrics + behavioural data + FOOOF broadcast |
+| `source_ga_master.csv` | 1 per (experiment, subject, ROI) | GA source metrics: TVI_alpha, ITC, pre/post spectral, LEP |
+| `source_ga_fooof_master.csv` | 1 per (experiment, subject, ROI) | GA FOOOF aperiodic parameters |
 
-**Output:** `behavioural_demo_master.csv`
-
-### Participants TSV
-
-Each `participants.tsv` is read from `<PROJ_ROOT>/<experiment_name>/participants.tsv`. The script handles column name variation in participant TSVs (`participant_id`, `participant`, `age`, `Age`, `sex`, `Sex`, `gender`).
-
-Sex values are harmonized: `"m"`, `"male"` → `"M"`; `"f"`, `"female"` → `"F"`.
-
-Subject IDs are parsed by stripping the `sub-` prefix and converting to integer.
-
-### Cap Size CSV
-
-`cap_size.csv` must contain: `experiment_name`, `experiment_id`, `cap_size`. One row per experiment.
-
-Cap size is stored as a factor.
-
-### Merge Strategy
-
-`participants_master` is joined to `behavioural_master` on `(experiment_name, experiment_id, subjid)`. `cap_df` is joined on `(experiment_name, experiment_id)` — one cap size per experiment. Both are left joins; missing matches produce `NA`.
+All merge scripts use an **anti-join upsert pattern**: existing rows for the incoming subjects are removed and replaced, while rows for subjects not in the current batch are preserved. This means the master files can be grown incrementally as new subjects are processed without duplication.
 
 ---
 
-## Step 3: `merge_spectral_behaviour.R`
+## 5. GAMM Model Family
 
-**Inputs:**
-- `behavioural_demo_master.csv`
-- All `*_ga_by_trial.csv` files found recursively under `da-analysis/`
+Both `run_gamm_alpha_metrics_v2.R` and `run_gamm_source.R` fit the same conceptual model family. All continuous predictors are z-scored. All models include laser power, trial index, and age as smooth covariates, plus sex and cap size as parametric terms, with crossed random effects for subject and experiment.
 
-**Output:** `alpha_pain_master.csv` (upserted incrementally)
+| Model | Predictor added | Scientific question |
+|---|---|---|
+| m00 | Baseline (covariates only) | Covariate-only fit |
+| m01 | `s(BI_pre)` | Does sub-band balance index predict pain? |
+| m02 | `s(LR_pre)` | Does log ratio predict pain? |
+| m03 | `s(CoG_pre)` | Does peak alpha frequency (CoG) predict pain? |
+| m04 | `s(psi_cog)` | Does the BI × CoG interaction predict pain? |
+| m05 | `te(pow_slow, pow_fast)` | Does the raw 2-D slow×fast space predict pain? |
+| m06 | `sin_phase + cos_phase` | Does slow-alpha phase at stimulus onset predict pain? |
+| m07 | `s(delta_ERD)` | Does sub-band ERD asymmetry predict pain? |
+| m08 | `s(n2p2_amp)` | Does LEP amplitude predict pain? |
+| m09 | `s(BI_pre) + s(delta_ERD)` | Do pre and post-stimulus alpha carry independent variance? |
+| m10 | `s(BI_pre) + s(n2p2_amp)` | Does combining alpha state with LEP improve prediction? |
+| m11 | `s(BI_pre) + s(delta_ERD) + s(n2p2_amp)` | Full combined model |
+| m12 | FOOOF baseline | Baseline with aperiodic terms controlled |
+| m13 | FOOOF + `s(BI_pre)` | Does BI_pre predict pain independently of the aperiodic slope? |
+| m14 | FOOOF + `s(LR_pre)` | Does LR_pre predict pain independently of the aperiodic slope? |
 
-### Spectral File Discovery
-
-Scans `spectral_root` recursively for files matching `_ga_by_trial\.csv$`. The experiment name is extracted by parsing the file path: `da-analysis/<experiment_name>/preproc/...`.
-
-### Per-Subject Merge
-
-For each spectral file:
-1. Parse `experiment_name` from the file path
-2. Look up `experiment_id` from the fixed table
-3. Join spectral features to the corresponding rows in `behavioural_demo_master` on `(experiment_name, experiment_id, subjid, subjid_uid, trial)`
-
-Column names are normalized via `rename(any_of(...))` to tolerate naming drift.
-
-### Incremental Upsert
-
-If `alpha_pain_master.csv` already exists:
-1. Read the existing file
-2. Remove any rows matching `(experiment_id, subjid, trial)` from the incoming new data
-3. Bind the new rows
-4. Re-sort by `(experiment_id, subjid, trial)`
-
-This allows re-running the merge for new subjects or corrected data without duplicating or corrupting existing rows.
+**Implementation notes:**
+- All `bam()` calls use `method = "fREML"`, `discrete = TRUE`, `nthreads = 4`, `select = TRUE`
+- `select = TRUE` adds a shrinkage penalty to every smooth, allowing terms to be shrunk to zero if unsupported by the data — this is the correct mechanism for adaptive term selection in mgcv
+- k-values are computed via `safe_k()` from the actual number of unique values per predictor to avoid overfitting with small N
+- FOOOF columns are broadcast from GA to trial level in `merge_source_spectral.R`, allowing FOOOF-controlled trial-level models
 
 ---
 
-## Step 4a: `run_gamm_alpha_metrics.R` (v1)
+## 6. Classical Tests
 
-**Input:** `alpha_pain_master.csv`
+`run_classical_tests.R` runs five targeted tests that address questions outside the GAMM framework.
 
-**Output:** `gamm_outputs/`
+### Test 1 — ERD Significance (paired t-test)
+**Question:** Does alpha power actually change after the stimulus?  
+**Method:** Per-subject mean slow/fast/total alpha power in pre- vs post-stimulus windows; paired t-test across subjects; FDR correction across all ROI × band combinations.  
+**Output:** `test1_erd_ttest.csv`, `test1_erd_plot.png`
 
-### QC Filtering
+### Test 2 — Channel vs Source GAMM Fit (paired t-test)
+**Question:** Does source localization produce a better-fitting GAMM than channel-space metrics?  
+**Method:** Per-subject R² (from `cor(fitted, observed)²`) computed from each domain's trial-level fitted CSVs; paired across subjects for each matched model concept; best source ROI selected as comparator.  
+**Output:** `test2_fit_ttest.csv`, `test2_fit_plot.png`
 
-Rows are removed if any of the following are missing: `pain_rating`, `laser_power`, `trial_index`, `global_subjid`, `experiment_id`, `age`, `sex`, `cap_size`. If FOOOF columns are present, rows with `fooof_r2 < 0.80` are also removed.
+### Test 3 — Metrics Across ROIs (repeated-measures ANOVA)
+**Question:** Are BI_pre, CoG_pre, and delta_ERD spatially uniform or concentrated in specific ROIs?  
+**Method:** Subject-level means per ROI as the within-subject factor; afex::aov_ez with Greenhouse-Geisser correction (falls back to base `aov()` if afex unavailable); FDR-corrected pairwise post-hoc.  
+**Output:** `test3_rmanova_<metric>.csv`, `test3_posthoc_<metric>.csv`, `test3_rmanova_plot.png`
 
-### Scaling
+### Test 4 — Deviance Explained Across ROIs (one-way ANOVA)
+**Question:** Does any source ROI significantly outperform the others in GAMM fit quality?  
+**Method:** Per-subject R² per ROI from source fitted CSVs; one-way ANOVA with ROI as factor, separately per model concept; FDR-corrected pairwise post-hoc.  
+**Output:** `test4_roi_anova_<model>.csv`, `test4_posthoc_<model>.csv`, `test4_roi_anova_plot.png`
 
-All continuous predictors are z-scored within the modelling dataset:
-- `age_z`, `laser_power_z`, `trial_index_z`
-- Any available spectral metric: `paf_cog_hz_z`, `pow_slow_z`, `pow_fast_z`, `sf_ratio_z`, `sf_logratio_z`, `sf_balance_z`, `slow_frac_z`, `fooof_offset_z`, `fooof_exponent_z`
+### Test 5 — Phase Uniformity (Rayleigh test)
+**Question:** Is slow-alpha phase at stimulus onset clustered (non-uniform), as required for phase to be a meaningful pain predictor?  
+**Method:** Per-subject Rayleigh test using the Mardia-Jupp approximation (self-contained implementation, no `circular` package required); applied to both `slow_phase` (pre-stim) and `slow_phase_post`; FDR correction across subject × ROI cells.  
+**Output:** `test5_rayleigh_<phase_col>.csv`, `test5_rayleigh_summary_<phase_col>.csv`, `test5_rayleigh_plot_<phase_col>.png`
 
-### Model Structure
+---
 
-All models use `mgcv::bam` with `method = "fREML"` and `discrete = TRUE` for computational efficiency with large datasets.
+## 7. Channel vs Source Comparison
 
-**Baseline formula:**
-```r
-pain_rating ~
-    s(laser_power_z, k = 10) +
-    s(trial_index_z, k = 10) +
-    s(age_z, k = 10) +
-    sex +
-    s(global_subjid, bs = "re") +
-    s(experiment_id, bs = "re")
+`compare_channel_source_gamm.R` provides a three-layer formal comparison.
+
+**Layer 1 — Fit quality:** AIC, BIC, and deviance explained side-by-side for matched model concepts. For each concept, the source comparator is the best ROI (lowest AIC), making the comparison fair. Positive ΔAIC (channel − source) means source fits better.
+
+**Layer 2 — Effect significance:** Full smooth-term tables (EDF, F-statistic, p-value) extracted from every fitted model in both domains. Allows you to ask: is a term significant in channel space, source space, both, or neither?
+
+**Layer 3 — Smooth concordance:** Partial effect curves from matched channel and source models are interpolated onto the same x-grid and correlated. A high positive r (> 0.7) means both domains agree on the direction and shape of the effect — strong evidence the metric is capturing a genuine biological signal. The concordance heatmap (ROI × metric) visualises where in the brain the channel estimates are best reproduced.
+
+**Output files:**
+- `fit_quality_comparison.csv`
+- `effect_significance_comparison.csv`
+- `smooth_concordance.csv`
+- `fit_quality_plot.png` — deviance explained bar chart (channel vs source)
+- `delta_aic_plot.png` — signed ΔAIC per model concept
+- `smooth_overlay_<metric>.png` — channel vs all source ROI smooth curves on one figure
+- `concordance_heatmap.png` — ROI × metric correlation heatmap
+- `comparison_report.txt` — plain-text narrative summary with domain recommendation
+
+---
+
+## 8. Run Sequence
+
+Run scripts in this order. Steps 1–3 only need to be run once per dataset; steps 4–8 can be re-run as new subjects are added.
+
+```
+1.  merge_behavioural.R                  → behavioural_master.csv
+2.  merge_participants_into_behavioural.R → behavioural_demo_master.csv
+3.  merge_spectral_behaviour.R           → alpha_pain_master.csv        (channel stream)
+4.  merge_source_spectral.R              → source_pain_master.csv       (source stream)
+5.  merge_source_ga.R                    → source_ga_master.csv + fooof_master.csv
+6.  run_gamm_alpha_metrics_v2.R          → gamm_outputs_v2/
+7.  run_gamm_source.R                    → gamm_outputs_source/
+8.  compare_channel_source_gamm.R        → gamm_comparison/
+9.  run_classical_tests.R               → classical_tests/
 ```
 
-Random effects for `global_subjid` and `experiment_id` account for between-subject and between-experiment variance. The `cap_size` factor is added in `_cap` variants.
-
-### Model Set (v1)
-
-| Model | Added term |
-|-------|-----------|
-| `m00_baseline` | Baseline only |
-| `m01_baseline_cap` | + `cap_size` |
-| `m02_paf` | + `s(paf_cog_hz_z)` |
-| `m03_pow_slow` | + `s(pow_slow_z)` |
-| `m04_pow_fast` | + `s(pow_fast_z)` |
-| `m05_sf_ratio` | + `s(sf_ratio_z)` |
-| `m06_sf_logratio` | + `s(sf_logratio_z)` |
-| `m07_sf_balance` | + `s(sf_balance_z)` |
-| `m08_slow_frac` | + `s(slow_frac_z)` |
-| `m09_sf_logratio_cap` | + `s(sf_logratio_z)` + `cap_size` |
-| `m10_sf_balance_cap` | + `s(sf_balance_z)` + `cap_size` |
-| `m11_slow_frac_cap` | + `s(slow_frac_z)` + `cap_size` |
-
-### Outputs (v1)
-
-- `mXX_<name>_summary.txt` — full `summary(mod)` output
-- `mXX_<name>_diagnostics.png` — `gam.check()` diagnostic plots
-- `mXX_<name>_observed_vs_fitted.png` — scatter of observed vs. fitted pain ratings
-- `mXX_<name>.rds` — serialized model object
-- `model_comparison.csv` — AIC, BIC, log-likelihood, deviance explained, N for all models
-- `trial_level_fitted_values.csv` — full dataset with fitted values and residuals for all models
-- `subject_level_ga_fitted_values.csv` — subject-level grand averages of fitted values
-- `alpha_pain_master_model_input.csv` — filtered and scaled modelling dataset
+**Important sequencing constraint:** `merge_source_spectral.R` (step 4) reads the FOOOF GA files (`sub-XXX_source_ga_fooof.csv`) that are produced by the Python source pipeline. Run the Python pipeline with `fooof.enabled = true` first, then run the merge. If FOOOF files are absent, the merge proceeds without FOOOF columns and a warning is printed — models m12–m14 in `run_gamm_source.R` will run but the FOOOF predictors will be all-NA.
 
 ---
 
-## Step 4b: `run_gamm_alpha_metrics_v2.R` (v2)
-
-Extends v1 with three additions:
-
-1. **Derived interaction metrics** — `sf_logratio`, `sf_balance`, `slow_frac` without vs. with aperiodic controls
-2. **Raw slow×fast tensor interaction** — `te(pow_slow_z, pow_fast_z)` bivariate tensor product smooth
-3. **Aperiodic-controlled comparator models** — all alpha metrics tested against a baseline that includes `s(fooof_offset_z)` and `s(fooof_exponent_z)` as covariates
-
-### Aperiodic Baseline Formula (v2)
+## 9. Dependencies
 
 ```r
-pain_rating ~
-    s(laser_power_z, k = 10) +
-    s(trial_index_z, k = 10) +
-    s(age_z, k = 10) +
-    sex +
-    cap_size +
-    s(fooof_offset_z, k = 10) +
-    s(fooof_exponent_z, k = 10) +
-    s(global_subjid, bs = "re") +
-    s(experiment_id, bs = "re")
+# Core
+library(readr)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(purrr)
+library(tibble)
+library(mgcv)       # GAMMs (bam, gam, vis.gam)
+library(ggplot2)
+
+# Classical tests
+library(ggpubr)     # stat_compare_means (significance brackets)
+library(broom)      # tidy() on aov objects
+library(afex)       # aov_ez with Greenhouse-Geisser (optional but recommended)
 ```
 
-### Model Set (v2)
+`afex` is optional — `run_classical_tests.R` falls back to base R `aov()` if it is not installed, but without Greenhouse-Geisser sphericity correction. For any publication-quality rmANOVA, `afex` should be installed.
 
-| Model | Description |
-|-------|-------------|
-| `m00_baseline` | Baseline (no aperiodic) |
-| `m01_baseline_aperiodic` | Baseline + aperiodic offset + exponent |
-| `m02_sf_logratio` | + `s(sf_logratio_z)` (no aperiodic) |
-| `m03_sf_balance` | + `s(sf_balance_z)` (no aperiodic) |
-| `m04_slow_frac` | + `s(slow_frac_z)` (no aperiodic) |
-| `m05_tensor_slow_fast` | + `te(pow_slow_z, pow_fast_z)` |
-| `m06_sf_logratio_aperiodic` | Aperiodic baseline + `s(sf_logratio_z)` |
-| `m07_sf_balance_aperiodic` | Aperiodic baseline + `s(sf_balance_z)` |
-| `m08_slow_frac_aperiodic` | Aperiodic baseline + `s(slow_frac_z)` |
-| `m09_tensor_slow_fast_aperiodic` | Aperiodic baseline + `te(pow_slow_z, pow_fast_z)` |
-| `m10_raw_main_effects_aperiodic` | Aperiodic baseline + `s(pow_slow_z)` + `s(pow_fast_z)` |
-
-### Additional v2 Outputs
-
-- `m05_tensor_slow_fast_surface.png` — `vis.gam` contour plot of the slow×fast interaction surface
-- `m09_tensor_slow_fast_aperiodic_surface.png` — same for the aperiodic-controlled tensor model
-- Smooth effect plots for all scalar alpha metrics (both raw and aperiodic-controlled variants)
+The `%||%` null-coalescing operator is used in `compare_channel_source_gamm.R`. It is available natively in R ≥ 4.4; a fallback definition is included for older installations.
 
 ---
 
-## Random Effects Design
+## 10. Output Directory Structure
 
-Both workflows use two crossed random effects:
-
-- `s(global_subjid, bs = "re")` — accounts for between-subject differences in pain sensitivity
-- `s(experiment_id, bs = "re")` — accounts for between-experiment differences (equipment, protocol, population)
-
-`global_subjid` is an integer assigned globally across all experiments, ensuring subjects from different experiments never share the same ID. It is constructed in `merge_behavioural.R` as `row_number()` over a `distinct(experiment_id, subjid)` table.
-
----
-
-## Interpreting Model Comparisons
-
-`model_comparison.csv` (and `_v2.csv`) ranks all models by AIC. Lower AIC indicates better fit penalized for complexity.
-
-To assess whether an alpha metric improves fit over baseline:
-1. Compare `mXX_<metric>` AIC against `m00_baseline` AIC
-2. Check `dev_expl` — larger values indicate more variance explained
-3. Inspect the smooth effect plot — a flat smooth near zero suggests no effect
-
-For aperiodic-controlled models, the key comparison is `m06`/`m07`/`m08` vs. `m01_baseline_aperiodic` — this tests whether alpha interaction metrics explain pain variance *beyond* what the aperiodic component already explains.
+```
+R/analysis/behavioural_analysis/
+├── behavioural_master.csv
+├── behavioural_demo_master.csv
+├── alpha_pain_master.csv
+├── source_pain_master.csv
+├── source_ga_master.csv
+├── source_ga_fooof_master.csv
+│
+├── gamm_outputs_v2/
+│   ├── model_comparison_v2.csv
+│   ├── trial_level_fitted_values_v2.csv
+│   ├── <model_name>.rds
+│   ├── <model_name>_summary.txt
+│   └── <model_name>_diagnostics.png
+│
+├── gamm_outputs_source/
+│   ├── model_comparison_all_rois.csv
+│   ├── best_model_per_roi.csv
+│   └── <ROI>/
+│       ├── model_comparison_<ROI>.csv
+│       ├── model_input_<ROI>.csv
+│       ├── trial_level_fitted_<ROI>.csv
+│       ├── subject_ga_fitted_<ROI>.csv
+│       ├── <model_name>.rds
+│       ├── <model_name>_summary.txt
+│       ├── <model_name>_diagnostics.png
+│       ├── <model_name>_smooth_<term>.png
+│       └── obs_vs_fitted_best_<ROI>.png
+│
+├── gamm_comparison/
+│   ├── fit_quality_comparison.csv
+│   ├── effect_significance_comparison.csv
+│   ├── smooth_concordance.csv
+│   ├── fit_quality_plot.png
+│   ├── delta_aic_plot.png
+│   ├── smooth_overlay_<metric>.png
+│   ├── concordance_heatmap.png
+│   └── comparison_report.txt
+│
+└── classical_tests/
+    ├── test1_erd_ttest.csv / test1_erd_plot.png
+    ├── test2_fit_ttest.csv / test2_fit_plot.png
+    ├── test3_rmanova_<metric>.csv + test3_posthoc_<metric>.csv / test3_rmanova_plot.png
+    ├── test4_roi_anova_<model>.csv + test4_posthoc_<model>.csv / test4_roi_anova_plot.png
+    ├── test5_rayleigh_<col>.csv + test5_rayleigh_summary_<col>.csv / test5_rayleigh_plot_<col>.png
+    └── classical_tests_report.txt
+```
