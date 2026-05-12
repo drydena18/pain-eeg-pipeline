@@ -33,8 +33,8 @@ library(tibble)
 # USER SETTINGS
 # =============================================================================
 source_root  <- "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/"
-behav_file   <- "pain-eeg-pipeline/R/analysis/behavioural_analysis/behavioural_demo_master.csv"
-output_file  <- "pain-eeg-pipeline/R/analysis/behavioural_analysis/source_pain_master.csv"
+behav_file   <- "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/R/behavioural_demo_master.csv"
+output_file  <- "/cifs/seminoqicz/eegPainDatsets/CNED/da-analysis/R/source_pain_master.csv"
 source_pattern <- "_source_trial\\.csv$"
 
 # =============================================================================
