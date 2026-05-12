@@ -280,9 +280,6 @@ new_data <- bind_rows(merged_list) %>%
 message("Broadcasting GA FOOOF metrics to trial rows...")
 fooof_ga_list <- list()
 
-for (i in seq_len(nrow(merged_list |> bind_rows() |> distinct(experiment_id, subjid, subjid_uid)))) {
-  # iterate via the actual unique subjects in new_data
-}
 # Cleaner: build FOOOF GA from the file system matching the source trial CSVs
 fooof_sources <- source_files %>%
   map_dfr(function(fp) {

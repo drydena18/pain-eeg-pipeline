@@ -450,12 +450,11 @@ for (metric in rmanova_metrics) {
                           anova_table = list(correction = "GG"))
       as_tibble(fit$anova_table, rownames = "Effect") %>%
         rename(
-          num_df   = `num Df`,
-          den_df   = `den Df`,
-          MSE      = MSE,
-          F_stat   = F,
-          p_value  = `Pr(>F)`,
-          p_adj_GG = `Pr(>F)`   # GG-corrected p is reported directly by afex
+          num_df  = `num Df`,
+          den_df  = `den Df`,
+          MSE     = MSE,
+          F_stat  = F,
+          p_value = `Pr(>F)`   # afex already applies GG correction to this p-value
         ) %>%
         mutate(metric = metric, correction = "Greenhouse-Geisser")
     } else {
