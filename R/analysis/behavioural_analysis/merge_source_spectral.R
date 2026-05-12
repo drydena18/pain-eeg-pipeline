@@ -80,31 +80,31 @@ extract_experiment_name <- function(file_path) {
 
 read_one_source <- function(file_path, experiment_lookup) {
   message("Reading source: ", basename(file_path))
-  
+
   df <- read_csv(file_path, show_col_types = FALSE)
   names(df) <- clean_names_local(names(df))
-  
+
   # Normalise the subject ID column name
   if ("subject" %in% names(df) && !"subjid" %in% names(df)) {
     df <- rename(df, subjid = subject)
   }
-  
+
   missing <- setdiff(.required_source_cols, c(names(df), "subjid"))
   if ("subjid" %in% names(df)) missing <- setdiff(missing, "subject")
   if (length(missing) > 0) {
     stop("Source trial CSV missing required columns (", paste(missing, collapse = ", "),
          "): ", file_path)
   }
-  
+
   experiment_name <- extract_experiment_name(file_path)
   experiment_id   <- experiment_lookup %>%
     filter(experiment_name == !!experiment_name) %>%
     pull(experiment_id)
-  
+
   if (length(experiment_id) != 1L) {
     stop("Experiment name not found in lookup table: ", experiment_name)
   }
-  
+
   df %>%
     mutate(
       experiment_name = experiment_name,
@@ -120,7 +120,7 @@ merge_one_source_subject <- function(src_df, behav_master) {
   this_subjid <- unique(src_df$subjid)
   this_exp_id <- unique(src_df$experiment_id)
   this_exp_nm <- unique(src_df$experiment_name)
-  
+
   if (length(this_subjid) != 1L) {
     warning("Source file contains multiple subject IDs; skipping.")
     return(NULL)
@@ -129,15 +129,15 @@ merge_one_source_subject <- function(src_df, behav_master) {
     warning("Source file has ambiguous experiment ID/name; skipping.")
     return(NULL)
   }
-  
+
   behav_sub <- behav_master %>%
     filter(experiment_id == this_exp_id, subjid == this_subjid)
-  
+
   if (nrow(behav_sub) == 0L) {
     warning("No behavioural rows for subjid ", this_subjid, " in ", this_exp_nm)
     return(NULL)
   }
-  
+
   # Behavioural data has one row per trial. Source data has one row per
   # (trial, roi). Join on (experiment_name, experiment_id, subjid,
   # subjid_uid, trial) — roi is source-only.
@@ -146,14 +146,14 @@ merge_one_source_subject <- function(src_df, behav_master) {
       behav_sub,
       by = c("experiment_name", "experiment_id", "subjid", "subjid_uid", "trial")
     )
-  
+
   id_cols    <- c("experiment_name", "experiment_id", "subjid", "subjid_uid", "roi")
   behav_cols <- c("global_subjid", "age", "sex", "cap_size",
                   "trial", "trial_index", "laser_power", "pain_rating")
   src_only   <- setdiff(names(src_df),
                         c("experiment_name", "experiment_id",
                           "subjid", "subjid_uid", "trial", "roi"))
-  
+
   merged %>%
     select(all_of(id_cols), all_of(behav_cols), all_of(src_only))
 }
@@ -213,13 +213,13 @@ read_one_fooof_ga <- function(csv_path, experiment_id, subjid, subjid_uid) {
                  error = function(e) NULL)
   if (is.null(df)) return(NULL)
   names(df) <- clean_names_local(names(df))
-  
+
   # Rename roi_idx -> roi if needed (older output format)
   if ("roi_idx" %in% names(df) && !"roi" %in% names(df)) {
     df <- rename(df, roi = roi_idx)
   }
   if (!"roi" %in% names(df)) return(NULL)
-  
+
   # Keep only FOOOF metric columns + roi
   fooof_cols <- intersect(
     c("roi", "fooof_offset", "fooof_exponent", "fooof_knee",
@@ -227,7 +227,7 @@ read_one_fooof_ga <- function(csv_path, experiment_id, subjid, subjid_uid) {
     names(df)
   )
   if (length(fooof_cols) < 2) return(NULL)
-  
+
   df %>%
     select(all_of(fooof_cols)) %>%
     mutate(
@@ -291,11 +291,11 @@ fooof_sources <- source_files %>%
     exp_id_val <- experiment_lookup %>%
       filter(experiment_name == exp_name) %>% pull(experiment_id)
     if (length(exp_id_val) != 1L) return(NULL)
-    
+
     sub_str    <- str_extract(basename(fp), "sub-\\d+")
     sub_id     <- as.integer(str_remove(sub_str, "sub-"))
     sub_uid    <- sprintf("E%02d_S%03d", exp_id_val, sub_id)
-    
+
     read_one_fooof_ga(fooof_path, exp_id_val, sub_id, sub_uid)
   }) %>%
   bind_rows()
@@ -320,7 +320,7 @@ if (nrow(fooof_sources) > 0) {
 if (file.exists(output_file)) {
   old_data <- read_csv(output_file, show_col_types = FALSE)
   names(old_data) <- clean_names_local(names(old_data))
-  
+
   old_data <- old_data %>%
     mutate(
       experiment_name = as.character(experiment_name),
@@ -335,14 +335,14 @@ if (file.exists(output_file)) {
       trial_index     = as.integer(trial_index),
       roi             = as.character(roi)
     )
-  
+
   all_cols <- union(names(old_data), names(new_data))
   for (col in setdiff(all_cols, names(old_data))) old_data[[col]] <- NA
   for (col in setdiff(all_cols, names(new_data))) new_data[[col]] <- NA
-  
+
   old_data <- select(old_data, all_of(all_cols))
   new_data <- select(new_data, all_of(all_cols))
-  
+
   updated_master <- old_data %>%
     anti_join(
       new_data %>% select(experiment_id, subjid, trial, roi),

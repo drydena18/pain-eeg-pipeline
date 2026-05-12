@@ -107,7 +107,7 @@ get_smooth_effect <- function(mod, term_z) {
     nd_range <- range(mod$model[[term_z]], na.rm = TRUE)
     nd <- data.frame(x = seq(nd_range[1], nd_range[2], length.out = 200))
     names(nd) <- term_z
-    
+
     # Fill all other predictors at their reference level
     for (v in names(mod$model)) {
       if (v == term_z || v == "pain_rating") next
@@ -117,7 +117,7 @@ get_smooth_effect <- function(mod, term_z) {
         nd[[v]] <- 0  # z-scored predictors: 0 = mean
       }
     }
-    
+
     pred  <- predict(mod, newdata = nd, type = "terms", se.fit = TRUE,
                      terms = paste0("s(", term_z, ")"))
     tibble(
@@ -236,25 +236,25 @@ for (i in seq_len(nrow(concept_map))) {
   concept <- concept_map$concept[i]
   cm      <- concept_map$channel_model[i]
   sm      <- concept_map$source_model[i]
-  
+
   if (is.na(term_z)) next
-  
+
   ch_mod <- load_rds_safe(file.path(channel_out_dir, paste0(cm, ".rds")))
   ch_eff <- get_smooth_effect(ch_mod, term_z)
   if (is.null(ch_eff)) next
-  
+
   for (this_roi in all_rois) {
     src_mod <- load_rds_safe(
       file.path(source_out_dir, this_roi, paste0(sm, ".rds"))
     )
     src_eff <- get_smooth_effect(src_mod, term_z)
     if (is.null(src_eff)) next
-    
+
     # Interpolate source onto channel x-grid for correlation
     src_fit_interp <- approx(src_eff$x_z, src_eff$fit, xout = ch_eff$x_z,
                              rule = 2)$y
     r <- cor(ch_eff$fit, src_fit_interp, use = "complete.obs")
-    
+
     concordance_rows[[conc_idx]] <- tibble(
       concept = concept, term_z = term_z, roi = this_roi,
       r_concordance = r,
@@ -286,7 +286,7 @@ if (nrow(fit_quality) > 0) {
       label = if_else(domain == "Source",
                       paste0("Source\n(", best_roi, ")"), domain)
     )
-  
+
   p_dev <- ggplot(fq_long, aes(x = reorder(concept, dev_expl), y = dev_expl,
                                fill = domain)) +
     geom_col(position = position_dodge(width = 0.7), width = 0.65) +
@@ -295,10 +295,10 @@ if (nrow(fit_quality) > 0) {
     labs(title = "Deviance Explained: Channel vs Source GAMM",
          x = NULL, y = "Deviance explained", fill = "Domain") +
     theme_minimal(base_size = 11)
-  
+
   ggsave(file.path(compare_out_dir, "fit_quality_plot.png"),
          p_dev, width = 8, height = 5, dpi = 200)
-  
+
   # ── 5b. Δ AIC plot (positive = source beats channel) ─────────────────────
   p_aic <- ggplot(fit_quality,
                   aes(x = reorder(concept, delta_AIC_chan_minus_src),
@@ -313,7 +313,7 @@ if (nrow(fit_quality) > 0) {
     labs(title = "Δ AIC (Channel − Source): positive = source fits better",
          x = NULL, y = "Δ AIC (channel − source)", fill = NULL) +
     theme_minimal(base_size = 11)
-  
+
   ggsave(file.path(compare_out_dir, "delta_aic_plot.png"),
          p_aic, width = 8, height = 5, dpi = 200)
 }
@@ -327,15 +327,15 @@ for (i in seq_len(nrow(unique_terms))) {
   concept <- unique_terms$concept[i]
   cm      <- unique_terms$channel_model[i]
   sm      <- unique_terms$source_model[i]
-  
+
   ch_mod <- load_rds_safe(file.path(channel_out_dir, paste0(cm, ".rds")))
   ch_eff <- get_smooth_effect(ch_mod, term_z)
-  
+
   eff_list <- list()
   if (!is.null(ch_eff)) {
     eff_list[["Channel"]] <- ch_eff %>% mutate(roi = "Channel")
   }
-  
+
   for (this_roi in all_rois) {
     src_mod <- load_rds_safe(
       file.path(source_out_dir, this_roi, paste0(sm, ".rds"))
@@ -345,12 +345,12 @@ for (i in seq_len(nrow(unique_terms))) {
       eff_list[[this_roi]] <- src_eff %>% mutate(roi = this_roi)
     }
   }
-  
+
   if (length(eff_list) < 2L) next
-  
+
   eff_df <- bind_rows(eff_list) %>%
     mutate(is_channel = roi == "Channel")
-  
+
   p_smooth <- ggplot(eff_df, aes(x = x_z, y = fit,
                                  colour = roi, linetype = is_channel,
                                  fill = roi)) +
@@ -365,7 +365,7 @@ for (i in seq_len(nrow(unique_terms))) {
          y = "Partial effect on pain rating",
          colour = "Domain / ROI", fill = "Domain / ROI") +
     theme_minimal(base_size = 11)
-  
+
   out_name <- paste0("smooth_overlay_", str_replace_all(concept, "\\s+", "_"), ".png")
   ggsave(file.path(compare_out_dir, out_name),
          p_smooth, width = 8, height = 5, dpi = 200)
@@ -386,7 +386,7 @@ if (nrow(concordance) > 0) {
          x = "Source ROI", y = NULL) +
     theme_minimal(base_size = 10) +
     theme(axis.text.x = element_text(angle = 30, hjust = 1))
-  
+
   ggsave(file.path(compare_out_dir, "concordance_heatmap.png"),
          p_heatmap, width = max(6, length(all_rois) * 1.2 + 2), height = 6,
          dpi = 200)
@@ -411,8 +411,8 @@ if (nrow(fit_quality) > 0) {
     r <- fit_quality[i, ]
     winner <- if (!is.na(r$delta_AIC_chan_minus_src) &&
                   r$delta_AIC_chan_minus_src > 2) "SOURCE" else
-                    if (!is.na(r$delta_AIC_chan_minus_src) &&
-                        r$delta_AIC_chan_minus_src < -2) "CHANNEL" else "TIED"
+              if (!is.na(r$delta_AIC_chan_minus_src) &&
+                  r$delta_AIC_chan_minus_src < -2) "CHANNEL" else "TIED"
     report_lines <- c(report_lines, sprintf(
       "  %-25s  Chan devexpl=%.3f  Src devexpl=%.3f  ΔAIC=%.1f  → %s (best ROI: %s)",
       r$concept,
@@ -426,8 +426,8 @@ if (nrow(fit_quality) > 0) {
 }
 
 report_lines <- c(report_lines, "",
-                  "2. SMOOTH EFFECT CONCORDANCE",
-                  strrep("-", 40)
+  "2. SMOOTH EFFECT CONCORDANCE",
+  strrep("-", 40)
 )
 if (nrow(concordance) > 0) {
   conc_summary <- concordance %>%
@@ -448,34 +448,34 @@ if (nrow(concordance) > 0) {
 }
 
 report_lines <- c(report_lines, "",
-                  "3. DOMAIN RECOMMENDATION",
-                  strrep("-", 40)
+  "3. DOMAIN RECOMMENDATION",
+  strrep("-", 40)
 )
 
 if (nrow(fit_quality) > 0) {
   n_src_better <- sum(fit_quality$delta_AIC_chan_minus_src > 2, na.rm = TRUE)
   n_ch_better  <- sum(fit_quality$delta_AIC_chan_minus_src < -2, na.rm = TRUE)
   n_tied       <- nrow(fit_quality) - n_src_better - n_ch_better
-  
+
   report_lines <- c(report_lines,
-                    sprintf("  Source better (ΔAIC > 2) : %d / %d models", n_src_better, nrow(fit_quality)),
-                    sprintf("  Channel better (ΔAIC < -2): %d / %d models", n_ch_better, nrow(fit_quality)),
-                    sprintf("  Tied (|ΔAIC| ≤ 2)         : %d / %d models", n_tied, nrow(fit_quality))
+    sprintf("  Source better (ΔAIC > 2) : %d / %d models", n_src_better, nrow(fit_quality)),
+    sprintf("  Channel better (ΔAIC < -2): %d / %d models", n_ch_better, nrow(fit_quality)),
+    sprintf("  Tied (|ΔAIC| ≤ 2)         : %d / %d models", n_tied, nrow(fit_quality))
   )
   if (n_src_better > n_ch_better) {
     report_lines <- c(report_lines, "",
-                      "  Overall: SOURCE-SPACE metrics provide better GAMM fit.",
-                      "  Interpretation: localised source reconstruction reduces",
-                      "  noise and improves the alpha-pain relationship signal.")
+      "  Overall: SOURCE-SPACE metrics provide better GAMM fit.",
+      "  Interpretation: localised source reconstruction reduces",
+      "  noise and improves the alpha-pain relationship signal.")
   } else if (n_ch_better > n_src_better) {
     report_lines <- c(report_lines, "",
-                      "  Overall: CHANNEL-SPACE metrics provide better GAMM fit.",
-                      "  Interpretation: the spatial mixing at the scalp level may",
-                      "  capture integrative signals not resolved by parcellation.")
+      "  Overall: CHANNEL-SPACE metrics provide better GAMM fit.",
+      "  Interpretation: the spatial mixing at the scalp level may",
+      "  capture integrative signals not resolved by parcellation.")
   } else {
     report_lines <- c(report_lines, "",
-                      "  Overall: Channel and source provide equivalent GAMM fit.",
-                      "  Both domains appear to capture the alpha-pain relationship.")
+      "  Overall: Channel and source provide equivalent GAMM fit.",
+      "  Both domains appear to capture the alpha-pain relationship.")
   }
 }
 

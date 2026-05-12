@@ -74,19 +74,19 @@ read_one_ga <- function(file_path, experiment_lookup) {
                  error = function(e) { warning(file_path, ": ", conditionMessage(e)); NULL })
   if (is.null(df)) return(NULL)
   names(df) <- clean_names_local(names(df))
-  
+
   # Normalise subject column
   if ("subject" %in% names(df) && !"subjid" %in% names(df)) df <- rename(df, subjid = subject)
   if (!"subjid" %in% names(df)) { warning("No subjid column: ", file_path); return(NULL) }
   if (!"roi"    %in% names(df)) { warning("No roi column: ",    file_path); return(NULL) }
-  
+
   exp_name <- tryCatch(extract_experiment_name(file_path),
                        error = function(e) { warning(conditionMessage(e)); NA_character_ })
   if (is.na(exp_name)) return(NULL)
-  
+
   exp_id <- experiment_lookup %>% filter(experiment_name == exp_name) %>% pull(experiment_id)
   if (length(exp_id) != 1L) { warning("Experiment not in lookup: ", exp_name); return(NULL) }
-  
+
   df %>% mutate(
     experiment_name = exp_name,
     experiment_id   = exp_id,
@@ -126,18 +126,18 @@ message("Found ", length(fooof_files), " FOOOF GA files.")
 # =============================================================================
 if (length(ga_files) > 0L) {
   ga_list <- map(ga_files, ~read_one_ga(.x, experiment_lookup)) %>% compact()
-  
+
   if (length(ga_list) > 0L) {
     ga_master <- bind_rows(ga_list) %>%
       mutate(across(where(is.numeric), ~suppressWarnings(as.numeric(.x)))) %>%
       arrange(experiment_id, subjid, roi)
-    
+
     # Join demographics
     if (!is.null(behav_demo)) {
       ga_master <- ga_master %>%
         left_join(behav_demo, by = c("experiment_id", "subjid", "subjid_uid"))
     }
-    
+
     dir.create(dirname(out_ga), recursive = TRUE, showWarnings = FALSE)
     write_csv(ga_master, out_ga)
     message("Saved source_ga_master: ", out_ga)
@@ -157,17 +157,17 @@ if (length(ga_files) > 0L) {
 # =============================================================================
 if (length(fooof_files) > 0L) {
   fooof_list <- map(fooof_files, ~read_one_ga(.x, experiment_lookup)) %>% compact()
-  
+
   if (length(fooof_list) > 0L) {
     fooof_master <- bind_rows(fooof_list) %>%
       mutate(across(where(is.numeric), ~suppressWarnings(as.numeric(.x)))) %>%
       arrange(experiment_id, subjid, roi)
-    
+
     if (!is.null(behav_demo)) {
       fooof_master <- fooof_master %>%
         left_join(behav_demo, by = c("experiment_id", "subjid", "subjid_uid"))
     }
-    
+
     write_csv(fooof_master, out_ga_fooof)
     message("Saved source_ga_fooof_master: ", out_ga_fooof)
     message("  Rows    : ", nrow(fooof_master))
