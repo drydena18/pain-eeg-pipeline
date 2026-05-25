@@ -45,8 +45,16 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 
-from source_default import source_default
+# -- Ensure python/source/ is on sys.path -----
+# Makes source_default, source_core, and all src_*.py importable regardless of
+# the working directory the script in launched from. Must precede local imports.
+_this_dir = os.path.dirname(os.path.abspath(__file__))
+if _this_dir not in sys.path:
+    sys.path.insert(0, _this_dir)
+
+from source_default import source_default # noqa: E402
 
 def exp01_source(subjects_override = None, cfg_path: str = None):
     """
@@ -63,9 +71,11 @@ def exp01_source(subjects_override = None, cfg_path: str = None):
     cfg_path = "/home/UWO/darsenea/Documents/GitHub/pain-alpha-dynamics/config/exp01.json"
 
     if cfg_path is None:
-        this_dir = os.path.dirname(os.path.abspath(__file__))
-        repo_root = os.path.dirname(os.path.join(this_dir, "..", ".."))
+        repo_root = os.path.dirname(os.path.join(_this_dir, "..", ".."))
         cfg_path = os.path.join(repo_root, "config", f"{exp_id}.json")
+
+    print(f"[exp01_source] Script dir: {_this_dir}")
+    print(f"[exp01_source] Config path: {cfg_path}")
 
     if not os.path.exists(cfg_path):
         raise FileNotFoundError(
