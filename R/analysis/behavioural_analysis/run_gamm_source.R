@@ -45,8 +45,8 @@ library(ggplot2)
 # =============================================================================
 # USER SETTINGS
 # =============================================================================
-data_file      <- "pain-eeg-pipeline/R/analysis/behavioural_analysis/source_pain_master.csv"
-out_dir        <- "pain-eeg-pipeline/R/analysis/behavioural_analysis/gamm_outputs_source"
+data_file      <- "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/R/source_pain_master.csv"
+out_dir        <- "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/R/gamm_outputs_source"
 min_fooof_r2   <- 0.80
 nthreads_use   <- 4L
 use_discrete   <- TRUE
@@ -67,6 +67,15 @@ clean_names_local <- function(x) {
 zscore <- function(x) as.numeric(scale(x))
 
 safe_factor <- function(x) as.factor(as.character(x))
+
+# safe_k: cap smooth complexity at the number of unique values minus one.
+# Prevents "fewer unique covariate combinations than specified max df" errors
+# for discrete covariates (laser_power, fooof columns, etc.).
+# k sets the ceiling; actual EDF is estimated by fREML + select=TRUE.
+safe_k <- function(x, k_max = 10, k_min = 3) {
+  n_unique <- length(unique(na.omit(x)))
+  max(k_min, min(k_max, n_unique - 1L))
+}
 
 extract_model_info <- function(mod, nm, roi) {
   tibble(
@@ -98,11 +107,14 @@ plot_smooth_if_present <- function(model, term, file_path) {
 }
 
 # Fit one bam() with graceful failure — returns NULL on error.
+# select=TRUE enables automatic smooth shrinkage (double penalty + fREML),
+# consistent with the channel-space v2 models.
 safe_bam <- function(formula, data, nm, roi) {
   tryCatch(
     bam(formula  = formula,
         data     = data,
         method   = "fREML",
+        select   = TRUE,
         discrete = use_discrete,
         nthreads = nthreads_use),
     error = function(e) {
@@ -155,27 +167,19 @@ message("ROIs found: ", paste(all_rois, collapse = ", "))
 
 # =============================================================================
 # BASE FORMULAS
-# These are constructed once and shared across ROIs.
-# All continuous predictors use z-scored versions; random effects
-# account for subject and experiment clustering.
+# Constructed inside the ROI loop (after z-scoring) so safe_k() can operate
+# on each ROI's actual data. age_z is entered as a linear fixed effect, not a
+# smooth — it is a between-subject variable and non-estimable as a nonlinear
+# smooth at N ≈ 30–40 subjects (mirrors v2 channel pipeline convention).
 # =============================================================================
-base_formula <- pain_rating ~
-  s(laser_power_z,  k = 10) +
-  s(trial_index_z,  k = 10) +
-  s(age_z,          k = 10) +
-  sex + cap_size +
-  s(global_subjid,  bs = "re") +
-  s(experiment_id,  bs = "re")
-
-base_formula_fooof <- update(base_formula, . ~ . +
-  s(fooof_offset_z,   k = 10) +
-  s(fooof_exponent_z, k = 10))
+# (base_formula and base_formula_fooof are assigned inside the per-ROI loop)
 
 # =============================================================================
 # HELPER: build a named list of model definitions for one ROI's data.
 # Each element is a one-sided update formula for the predictor of interest.
-# Models that require columns absent from the data are silently skipped
-# by safe_bam returning NULL.
+# k = 10 is a ceiling for predictor smooths; select = TRUE + fREML shrinks
+# unused complexity. Models requiring absent columns fail gracefully via
+# safe_bam → NULL.
 # =============================================================================
 model_definitions <- list(
   m00_baseline          = NULL,     # base formula only
@@ -288,6 +292,48 @@ for (this_roi in all_rois) {
   write_csv(df_roi,
             file.path(roi_dir, paste0("model_input_", this_roi, ".csv")))
 
+  # ── Build base formulas using safe_k on this ROI's actual data ────────────
+  # safe_k prevents "fewer unique covariate combinations" errors for discrete
+  # predictors (especially laser_power, which is experiment-specific).
+  # age_z is linear (between-subject; nonlinear smooth unreliable at N ~ 30-40).
+  # Fixed effects and random effects are included conditionally: a factor with
+  # only one level has 0 degrees of freedom and causes "contrasts not defined"
+  # errors. A random effect with one level is unidentifiable (zero variance).
+  # This mirrors the level-guards in build_v2_formula() in the channel pipeline.
+  k_laser <- safe_k(df_roi$laser_power_z)
+  k_trial <- safe_k(df_roi$trial_index_z)
+
+  fixed_terms <- "age_z"
+  if (nlevels(df_roi$sex)      > 1L) fixed_terms <- c(fixed_terms, "sex")
+  if (nlevels(df_roi$cap_size) > 1L) fixed_terms <- c(fixed_terms, "cap_size")
+
+  re_terms <- character(0)
+  if (n_distinct(df_roi$global_subjid) > 1L)
+    re_terms <- c(re_terms, "s(global_subjid, bs = 're')")
+  if (n_distinct(df_roi$experiment_id) > 1L)
+    re_terms <- c(re_terms, "s(experiment_id,  bs = 're')")
+
+  base_formula <- as.formula(paste(
+    "pain_rating ~",
+    sprintf("s(laser_power_z, k = %d)", k_laser), "+",
+    sprintf("s(trial_index_z, k = %d)", k_trial), "+",
+    paste(c(fixed_terms, re_terms), collapse = " + ")
+  ))
+
+  # FOOOF-extended base: include aperiodic smooths only when columns exist
+  if (all(c("fooof_offset_z", "fooof_exponent_z") %in% names(df_roi)) &&
+      sum(!is.na(df_roi$fooof_offset_z)) > 1 &&
+      sum(!is.na(df_roi$fooof_exponent_z)) > 1) {
+    k_offset   <- safe_k(df_roi$fooof_offset_z)
+    k_exponent <- safe_k(df_roi$fooof_exponent_z)
+    base_formula_fooof <- update(base_formula, as.formula(sprintf(
+      ". ~ . + s(fooof_offset_z, k = %d) + s(fooof_exponent_z, k = %d)",
+      k_offset, k_exponent
+    )))
+  } else {
+    base_formula_fooof <- base_formula   # FOOOF models will fit on base only
+  }
+
   # ── Fit models ────────────────────────────────────────────────────────────
   model_list <- list()
 
@@ -364,8 +410,21 @@ for (this_roi in all_rois) {
     )
 
   for (nm in names(model_list)) {
-    fitted_df[[paste0(nm, "_fitted")]] <- fitted(model_list[[nm]])
-    fitted_df[[paste0(nm, "_resid")]]  <- residuals(model_list[[nm]])
+    # Row-index alignment: models with optional predictors (delta_ERD, n2p2_amp,
+    # sin/cos phase) fit on fewer rows than df_roi when those columns have NAs.
+    # na.action = na.omit (mgcv default) silently drops rows, making direct
+    # vector assignment error on length mismatch. Use rownames to align.
+    n_rows     <- nrow(fitted_df)
+    fit_vals   <- rep(NA_real_, n_rows)
+    resid_vals <- rep(NA_real_, n_rows)
+    mod_rows   <- as.integer(rownames(model_list[[nm]]$model))
+    common     <- intersect(mod_rows, seq_len(n_rows))
+    if (length(common) > 0) {
+      fit_vals[common]   <- fitted(model_list[[nm]])
+      resid_vals[common] <- residuals(model_list[[nm]])
+    }
+    fitted_df[[paste0(nm, "_fitted")]] <- fit_vals
+    fitted_df[[paste0(nm, "_resid")]]  <- resid_vals
   }
 
   write_csv(fitted_df,

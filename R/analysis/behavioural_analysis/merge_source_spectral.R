@@ -32,9 +32,9 @@ library(tibble)
 # =============================================================================
 # USER SETTINGS
 # =============================================================================
-source_root  <- "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/"
+source_root  <- "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis"
 behav_file   <- "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/R/behavioural_demo_master.csv"
-output_file  <- "/cifs/seminoqicz/eegPainDatsets/CNED/da-analysis/R/source_pain_master.csv"
+output_file  <- "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/R/source_pain_master.csv"
 source_pattern <- "_source_trial\\.csv$"
 
 # =============================================================================
@@ -66,7 +66,9 @@ clean_names_local <- function(x) {
 
 extract_experiment_name <- function(file_path) {
   # Path pattern: .../da-analysis/<exp_name>/source/sub-XXX/csv/...
-  exp_name <- str_match(file_path, "da-analysis/([^/]+)/source/")[, 2]
+  # Use /+ to tolerate double slashes produced when source_root has a
+  # trailing slash and list.files() appends another one.
+  exp_name <- str_match(file_path, "da-analysis/+([^/]+)/source/")[, 2]
   if (is.na(exp_name)) {
     stop("Could not extract experiment_name from path: ", file_path)
   }
@@ -294,8 +296,7 @@ fooof_sources <- source_files %>%
     sub_uid    <- sprintf("E%02d_S%03d", exp_id_val, sub_id)
 
     read_one_fooof_ga(fooof_path, exp_id_val, sub_id, sub_uid)
-  }) %>%
-  bind_rows()
+  })   # map_dfr already row-binds; bind_rows() here is redundant
 
 if (nrow(fooof_sources) > 0) {
   new_data <- new_data %>%

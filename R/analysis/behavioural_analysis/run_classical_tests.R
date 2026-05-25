@@ -33,6 +33,7 @@ suppressPackageStartupMessages({
   library(stringr)
   library(purrr)
   library(tibble)
+  library(forcats)
   library(ggplot2)
   library(ggpubr)    # for stat_compare_means and significance brackets
   library(broom)     # for tidy() on aov objects (Test 4)
@@ -46,13 +47,20 @@ if (.afex_ok) library(afex)
 # =============================================================================
 # USER SETTINGS
 # =============================================================================
-source_master_file  <- "pain-eeg-pipeline/R/analysis/behavioural_analysis/source_pain_master.csv"
-channel_master_file <- "pain-eeg-pipeline/R/analysis/behavioural_analysis/alpha_pain_master.csv"
-channel_fitted_file <- "pain-eeg-pipeline/R/analysis/behavioural_analysis/gamm_outputs_v2/trial_level_fitted_values_v2.csv"
-source_out_dir      <- "pain-eeg-pipeline/R/analysis/behavioural_analysis/gamm_outputs_source"
-out_dir             <- "pain-eeg-pipeline/R/analysis/behavioural_analysis/classical_tests"
+source_master_file  <- "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/R/source_pain_master.csv"
+channel_master_file <- "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/R/alpha_pain_master.csv"
+channel_fitted_file <- "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/R/figures_v2/trial_level_fitted_values_v2.csv"
+source_out_dir      <- "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/R/gamm_outputs_source"
+out_dir             <- "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/R/classical_tests"
 
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+# Per-test output subdirectories
+out1 <- file.path(out_dir, "test1"); dir.create(out1, showWarnings = FALSE)
+out2 <- file.path(out_dir, "test2"); dir.create(out2, showWarnings = FALSE)
+out3 <- file.path(out_dir, "test3"); dir.create(out3, showWarnings = FALSE)
+out4 <- file.path(out_dir, "test4"); dir.create(out4, showWarnings = FALSE)
+out5 <- file.path(out_dir, "test5"); dir.create(out5, showWarnings = FALSE)
 
 # Which source metrics to test in rmANOVA (Test 3)
 rmanova_metrics <- c("BI_pre", "CoG_pre", "delta_ERD")
@@ -69,7 +77,7 @@ concept_pairs <- tribble(
   "Log ratio",       "m02_sf_logratio",          "m02_lr_pre",
   "Balance index",   "m03_sf_balance",            "m01_bi_pre",
   "Slow fraction",   "m04_slow_frac",             "m03_cog_pre",
-  "Tensor slow×fast","m05_tensor_slow_fast",       "m05_tensor_slow_fast"
+  "Tensor slow×fast","m15_tensor_slow_fast",       "m05_tensor_slow_fast"
 )
 
 alpha_level <- 0.05   # significance threshold for all tests
@@ -181,6 +189,14 @@ if (is.null(src_master)) stop("source_pain_master.csv not found.")
 all_rois <- sort(unique(src_master$roi))
 message("ROIs: ", paste(all_rois, collapse = ", "))
 
+# Hemisphere filter list — drives all ROI-stratified plot sections.
+# Each element produces one figure: combined, left hemisphere, right hemisphere.
+hemi_filters <- list(
+  list(suffix = "",    label = "All ROIs",         rois = all_rois),
+  list(suffix = "_lh", label = "Left hemisphere",  rois = all_rois[str_ends(all_rois, "-lh")]),
+  list(suffix = "_rh", label = "Right hemisphere", rois = all_rois[str_ends(all_rois, "-rh")])
+)
+
 # Subject-level GA per ROI (used by Tests 1, 3, 4)
 src_subject_ga <- src_master %>%
   group_by(experiment_id, subjid_uid, roi) %>%
@@ -238,48 +254,54 @@ test1_results <- bind_rows(test1_rows) %>%
          sig   = sig_label(p_adj)) %>%
   arrange(roi, band)
 
-write_csv(test1_results, file.path(out_dir, "test1_erd_ttest.csv"))
+write_csv(test1_results, file.path(out1, "test1_erd_ttest.csv"))
 message("  Saved test1_erd_ttest.csv  (", nrow(test1_results), " rows)")
 
-# ── Test 1 plot: paired boxplot pre vs post ──────────────────────────────────
-test1_long <- src_master %>%
-  select(subjid_uid, roi, experiment_id,
-         any_of(c("pow_slow", "pow_slow_post",
-                  "pow_fast", "pow_fast_post"))) %>%
-  group_by(subjid_uid, roi, experiment_id) %>%
-  summarise(across(everything(), ~mean(.x, na.rm = TRUE)), .groups = "drop") %>%
-  pivot_longer(
-    cols      = any_of(c("pow_slow", "pow_slow_post",
-                         "pow_fast", "pow_fast_post")),
-    names_to  = "measure",
-    values_to = "power"
-  ) %>%
-  mutate(
-    band   = if_else(str_detect(measure, "slow"), "Slow alpha", "Fast alpha"),
-    window = if_else(str_detect(measure, "post"), "Post-stim", "Pre-stim"),
-    window = factor(window, levels = c("Pre-stim", "Post-stim"))
-  ) %>%
-  filter(!is.na(power))
+# ── Test 1 plot: Cohen's d heatmap — combined + per hemisphere ───────────────
+if (exists("test1_results") && nrow(test1_results) > 0) {
+  t1_heat <- test1_results %>%
+    filter(!is.na(cohens_d)) %>%
+    mutate(band = factor(band,
+                         levels = c("slow", "fast", "total"),
+                         labels = c("Slow alpha", "Fast alpha", "Total alpha")))
 
-if (nrow(test1_long) > 0) {
-  p1 <- ggplot(test1_long, aes(x = window, y = power, fill = window)) +
-    geom_boxplot(outlier.size = 0.5, width = 0.55, alpha = 0.8) +
-    geom_line(aes(group = subjid_uid), alpha = 0.2, linewidth = 0.3, colour = "grey40") +
-    stat_compare_means(method = "t.test", paired = TRUE,
-                       label = "p.signif", size = 3.5,
-                       comparisons = list(c("Pre-stim", "Post-stim"))) +
-    facet_grid(band ~ roi, scales = "free_y") +
-    scale_fill_manual(values = c("Pre-stim" = "steelblue", "Post-stim" = "tomato")) +
-    labs(title = "Test 1: Pre vs Post Stimulus Alpha Power by ROI",
-         subtitle = "Paired t-test; * p<0.05, ** p<0.01, *** p<0.001 (FDR corrected)",
-         x = NULL, y = "Alpha power (source units)", fill = NULL) +
-    theme_minimal(base_size = 10) +
-    theme(legend.position = "top",
-          axis.text.x = element_text(angle = 25, hjust = 1))
+  d_lim <- max(abs(t1_heat$cohens_d), na.rm = TRUE)
 
-  ggsave(file.path(out_dir, "test1_erd_plot.png"),
-         p1, width = max(8, length(all_rois) * 2), height = 6, dpi = 200)
-  message("  Saved test1_erd_plot.png")
+  for (hf in hemi_filters) {
+    t1_h <- t1_heat %>%
+      filter(roi %in% hf$rois) %>%
+      mutate(roi = fct_rev(factor(roi)))
+    if (nrow(t1_h) == 0) next
+
+    title_suffix <- if (hf$suffix == "") "" else paste0(" \u2014 ", hf$label)
+
+    p1 <- ggplot(t1_h, aes(x = band, y = roi, fill = cohens_d)) +
+      geom_tile(colour = "white", linewidth = 0.4) +
+      geom_text(aes(label = sig), size = 3, colour = "black") +
+      scale_fill_gradient2(low = "#2166ac", mid = "white", high = "#d6604d",
+                           midpoint = 0, limits = c(-d_lim, d_lim),
+                           name = "Cohen's d") +
+      labs(title    = paste0("Test 1: ERD Significance", title_suffix),
+           subtitle = "Cohen's d (pre vs post stimulus); FDR-corrected (* p<0.05  ** p<0.01  *** p<0.001)",
+           x = NULL, y = NULL) +
+      theme_bw(base_size = 10) +
+      theme(plot.background   = element_rect(fill = "white", colour = NA),
+            panel.background  = element_rect(fill = "white", colour = NA),
+            plot.margin       = margin(t = 14, r = 14, b = 6, l = 10),
+            plot.title        = element_text(size = 10, hjust = 0),
+            plot.subtitle     = element_text(size = 8,  hjust = 0),
+            axis.text.x       = element_text(size = 10),
+            axis.text.y       = element_text(size = 7),
+            legend.position   = "right")
+
+    out_name <- paste0("test1_erd_plot", hf$suffix, ".png")
+    ggsave(file.path(out1, out_name),
+           p1,
+           width  = 6,
+           height = max(5, n_distinct(t1_h$roi) * 0.25 + 2),
+           dpi = 200, limitsize = FALSE)
+    message("  Saved ", out_name)
+  }
 }
 
 # =============================================================================
@@ -361,7 +383,7 @@ test2_results <- bind_rows(test2_rows) %>%
   mutate(p_adj = p.adjust(p_value, method = "fdr"),
          sig   = sig_label(p_adj))
 
-write_csv(test2_results, file.path(out_dir, "test2_fit_ttest.csv"))
+write_csv(test2_results, file.path(out2, "test2_fit_ttest.csv"))
 message("  Saved test2_fit_ttest.csv  (", nrow(test2_results), " rows)")
 
 # ── Test 2 plot: paired dot-and-line ─────────────────────────────────────────
@@ -398,11 +420,16 @@ if (nrow(test2_plot_df) > 0) {
     labs(title    = "Test 2: Per-Subject R² — Channel vs Source GAMM",
          subtitle = "Lines connect the same subject; diamond = mean ± SE",
          x = NULL, y = "Per-subject R²", colour = NULL) +
-    theme_minimal(base_size = 10) +
-    theme(legend.position = "none",
-          axis.text.x = element_text(angle = 20, hjust = 1))
+    theme_bw(base_size = 10) +
+    theme(plot.background   = element_rect(fill = "white", colour = NA),
+          panel.background  = element_rect(fill = "white", colour = NA),
+          plot.margin       = margin(t = 14, r = 14, b = 6, l = 10),
+          plot.title        = element_text(size = 10, hjust = 0),
+          plot.subtitle     = element_text(size = 8,  hjust = 0),
+          legend.position   = "right",
+          axis.text.x       = element_text(angle = 20, hjust = 1))
 
-  ggsave(file.path(out_dir, "test2_fit_plot.png"),
+  ggsave(file.path(out2, "test2_fit_plot.png"),
          p2, width = max(8, nrow(concept_pairs) * 3), height = 5, dpi = 200)
   message("  Saved test2_fit_plot.png")
 }
@@ -485,8 +512,8 @@ for (metric in rmanova_metrics) {
   posthoc <- pairwise_fdr(rm_df, "value", "roi", "subjid_uid")
 
   out_df <- list(anova = anova_tbl, posthoc = posthoc)
-  write_csv(anova_tbl, file.path(out_dir, paste0("test3_rmanova_", metric, ".csv")))
-  write_csv(posthoc,   file.path(out_dir, paste0("test3_posthoc_", metric, ".csv")))
+  write_csv(anova_tbl, file.path(out3, paste0("test3_rmanova_", metric, ".csv")))
+  write_csv(posthoc,   file.path(out3, paste0("test3_posthoc_", metric, ".csv")))
   message("  Saved test3_rmanova_", metric, ".csv + test3_posthoc_", metric, ".csv")
 
   test3_plot_list[[metric]] <- rm_df %>% mutate(metric = metric)
@@ -496,20 +523,45 @@ for (metric in rmanova_metrics) {
 if (length(test3_plot_list) > 0L) {
   test3_plot_df <- bind_rows(test3_plot_list)
 
-  p3 <- ggplot(test3_plot_df, aes(x = roi, y = value, fill = roi)) +
-    geom_boxplot(outlier.size = 0.5, alpha = 0.8, width = 0.6) +
-    geom_jitter(width = 0.12, size = 0.8, alpha = 0.4) +
-    facet_wrap(~metric, scales = "free_y", ncol = length(rmanova_metrics)) +
-    labs(title  = "Test 3: Source Metrics Across ROIs (rmANOVA)",
-         subtitle = "Each point = one subject GA mean; boxes = group distribution",
-         x = "ROI", y = "Metric value", fill = "ROI") +
-    theme_minimal(base_size = 10) +
-    theme(legend.position = "none",
-          axis.text.x = element_text(angle = 30, hjust = 1))
+  # One PNG per metric × hemisphere (combined, lh, rh).
+  for (this_metric in unique(test3_plot_df$metric)) {
+    for (hf in hemi_filters) {
+      t3_m <- test3_plot_df %>%
+        filter(metric == this_metric, roi %in% hf$rois) %>%
+        mutate(roi = fct_rev(factor(roi)))
+      if (nrow(t3_m) == 0) next
 
-  ggsave(file.path(out_dir, "test3_rmanova_plot.png"),
-         p3, width = length(rmanova_metrics) * 4 + 2, height = 5, dpi = 200)
-  message("  Saved test3_rmanova_plot.png")
+      title_suffix <- if (hf$suffix == "") "" else paste0(" \u2014 ", hf$label)
+
+      p3 <- ggplot(t3_m, aes(x = value, y = roi)) +
+        geom_boxplot(outlier.size = 0.5, alpha = 0.85, width = 0.6,
+                     fill = "steelblue", colour = "grey20") +
+        geom_jitter(aes(colour = subjid_uid),
+                    height = 0.12, size = 1.2, alpha = 0.7) +
+        labs(title    = paste0("Test 3: ", this_metric, " Across ROIs",
+                               title_suffix, " (rmANOVA)"),
+             subtitle = "Each point = one subject grand-average; boxes = group distribution",
+             x = this_metric, y = NULL, colour = "Subject") +
+        theme_bw(base_size = 10) +
+        theme(plot.background   = element_rect(fill = "white", colour = NA),
+              panel.background  = element_rect(fill = "white", colour = NA),
+              plot.margin       = margin(t = 14, r = 14, b = 6, l = 10),
+              plot.title        = element_text(size = 10, hjust = 0),
+              plot.subtitle     = element_text(size = 8,  hjust = 0),
+              axis.text.y       = element_text(size = 7),
+              legend.position   = "right",
+              legend.key.size   = unit(0.5, "lines"),
+              legend.text       = element_text(size = 7))
+
+      out_name <- paste0("test3_rmanova_", this_metric, "_plot", hf$suffix, ".png")
+      ggsave(file.path(out3, out_name),
+             p3,
+             width  = 7,
+             height = max(5, n_distinct(t3_m$roi) * 0.25 + 2),
+             dpi = 200, limitsize = FALSE)
+      message("  Saved ", out_name)
+    }
+  }
 }
 
 # =============================================================================
@@ -545,19 +597,70 @@ for (src_model in source_models_for_r2) {
 
   anova_df <- bind_rows(r2_by_roi) %>%
     filter(!is.na(r2)) %>%
-    mutate(roi = as.factor(roi))
+    mutate(
+      roi        = as.factor(roi),
+      subjid_uid = as.factor(subjid_uid)
+    )
 
-  if (n_distinct(anova_df$roi) < 2L || nrow(anova_df) < 6L) next
+  if (n_distinct(anova_df$roi) < 2L || nrow(anova_df) < 6L) {
+    message("  [SKIP] Insufficient data for model: ", src_model,
+            " (", n_distinct(anova_df$roi), " ROIs, ", nrow(anova_df), " rows)")
+    next
+  }
 
-  anova_fit  <- aov(r2 ~ roi, data = anova_df)
-  anova_summ <- broom::tidy(anova_fit) %>%
-    mutate(model = src_model, sig = sig_label(p.value))
+  # Relax balance requirement: include subjects with data in ≥ 2 ROIs.
+  # The strict "all ROIs" filter used by Test 3 would exclude everyone at
+  # N=11 across 68 ROIs. The base-R Error() path handles mild imbalance.
+  anova_df_rm <- anova_df %>%
+    group_by(subjid_uid) %>%
+    filter(n_distinct(roi) >= 2L) %>%
+    ungroup()
 
-  posthoc4 <- pairwise_fdr(anova_df, "r2", "roi", "subjid_uid")
+  n_subj_rm  <- n_distinct(anova_df_rm$subjid_uid)
+  n_roi_rm   <- n_distinct(anova_df_rm$roi)
+  message("  Model ", src_model, ": ", n_subj_rm, " subjects × ", n_roi_rm, " ROIs after filtering")
+
+  anova_summ <- tryCatch({
+    if (.afex_ok && n_distinct(anova_df_rm$subjid_uid) >= 3L) {
+      fit4 <- afex::aov_ez(id = "subjid_uid", dv = "r2",
+                           data = anova_df_rm, within = "roi",
+                           anova_table = list(correction = "GG"))
+      as_tibble(fit4$anova_table, rownames = "term") %>%
+        rename(df       = `num Df`,
+               den_df   = `den Df`,
+               statistic = F,
+               p.value  = `Pr(>F)`) %>%
+        mutate(model = src_model, correction = "Greenhouse-Geisser",
+               sig = sig_label(p.value))
+    } else {
+      # Fallback: base R with repeated-measures Error() term
+      fit4 <- aov(r2 ~ roi + Error(subjid_uid / roi), data = anova_df_rm)
+      s4   <- summary(fit4)$`Error: subjid_uid:roi`[[1]]
+      tibble(
+        term      = "roi",
+        df        = s4["roi", "Df"],
+        den_df    = NA_real_,
+        sumsq     = s4["roi", "Sum Sq"],
+        meansq    = s4["roi", "Mean Sq"],
+        statistic = s4["roi", "F value"],
+        p.value   = s4["roi", "Pr(>F)"],
+        model     = src_model,
+        correction = "Sphericity assumed (install afex for GG)",
+        sig       = sig_label(s4["roi", "Pr(>F)"])
+      )
+    }
+  }, error = function(e) {
+    message("  [WARN] Test 4 rmANOVA failed for ", src_model, ": ", conditionMessage(e))
+    NULL
+  })
+
+  if (is.null(anova_summ)) next
+
+  posthoc4 <- pairwise_fdr(anova_df_rm, "r2", "roi", "subjid_uid")
 
   test4_rows[[src_model]] <- anova_summ
-  write_csv(anova_summ, file.path(out_dir, paste0("test4_roi_anova_", src_model, ".csv")))
-  write_csv(posthoc4,   file.path(out_dir, paste0("test4_posthoc_", src_model, ".csv")))
+  write_csv(anova_summ, file.path(out4, paste0("test4_roi_anova_", src_model, ".csv")))
+  write_csv(posthoc4,   file.path(out4, paste0("test4_posthoc_", src_model, ".csv")))
 
   test4_plot_list[[src_model]] <- anova_df
   message("  Saved test4_roi_anova_", src_model, ".csv")
@@ -573,21 +676,44 @@ if (length(test4_plot_list) > 0L) {
               se_r2   = sd(r2, na.rm = TRUE) / sqrt(sum(!is.na(r2))),
               .groups = "drop")
 
-  p4 <- ggplot(test4_summary, aes(x = roi, y = mean_r2, fill = roi)) +
-    geom_col(width = 0.65, alpha = 0.85) +
-    geom_errorbar(aes(ymin = mean_r2 - se_r2, ymax = mean_r2 + se_r2),
-                  width = 0.2) +
-    facet_wrap(~model, scales = "free_y") +
-    labs(title   = "Test 4: Per-Subject R² Across ROIs by Model",
-         subtitle = "Mean ± SE across subjects; one-way ANOVA tests ROI differences",
-         x = "ROI", y = "Mean per-subject R²", fill = "ROI") +
-    theme_minimal(base_size = 10) +
-    theme(legend.position = "none",
-          axis.text.x = element_text(angle = 30, hjust = 1))
+  # One PNG per model × hemisphere (combined, lh, rh).
+  for (this_model in unique(test4_summary$model)) {
+    for (hf in hemi_filters) {
+      t4_m <- test4_summary %>%
+        filter(model == this_model, roi %in% hf$rois) %>%
+        mutate(roi = fct_rev(factor(roi)))
+      if (nrow(t4_m) == 0) next
 
-  ggsave(file.path(out_dir, "test4_roi_anova_plot.png"),
-         p4, width = length(source_models_for_r2) * 3 + 2, height = 5, dpi = 200)
-  message("  Saved test4_roi_anova_plot.png")
+      title_suffix <- if (hf$suffix == "") "" else paste0(" \u2014 ", hf$label)
+
+      p4 <- ggplot(t4_m, aes(x = mean_r2, y = roi)) +
+        geom_col(aes(fill = mean_r2), width = 0.65, alpha = 0.85) +
+        geom_errorbarh(aes(xmin = mean_r2 - se_r2, xmax = mean_r2 + se_r2),
+                       height = 0.35, colour = "grey30") +
+        scale_fill_gradient(low = "#d1e5f0", high = "#2166ac",
+                            name = "Mean R\u00b2") +
+        labs(title    = paste0("Test 4: Per-Subject R\u00b2 \u2014 ",
+                               this_model, title_suffix),
+             subtitle = "Mean \u00b1 SE across subjects; rmANOVA tests ROI differences",
+             x = "Mean per-subject R\u00b2", y = NULL) +
+        theme_bw(base_size = 10) +
+        theme(plot.background   = element_rect(fill = "white", colour = NA),
+              panel.background  = element_rect(fill = "white", colour = NA),
+              plot.margin       = margin(t = 14, r = 14, b = 6, l = 10),
+              plot.title        = element_text(size = 10, hjust = 0),
+              plot.subtitle     = element_text(size = 8,  hjust = 0),
+              legend.position   = "right",
+              axis.text.y       = element_text(size = 7))
+
+      out_name <- paste0("test4_roi_anova_", this_model, "_plot", hf$suffix, ".png")
+      ggsave(file.path(out4, out_name),
+             p4,
+             width  = 7,
+             height = max(5, n_distinct(t4_m$roi) * 0.25 + 2),
+             dpi = 200, limitsize = FALSE)
+      message("  Saved ", out_name)
+    }
+  }
 }
 
 # =============================================================================
@@ -623,6 +749,12 @@ rayleigh_test <- function(phases) {
 
 phase_cols <- intersect(c("slow_phase", "slow_phase_post"), names(src_master))
 
+if (length(phase_cols) == 0L) {
+  message("  [SKIP] Test 5: neither 'slow_phase' nor 'slow_phase_post' found in ",
+          "source_pain_master.csv.\n",
+          "  Ensure the Python source pipeline writes phase columns before re-running.")
+}
+
 for (pcol in phase_cols) {
   message("  Phase column: ", pcol)
   ray_rows <- list()
@@ -654,7 +786,7 @@ for (pcol in phase_cols) {
       sig   = sig_label(p_adj)
     )
 
-  write_csv(ray_df, file.path(out_dir, paste0("test5_rayleigh_", pcol, ".csv")))
+  write_csv(ray_df, file.path(out5, paste0("test5_rayleigh_", pcol, ".csv")))
   message("  Saved test5_rayleigh_", pcol, ".csv  (", nrow(ray_df), " rows)")
 
   # ROI-level summary
@@ -672,14 +804,13 @@ for (pcol in phase_cols) {
     mutate(phase_col = pcol)
 
   write_csv(ray_summary,
-            file.path(out_dir, paste0("test5_rayleigh_summary_", pcol, ".csv")))
+            file.path(out5, paste0("test5_rayleigh_summary_", pcol, ".csv")))
 
-  # ── Test 5 plot: mean resultant length heatmap + significance overlay ──────
+  # ── Test 5 plot: heatmap — combined + per hemisphere ──────────────────────
   heatmap_df <- ray_df %>%
-    select(subjid_uid, roi, R_mean, sig) %>%
-    mutate(roi = factor(roi, levels = all_rois))
+    select(subjid_uid, roi, R_mean, sig)
 
-  n_subj    <- n_distinct(heatmap_df$subjid_uid)
+  n_subj     <- n_distinct(heatmap_df$subjid_uid)
   subj_order <- heatmap_df %>%
     group_by(subjid_uid) %>%
     summarise(mean_R = mean(R_mean, na.rm = TRUE), .groups = "drop") %>%
@@ -689,24 +820,40 @@ for (pcol in phase_cols) {
   heatmap_df <- heatmap_df %>%
     mutate(subjid_uid = factor(subjid_uid, levels = subj_order))
 
-  p5 <- ggplot(heatmap_df, aes(x = roi, y = subjid_uid, fill = R_mean)) +
-    geom_tile(colour = "white", linewidth = 0.3) +
-    geom_text(aes(label = sig), size = 2.5, colour = "black") +
-    scale_fill_gradient(low = "white", high = "darkred", limits = c(0, 1),
-                        name = "R\n(mean resultant)") +
-    labs(
-      title    = paste0("Test 5: Rayleigh Test — ", pcol),
-      subtitle = "Colour = mean resultant length R; label = FDR significance",
-      x = "ROI", y = "Subject"
-    ) +
-    theme_minimal(base_size = 9) +
-    theme(axis.text.x = element_text(angle = 30, hjust = 1),
-          axis.text.y = element_text(size = 6))
+  for (hf in hemi_filters) {
+    hm_h <- heatmap_df %>%
+      filter(roi %in% hf$rois) %>%
+      mutate(roi = fct_rev(factor(roi)))
+    if (nrow(hm_h) == 0) next
 
-  ggsave(file.path(out_dir, paste0("test5_rayleigh_plot_", pcol, ".png")),
-         p5, width = max(6, length(all_rois) * 1.5 + 2),
-         height = max(5, n_subj * 0.3 + 2), dpi = 200)
-  message("  Saved test5_rayleigh_plot_", pcol, ".png")
+    title_suffix <- if (hf$suffix == "") "" else paste0(" \u2014 ", hf$label)
+
+    p5 <- ggplot(hm_h, aes(x = subjid_uid, y = roi, fill = R_mean)) +
+      geom_tile(colour = "white", linewidth = 0.3) +
+      geom_text(aes(label = sig), size = 2.8, colour = "black") +
+      scale_fill_gradient(low = "white", high = "#b2182b", limits = c(0, 1),
+                          name = "R (mean\nresultant)") +
+      labs(title    = paste0("Test 5: Rayleigh Test \u2014 ", pcol, title_suffix),
+           subtitle = "Fill = mean resultant length R; label = FDR significance",
+           x = "Subject", y = NULL) +
+      theme_bw(base_size = 9) +
+      theme(plot.background   = element_rect(fill = "white", colour = NA),
+            panel.background  = element_rect(fill = "white", colour = NA),
+            plot.margin       = margin(t = 14, r = 14, b = 6, l = 10),
+            plot.title        = element_text(size = 10, hjust = 0),
+            plot.subtitle     = element_text(size = 8,  hjust = 0),
+            axis.text.x       = element_text(angle = 35, hjust = 1, size = 7),
+            axis.text.y       = element_text(size = 7),
+            legend.position   = "right")
+
+    out_name <- paste0("test5_rayleigh_plot_", pcol, hf$suffix, ".png")
+    ggsave(file.path(out5, out_name),
+           p5,
+           width  = max(5, n_subj * 0.7 + 3),
+           height = max(5, n_distinct(hm_h$roi) * 0.25 + 2),
+           dpi = 200, limitsize = FALSE)
+    message("  Saved ", out_name)
+  }
 }
 
 # =============================================================================
@@ -756,7 +903,7 @@ if (exists("test2_results") && nrow(test2_results) > 0) {
 report <- c(report, "", "TEST 3: rmANOVA — metrics across ROIs",
             strrep("-", 40))
 for (metric in rmanova_metrics) {
-  f <- file.path(out_dir, paste0("test3_rmanova_", metric, ".csv"))
+  f <- file.path(out3, paste0("test3_rmanova_", metric, ".csv"))
   if (file.exists(f)) {
     tbl <- read_csv(f, show_col_types = FALSE)
     row <- tbl[1, ]
@@ -776,7 +923,7 @@ for (metric in rmanova_metrics) {
 report <- c(report, "", "TEST 4: ANOVA — deviance across ROIs",
             strrep("-", 40))
 for (src_model in source_models_for_r2) {
-  f <- file.path(out_dir, paste0("test4_roi_anova_", src_model, ".csv"))
+  f <- file.path(out4, paste0("test4_roi_anova_", src_model, ".csv"))
   if (file.exists(f)) {
     tbl <- read_csv(f, show_col_types = FALSE) %>% filter(term == "roi")
     res <- read_csv(f, show_col_types = FALSE) %>% filter(term == "Residuals")
@@ -798,7 +945,7 @@ for (src_model in source_models_for_r2) {
 report <- c(report, "", "TEST 5: Rayleigh test — phase uniformity",
             strrep("-", 40))
 for (pcol in phase_cols) {
-  f <- file.path(out_dir, paste0("test5_rayleigh_summary_", pcol, ".csv"))
+  f <- file.path(out5, paste0("test5_rayleigh_summary_", pcol, ".csv"))
   if (file.exists(f)) {
     smry <- read_csv(f, show_col_types = FALSE)
     report <- c(report, paste0("  ", pcol, ":"))

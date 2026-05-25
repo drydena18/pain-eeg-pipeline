@@ -27,10 +27,10 @@ library(tibble)
 # =============================================================================
 # USER SETTINGS
 # =============================================================================
-source_root    <- "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/"
-behav_file     <- "pain-eeg-pipeline/R/analysis/behavioural_analysis/behavioural_demo_master.csv"
-out_ga         <- "pain-eeg-pipeline/R/analysis/behavioural_analysis/source_ga_master.csv"
-out_ga_fooof   <- "pain-eeg-pipeline/R/analysis/behavioural_analysis/source_ga_fooof_master.csv"
+source_root    <- "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis"
+behav_file     <- "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/R/behavioural_demo_master.csv"
+out_ga         <- "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/R/source_ga_master.csv"
+out_ga_fooof   <- "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/R/source_ga_fooof_master.csv"
 
 ga_pattern     <- "_source_ga\\.csv$"
 fooof_pattern  <- "_source_ga_fooof\\.csv$"
@@ -63,7 +63,7 @@ clean_names_local <- function(x) {
 
 extract_experiment_name <- function(file_path) {
   # Path: .../da-analysis/<exp_name>/source/sub-XXX/csv/...
-  m <- str_match(file_path, "da-analysis/([^/]+)/source/")
+  m <- str_match(file_path, "da-analysis/+([^/]+)/source/")
   if (is.na(m[, 2])) stop("Cannot extract experiment_name: ", file_path)
   m[, 2]
 }
@@ -75,10 +75,16 @@ read_one_ga <- function(file_path, experiment_lookup) {
   if (is.null(df)) return(NULL)
   names(df) <- clean_names_local(names(df))
 
-  # Normalise subject column
+  # Normalise subject column — fall back to filename if column absent.
+  # GA CSVs from the source pipeline omit a subject column because the
+  # subject is encoded in the filename (sub-001_source_ga.csv).
   if ("subject" %in% names(df) && !"subjid" %in% names(df)) df <- rename(df, subjid = subject)
-  if (!"subjid" %in% names(df)) { warning("No subjid column: ", file_path); return(NULL) }
-  if (!"roi"    %in% names(df)) { warning("No roi column: ",    file_path); return(NULL) }
+  if (!"subjid" %in% names(df)) {
+    sub_str <- str_extract(basename(file_path), "sub-(\\d+)", group = 1)
+    if (is.na(sub_str)) { warning("No subjid column and cannot parse from filename: ", file_path); return(NULL) }
+    df$subjid <- as.integer(sub_str)
+  }
+  if (!"roi" %in% names(df)) { warning("No roi column: ", file_path); return(NULL) }
 
   exp_name <- tryCatch(extract_experiment_name(file_path),
                        error = function(e) { warning(conditionMessage(e)); NA_character_ })

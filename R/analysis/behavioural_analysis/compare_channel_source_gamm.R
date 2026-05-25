@@ -57,18 +57,29 @@ dir.create(compare_out_dir, recursive = TRUE, showWarnings = FALSE)
 
 # =============================================================================
 # CONCEPT MAP
-# Channel model name -> (concept label, source model name, predictor term)
-# Used to align models across domains for fair comparison.
+# Channel model name -> (concept label, source model name, term names per domain)
+#
+# channel_term_z and source_term_z are kept separate because the same
+# conceptual predictor has different column names in each pipeline:
+#   channel-space: sf_logratio_z, sf_balance_z, slow_alpha_frac_z  (v2 naming)
+#   source-space:  LR_pre_z, BI_pre_z, CoG_pre_z                   (source naming)
+# A single term_z column cannot serve both; using the wrong name causes
+# get_smooth_effect() to return NULL silently for one domain.
+#
+# Model name corrections vs earlier draft:
+#   Channel tensor = m15_tensor_slow_fast  (not m05 — v2 numbering)
+#   Channel LR aperiodic = m05_sf_logratio_aperiodic  (not m06)
+#   Channel BI aperiodic = m06_sf_balance_aperiodic   (not m07)
 # =============================================================================
 concept_map <- tribble(
-  ~channel_model,                  ~concept,           ~source_model,       ~term_z,
-  "m00_baseline",                  "Baseline",          "m00_baseline",      NA,
-  "m02_sf_logratio",               "Log ratio",         "m02_lr_pre",        "LR_pre_z",
-  "m03_sf_balance",                "Balance index",     "m01_bi_pre",        "BI_pre_z",
-  "m04_slow_frac",                 "Slow fraction",     "m03_cog_pre",       "CoG_pre_z",
-  "m05_tensor_slow_fast",          "Tensor slow×fast",  "m05_tensor_slow_fast", NA,
-  "m06_sf_logratio_aperiodic",     "LR (FOOOF ctrl)",   "m14_fooof_lr_pre",  "LR_pre_z",
-  "m07_sf_balance_aperiodic",      "BI (FOOOF ctrl)",   "m13_fooof_bi_pre",  "BI_pre_z"
+  ~channel_model,                  ~concept,              ~source_model,           ~channel_term_z,      ~source_term_z,
+  "m00_baseline",                  "Baseline",            "m00_baseline",          NA_character_,        NA_character_,
+  "m02_sf_logratio",               "Log ratio",           "m02_lr_pre",            "sf_logratio_z",      "LR_pre_z",
+  "m03_sf_balance",                "Balance index",       "m01_bi_pre",            "sf_balance_z",       "BI_pre_z",
+  "m04_slow_frac",                 "Slow fraction",       "m03_cog_pre",           "slow_alpha_frac_z",  "CoG_pre_z",
+  "m15_tensor_slow_fast",          "Tensor slow\u00d7fast", "m05_tensor_slow_fast", NA_character_,       NA_character_,
+  "m05_sf_logratio_aperiodic",     "LR (FOOOF ctrl)",     "m14_fooof_lr_pre",      "sf_logratio_z",      "LR_pre_z",
+  "m06_sf_balance_aperiodic",      "BI (FOOOF ctrl)",     "m13_fooof_bi_pre",      "sf_balance_z",       "BI_pre_z"
 )
 
 # =============================================================================
@@ -232,22 +243,24 @@ concordance_rows <- list()
 conc_idx <- 1L
 
 for (i in seq_len(nrow(concept_map))) {
-  term_z  <- concept_map$term_z[i]
-  concept <- concept_map$concept[i]
-  cm      <- concept_map$channel_model[i]
-  sm      <- concept_map$source_model[i]
+  ch_term_z <- concept_map$channel_term_z[i]
+  src_term_z <- concept_map$source_term_z[i]
+  concept   <- concept_map$concept[i]
+  cm        <- concept_map$channel_model[i]
+  sm        <- concept_map$source_model[i]
 
-  if (is.na(term_z)) next
+  # Skip models with no scalar smooth to compare (baselines, tensor surfaces)
+  if (is.na(ch_term_z) || is.na(src_term_z)) next
 
   ch_mod <- load_rds_safe(file.path(channel_out_dir, paste0(cm, ".rds")))
-  ch_eff <- get_smooth_effect(ch_mod, term_z)
+  ch_eff <- get_smooth_effect(ch_mod, ch_term_z)   # use channel-side term name
   if (is.null(ch_eff)) next
 
   for (this_roi in all_rois) {
     src_mod <- load_rds_safe(
       file.path(source_out_dir, this_roi, paste0(sm, ".rds"))
     )
-    src_eff <- get_smooth_effect(src_mod, term_z)
+    src_eff <- get_smooth_effect(src_mod, src_term_z)   # use source-side term name
     if (is.null(src_eff)) next
 
     # Interpolate source onto channel x-grid for correlation
@@ -256,8 +269,11 @@ for (i in seq_len(nrow(concept_map))) {
     r <- cor(ch_eff$fit, src_fit_interp, use = "complete.obs")
 
     concordance_rows[[conc_idx]] <- tibble(
-      concept = concept, term_z = term_z, roi = this_roi,
-      r_concordance = r,
+      concept        = concept,
+      channel_term_z = ch_term_z,
+      source_term_z  = src_term_z,
+      roi            = this_roi,
+      r_concordance  = r,
       same_direction = sign(r) == 1L
     )
     conc_idx <- conc_idx + 1L
@@ -319,17 +335,20 @@ if (nrow(fit_quality) > 0) {
 }
 
 # ── 5c. Smooth overlay: channel vs all source ROIs per metric ─────────────
-unique_terms <- concept_map %>% filter(!is.na(term_z)) %>%
-  distinct(concept, channel_model, source_model, term_z)
+# Filter to concepts with a scalar smooth in both domains
+unique_terms <- concept_map %>%
+  filter(!is.na(channel_term_z), !is.na(source_term_z)) %>%
+  distinct(concept, channel_model, source_model, channel_term_z, source_term_z)
 
 for (i in seq_len(nrow(unique_terms))) {
-  term_z  <- unique_terms$term_z[i]
-  concept <- unique_terms$concept[i]
-  cm      <- unique_terms$channel_model[i]
-  sm      <- unique_terms$source_model[i]
+  ch_term_z  <- unique_terms$channel_term_z[i]
+  src_term_z <- unique_terms$source_term_z[i]
+  concept    <- unique_terms$concept[i]
+  cm         <- unique_terms$channel_model[i]
+  sm         <- unique_terms$source_model[i]
 
   ch_mod <- load_rds_safe(file.path(channel_out_dir, paste0(cm, ".rds")))
-  ch_eff <- get_smooth_effect(ch_mod, term_z)
+  ch_eff <- get_smooth_effect(ch_mod, ch_term_z)   # channel-side term
 
   eff_list <- list()
   if (!is.null(ch_eff)) {
@@ -340,7 +359,7 @@ for (i in seq_len(nrow(unique_terms))) {
     src_mod <- load_rds_safe(
       file.path(source_out_dir, this_roi, paste0(sm, ".rds"))
     )
-    src_eff <- get_smooth_effect(src_mod, term_z)
+    src_eff <- get_smooth_effect(src_mod, src_term_z)   # source-side term
     if (!is.null(src_eff)) {
       eff_list[[this_roi]] <- src_eff %>% mutate(roi = this_roi)
     }
@@ -351,6 +370,10 @@ for (i in seq_len(nrow(unique_terms))) {
   eff_df <- bind_rows(eff_list) %>%
     mutate(is_channel = roi == "Channel")
 
+  # x_z is in different units per domain; label makes this explicit
+  x_label <- sprintf("%s (channel) / %s (source)  — both z-scored",
+                     ch_term_z, src_term_z)
+
   p_smooth <- ggplot(eff_df, aes(x = x_z, y = fit,
                                  colour = roi, linetype = is_channel,
                                  fill = roi)) +
@@ -359,11 +382,11 @@ for (i in seq_len(nrow(unique_terms))) {
     geom_hline(yintercept = 0, colour = "grey50", linewidth = 0.4, linetype = "dashed") +
     scale_linetype_manual(values = c("TRUE" = "dashed", "FALSE" = "solid"),
                           guide = "none") +
-    labs(title = paste0(concept, "  —  smooth partial effect (", term_z, ")"),
+    labs(title    = paste0(concept, "  —  smooth partial effect"),
          subtitle = "Dashed = channel; solid = source ROIs",
-         x = paste0(term_z, "  (z-scored)"),
-         y = "Partial effect on pain rating",
-         colour = "Domain / ROI", fill = "Domain / ROI") +
+         x        = x_label,
+         y        = "Partial effect on pain rating",
+         colour   = "Domain / ROI", fill = "Domain / ROI") +
     theme_minimal(base_size = 11)
 
   out_name <- paste0("smooth_overlay_", str_replace_all(concept, "\\s+", "_"), ".png")
@@ -431,7 +454,7 @@ report_lines <- c(report_lines, "",
 )
 if (nrow(concordance) > 0) {
   conc_summary <- concordance %>%
-    group_by(concept, term_z) %>%
+    group_by(concept, channel_term_z, source_term_z) %>%
     summarise(
       mean_r    = mean(r_concordance, na.rm = TRUE),
       n_agree   = sum(same_direction, na.rm = TRUE),
@@ -441,8 +464,8 @@ if (nrow(concordance) > 0) {
   for (i in seq_len(nrow(conc_summary))) {
     r <- conc_summary[i, ]
     report_lines <- c(report_lines, sprintf(
-      "  %-20s  mean r=%.2f  direction agreement: %d / %d ROIs",
-      r$concept, r$mean_r, r$n_agree, r$n_roi
+      "  %-20s  mean r=%.2f  direction agreement: %d / %d ROIs  [ch: %s | src: %s]",
+      r$concept, r$mean_r, r$n_agree, r$n_roi, r$channel_term_z, r$source_term_z
     ))
   }
 }

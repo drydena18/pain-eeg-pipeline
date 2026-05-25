@@ -45,6 +45,8 @@ def exp07_source(subjects_override = None, cfg_path: str = None):
     """
     exp_id = "exp07"
 
+    cfg_path = "/home/UWO/darsenea/Documents/GitHub/pain-alpha-dynamics/config/exp07.json"
+
     if cfg_path is None:
         this_dir = os.path.dirname(os.path.abspath(__file__))
         repo_root = os.path.dirname(os.path.join(this_dir, "..", ".."))

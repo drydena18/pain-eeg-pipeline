@@ -239,19 +239,26 @@
         }
       }
     },
+    
     "epoch": {
       "enabled": true,
       "events": [
         {
-          "code": "54",
-          "condition": "pain",
-          "intensity": "single"
+            "code": "32",
+            "condition": "pain",
+            "intensity": "low"
+        },
+        {
+            "code": "33",
+            "condition": "pain",
+            "intensity": "high"
         }
       ],
       "tmin_sec": -1.0,
       "tmax_sec": 2.0,
       "tag": "epoch"
     },
+
     "baseline": {
       "enabled": true,
       "window_sec": [
