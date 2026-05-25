@@ -1,9 +1,9 @@
 """
 src_lep.py - Laser-evoked potential (LEP) feature extraction
 
-LEP's are extracted from the source-space ROI time courses rather than scalp
-channels. This gives anatomically labelled responses (e.g., S1 N2, ACC P2)
-that are directly interpretable in the source domain.
+LEPs (laser-evoked potentials) are extracted from the source-space ROI time
+courses rather than scalp channels. This gives anatomically labelled responses
+(e.g., S1 N2, ACC P2) that are directly interpretable in the source domain.
 
 Features extracted (per trial x ROI)
 -------------------------------------
@@ -27,7 +27,7 @@ Notes
       nA*m or arbitrary sLORETA units). Label them relative to each other; do not
       compare raw amplitudes across ROIs or studies)
     - For per-trial extraction, the same peak-search logic is applied to the
-      single-trial time course without smoothing, which is intentionally noisy,
+      single-trial time course without smoothing, which is intentionally noisy;
       subsequent GAMM modelling uses the amplitude as a continuous predictor rather
       than trusting the peak itself
 """
@@ -71,7 +71,7 @@ def _find_peak(
     else:
         idx = int(np.argmax(x_win))
 
-    return float(x_win[idx]), float(t_win[idx] * 1000.00) # amp, latency in ms
+    return float(x_win[idx]), float(t_win[idx] * 1000.0)  # amp, latency in ms
 
 # ====================================================================
 # PER-TRIAL LEP EXTRACTION
@@ -135,7 +135,7 @@ def src_compute_lep_trial(
 # ====================================================================
 # GRAND-AVERAGE LEP EXTRACTION
 # ====================================================================
-def src_compute_leg_ga(
+def src_compute_lep_ga(
         tc_post: np.ndarray,
         times_post: np.ndarray,
         n2_window: tuple[float, float],
@@ -147,7 +147,10 @@ def src_compute_leg_ga(
 
     Returns:
         List of dicts, one per ROI, with the same fields as src_compute_lep_trial
-        but without the 'trial' key, and with an added 'n_trials' field
+        but without the 'trial' key, and with an added 'n_trials' field.
+
+    Note: BUG FIX — function was previously named src_compute_leg_ga (typo);
+    corrected to src_compute_lep_ga to match the import in source_core.py.
     """
     n_epochs, n_rois, _ = tc_post.shape
     rows: list[dict] = []

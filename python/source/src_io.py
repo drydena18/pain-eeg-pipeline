@@ -76,50 +76,69 @@ def src_find_set(
     """
     Locate the preprocessed .set file for a subject inside a given stage directory.
 
+    Expected layout:
+        <da_root>/<exp_out>/preproc/<sub_str>/<stage_dir>/<prefix><sub_int>*_base.set
+
+    Example:
+        .../da-analysis/26ByBiosemi/preproc/sub-001/08_base/26BB_62_001_..._base.set
+
     Search order:
-        1. <preproc_root>/<out_prefix>*sub-XXX*_base.set (strict)
-        2. <preproc_root>/*sub-XXX*_base.set (fallback, if enabled)
-        3. When multiple hits exits, the newest file by modification time wins.
+        1. <preproc_root>/<out_prefix>*<sub_int>*_base.set  (prefix + bare int)
+        2. <preproc_root>/*_base.set                         (any _base.set, if fallback)
+        3. When multiple hits exist, the newest file by modification time wins.
 
     Args:
         da_root         : Root da-analysis directory (e.g., .../CNED/da-analysis)
-        exp_out         : Experiment output folder name (e.g., "142ByBiosemi)
-        stage_dir       : Preprocessing stage subdirectory (e.g., "08_base)
-        out_prefix      : Filename prefix (s.g., "26BB_62_")
+        exp_out         : Experiment output folder name (e.g., "26ByBiosemi")
+        stage_dir       : Preprocessing stage subdirectory (e.g., "08_base")
+        out_prefix      : Filename prefix (e.g., "26BB_62_")
         sub             : Integer subject ID
         allow_fallback  : When True, retry without the out_prefix constraint
 
     Raises:
-        FileNotFoundError if not matching file is found.
+        FileNotFoundError if no matching file is found.
     """
     sub_str = f"sub-{sub:03d}"
-    preproc_root = os.path.join(da_root, exp_out, "preproc", stage_dir)
+    sub_int = f"{sub:03d}"           # bare zero-padded ID used in filenames
 
-    pat = os.path.join(preproc_root, f"{out_prefix}*{sub_str}*_base.set")
+    # Layout: <da_root>/<exp_out>/preproc/<sub_str>/<stage_dir>/
+    preproc_root = os.path.join(da_root, exp_out, "preproc", sub_str, stage_dir)
+
+    # Primary: prefix + bare subject integer (e.g. 26BB_62_001_..._base.set)
+    pat = os.path.join(preproc_root, f"{out_prefix}*{sub_int}*_base.set")
     hits = glob.glob(pat)
 
+    # Fallback: any file ending in _base.set in the same directory
     if len(hits) == 0 and allow_fallback:
-        pat = os.path.join(preproc_root, f"*{sub_str}_base.set")
+        pat = os.path.join(preproc_root, "*_base.set")
         hits = glob.glob(pat)
 
     if len(hits) == 0:
         raise FileNotFoundError(
             f"No _base.set found for {sub_str} in {preproc_root}\n"
-            f" Pattern tried: {pat}"
+            f"  Pattern tried: {pat}"
         )
-    
-    hits.sort(key = lambda p: os.path.getmtime(p), reverse = True)
+
+    hits.sort(key=lambda p: os.path.getmtime(p), reverse=True)
     return hits[0]
 
 # ====================================================================
 # EPOCH LOADING
 # ====================================================================
-def src_read_epochs(set_oath: str) -> mne.Epochs:
+def src_read_epochs(set_path: str) -> mne.Epochs:
     """
     Load an EEGLAB .set file as MNE Epochs with data pre-loaded into memory.
 
+    EEGLAB applies average reference in-place before saving, so the loaded
+    data is correctly referenced but MNE sees no reference projector. MNE's
+    forward/inverse machinery requires a projector-based reference, so we
+    re-register the existing average reference as a projector here. This does
+    not alter the data — it just satisfies MNE's bookkeeping requirement.
+
     Raises RuntimeError if MNE cannot find the reader function.
     """
-    ep = _read_epochs_eeglab(set_path, verbose = "ERROR")
+    # BUG FIX: parameter was named `set_oath` (typo) — corrected to `set_path`
+    ep = _read_epochs_eeglab(set_path, verbose="ERROR")
     ep.load_data()
+    ep.set_eeg_reference("average", projection=True, verbose="ERROR")
     return ep

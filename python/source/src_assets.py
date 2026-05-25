@@ -74,6 +74,10 @@ def src_load_labels(
         subjects_dir = subjects_dir,
         verbose = "ERROR",
     )
+    # Drop the aparc "unknown" catch-all parcels — they contain vertices that
+    # don't belong to any named region and are typically absent from the source
+    # space, causing extract_label_time_course to raise a ValueError.
+    labels = [lab for lab in labels if not lab.name.startswith("unknown")]
     by_name = {lab.name: lab for lab in labels}
     return labels, by_name
 

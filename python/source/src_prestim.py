@@ -73,7 +73,7 @@ def src_compute_prestim_metrics(
 
     The Hilbert phase at stimulus onset is extracted from the *full* epoch time
     course (tc_full) rather than the cropped pre-stimulus window (tc_pre) to
-    avoid edge effects from the Hilbert transform. The pahse is then read at
+    avoid edge effects from the Hilbert transform. The phase is then read at
     the sample nearest to t = 0 (stimulus onset).
 
     Args:
@@ -98,7 +98,8 @@ def src_compute_prestim_metrics(
     n_epochs, n_rois, _ = tc_pre.shape
 
     # Index of t = 0 in the full epoch (stimulus onset)
-    t0_idx = int(mp.argmin(np.abs(times_full)))
+    # BUG FIX: was `mp.argmin` (undefined) — corrected to `np.argmin`
+    t0_idx = int(np.argmin(np.abs(times_full)))
 
     rows: list[dict] = []
 
@@ -130,10 +131,11 @@ def src_compute_prestim_metrics(
             # -- Slow-alpha Hilbert phase at t = 0 -----
             # Filter the full epoch (avoids end-of-window edge effects),
             # then extract the instantaneous phase at the stimulus onset sample.
+            # BUG FIX: was `analytic(t0_idx)` (function call) — corrected to `analytic[t0_idx]`
             try:
                 x_filt = src_bandpass_filter(x_full, sfreq, slow[0], slow[1])
                 analytic = hilbert(x_filt)
-                slow_phase = float(np.angle(analytic(t0_idx)))
+                slow_phase = float(np.angle(analytic[t0_idx]))
             except Exception:
                 slow_phase = float("nan")
 
@@ -215,7 +217,7 @@ def src_compute_tvi_alpha(bi_pre_sequence: np.ndarray) -> float:
     Compute the temporal variability index (TVI_alpha) from the per-trial
     BI_pre sequence for a single subject x ROI
 
-    TVI_alpha is the normalized mean square successive difference (nMMSD):
+    TVI_alpha is the normalized mean square successive difference (nMSSD):
 
         MSSD = mean( (b[k+1] - b[k])² ) for k = 1 ... K - 1
         Var = variance( b )

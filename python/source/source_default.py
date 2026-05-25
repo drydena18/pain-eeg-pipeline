@@ -1,6 +1,6 @@
 """
 source_default.py  –  Config validation, safe defaults, and dispatch.
-V 2.0.0
+V 2.1.0
 
 Call chain:
     exp01_source.py  ->  source_default()  ->  source_core()
@@ -110,9 +110,13 @@ def source_default(exp_id: str, cfg_in: dict, subjects_override=None):
 
     # fsaverage assets (no safe default — must be explicit)
     _d(src, "fsaverage", {})
-    _require(src["fsaverage"], "subjects_dir",
-             "cfg.source.fsaverage.subjects_dir  "
-             "(path containing fsaverage/; obtain via mne.datasets.fetch_fsaverage())")
+    fsa_dir = src["fsaverage"].get("subjects_dir", "")
+    if not fsa_dir or fsa_dir == "NEEDS_PATH":
+        raise ValueError(
+            "cfg.source.fsaverage.subjects_dir is not set. "
+            "Point it at the directory containing the fsaverage/ folder "
+            "(obtain via mne.datasets.fetch_fsaverage())."
+        )
 
     # Forward solution
     _d(src, "forward", {})
@@ -148,9 +152,10 @@ def source_default(exp_id: str, cfg_in: dict, subjects_override=None):
     _d(src["lep"], "p2_window", [0.25, 0.50])
 
     # ROI (region of interest) settings
-    # Default custom ROIs cover the core pain neuromatrix in the Desikan-Killiany
-    # (aparc) parcellation.  Labels are bilateral (lh + rh merged).
-    # To use all parcels instead, set use_custom_rois = false.
+    # When use_custom_rois=false (default), all parcellation labels from the
+    # specified parcellation are used (e.g. all 68 Desikan-Killiany aparc regions).
+    # When use_custom_rois=true, only the ROIs listed in custom_rois are used,
+    # merged into macro-regions as defined by the user.
     #
     # Parcellation label reference (aparc):
     #   S1  — postcentral         (primary somatosensory cortex)
@@ -162,7 +167,7 @@ def source_default(exp_id: str, cfg_in: dict, subjects_override=None):
     _d(src, "roi", {})
     _d(src["roi"], "parcellation",    "aparc")
     _d(src["roi"], "mode",            "mean_flip")
-    _d(src["roi"], "use_custom_rois",  True)
+    _d(src["roi"], "use_custom_rois",  False)
     _d(src["roi"], "custom_rois", {
         "S1":   ["postcentral-lh",              "postcentral-rh"],
         "M1":   ["precentral-lh",               "precentral-rh"],
@@ -181,7 +186,7 @@ def source_default(exp_id: str, cfg_in: dict, subjects_override=None):
     _d(src["spectral"], "slow_alpha_band", [8.0, 10.0])
     _d(src["spectral"], "fast_alpha_band", [10.0, 12.0])
 
-    # FOOOF (Fitting Oscillations & One Over F)
+    # FOOOF (Fitting Oscillations & One Over F / specparam)
     _d(src, "fooof", {})
     _d(src["fooof"], "enabled",           True)
     _d(src["fooof"], "aperiodic_mode",    "fixed")   # "fixed" or "knee"
@@ -193,17 +198,8 @@ def source_default(exp_id: str, cfg_in: dict, subjects_override=None):
 
     # Quality control / 2-D plots
     _d(src, "qc", {})
-    _d(src["qc"], "save_plots", True)
-
-    # 3-D brain rendering
-    _d(src, "render", {})
-    _d(src["render"], "enabled",      False)   # opt-in; requires pyvista
-    _d(src["render"], "use_mesa",     False)   # True on headless HPC servers
-    _d(src["render"], "stc_enabled",  True)    # render GA STC at pre/N2/P2
-    _d(src["render"], "stc_clim_pct", [50, 99])  # percentile colour scale bounds
-    _d(src["render"], "roi_enabled",  True)    # render ROI scalar maps
-    _d(src["render"], "roi_metrics",          # which GA metrics to paint
-       ["BI_pre", "LR_pre", "CoG_pre", "delta_ERD", "n2p2_amp"])
+    _d(src["qc"], "save_brain_images",       False)
+    _d(src["qc"], "brain_snapshot_time_sec", 0.200)
 
     # Validate inverse method
     if str(src["inverse"]["method"]).lower() != "sloreta":
@@ -219,7 +215,7 @@ def source_default(exp_id: str, cfg_in: dict, subjects_override=None):
     print(f"  Input stage    : {src['input']['stage_dir']}")
     print(f"  Output root    : {src['outputs']['root']}")
     print(f"  Parcellation   : {src['roi']['parcellation']}"
-          + (" (custom ROIs)" if src["roi"]["use_custom_rois"] else ""))
+          + (" (custom ROIs)" if src["roi"]["use_custom_rois"] else " (all labels)"))
     print(f"  Pre-stim       : {src['prestim']['tmin']:.3f} – {src['prestim']['tmax']:.3f} s")
     print(f"  Post-stim      : {src['poststim']['tmin']:.3f} – {src['poststim']['tmax']:.3f} s "
           f"  (phase ref @ {src['poststim']['phase_ref_t']:.3f} s)")
@@ -227,11 +223,7 @@ def source_default(exp_id: str, cfg_in: dict, subjects_override=None):
     print(f"  LEP N2 window  : {src['lep']['n2_window']}")
     print(f"  LEP P2 window  : {src['lep']['p2_window']}")
     print(f"  FOOOF          : {'enabled (' + src['fooof']['aperiodic_mode'] + ')' if src['fooof']['enabled'] else 'disabled'}")
-    if src["render"]["enabled"]:
-        print(f"  3-D renders    : STC={'on' if src['render']['stc_enabled'] else 'off'}  "
-              f"ROI={'on' if src['render']['roi_enabled'] else 'off'}  "
-              f"Mesa={'on' if src['render']['use_mesa'] else 'off'}  "
-              f"metrics={src['render']['roi_metrics']}")
+    print(f"  Brain snapshot : {'@ ' + str(src['qc']['brain_snapshot_time_sec']) + ' s' if src['qc']['save_brain_images'] else 'off'}")
 
     # ── Dispatch ──────────────────────────────────────────────────────────────
     if src["enabled"]:

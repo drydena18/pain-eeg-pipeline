@@ -1,6 +1,6 @@
 """
 exp01_source.py - Entry point for source localization (Experiment 1)
-V 2.0.0
+V 2.1.0
 
 Call Chain:
     exp01_source.py -> source_default.py -> source_core.py
@@ -8,6 +8,21 @@ Call Chain:
                                             src_spectral / src_prestim /
                                             src_poststim / src_lep /
                                             src_fooof / src_write / src_plot
+
+Run steps
+---------
+    1. Activate the venv:
+       source ~/envs/thesis/bin/activate
+
+    2. Change to the source pipeline directory:
+       cd ~/Documents/GitHub/pain-alpha-dynamics/python/source
+
+    3. Run:
+       # All subjects
+       python exp01_source.py --cfg ../../config/exp01.json
+
+       # Subset (recommended for first run)
+       python exp01_source.py --cfg ../../config/exp01.json --subjects 1 2 3
 
 Usage (command line):
     python exp01_source.py
@@ -44,6 +59,8 @@ def exp01_source(subjects_override = None, cfg_path: str = None):
                             Defaults to <repo_root>/config/exp01.json.
     """
     exp_id = "exp01"
+
+    cfg_path = "/home/UWO/darsenea/Documents/GitHub/pain-alpha-dynamics/config/exp01.json"
 
     if cfg_path is None:
         this_dir = os.path.dirname(os.path.abspath(__file__))

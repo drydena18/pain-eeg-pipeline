@@ -1,0 +1,44 @@
+# =============================================================================
+# pain-alpha-dynamics — Python environment
+# Python >= 3.10 required (3.11 recommended)
+# Generated: 2026-05
+#
+# Install into a venv:
+#   python3.11 -m venv ~/envs/thesis
+#   source ~/envs/thesis/bin/activate
+#   pip install --upgrade pip
+#   pip install -r requirements.txt
+#
+# On a headless HPC (no GPU / no display) also install:
+#   pip install pyvista[osmesa] pyvistaqt
+#   (and set cfg.source.render.use_mesa = true in the JSON)
+# =============================================================================
+
+# ── Core scientific stack ─────────────────────────────────────────────────────
+numpy>=1.26,<3.0        # mne 1.12 supports numpy 1.x and 2.x
+scipy>=1.13
+pandas>=2.1
+matplotlib>=3.8
+
+# ── MNE-Python (source localization, filtering, epoching, Welch PSD) ─────────
+# mne pulls in: pooch, tqdm, decorator, jinja2, packaging
+mne>=1.8,<2.0
+nibabel>=5.0            # required by mne for surface geometry (read_labels_from_annot)
+
+# ── Spectral parametrization (FOOOF successor) ───────────────────────────────
+# Imports as `from specparam import SpectralModel`; also tried as legacy `fooof`
+# in src_fooof.py with a compatibility shim.
+specparam>=1.0
+
+# ── 3-D brain rendering (optional; required only if render.enabled = true) ───
+# pyvistaqt is the Qt-backed offscreen backend used by src_render.py.
+# On headless nodes without a GPU, install pyvista[osmesa] instead and set
+# cfg.source.render.use_mesa = true.
+pyvista>=0.44
+pyvistaqt>=0.11        # comment out on headless nodes if Qt is unavailable
+
+# ── Screenshot compositing (used by src_render._save_screenshot) ──────────────
+imageio>=2.33
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+tqdm>=4.66              # progress bars (pulled by mne, pinned for explicitness)

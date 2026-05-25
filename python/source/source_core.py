@@ -1,33 +1,28 @@
 """
 source_core.py  –  Per-subject orchestration loop for sLORETA source analysis.
-V 2.0.0
+V 2.2.0
 
 Call chain:
     exp01_source.py  ->  source_default.py  ->  source_core()
-
-This file is intentionally thin: it unpacks config, directs each subject
-through the helper modules, and handles per-subject error recovery.
-All computation lives in the src_*.py helper modules.
 
 Per-subject output layout
 ──────────────────────────
     <out_root>/sub-XXX/
         csv/
-            sub-XXX_source_trial.csv          all per-trial metrics
-            sub-XXX_source_ga.csv             grand-average metrics + TVI + ITC
-            sub-XXX_source_ga_fooof.csv       FOOOF aperiodic (if enabled)
+            sub-XXX_source_trial.csv          all per-trial metrics (all ROIs)
+            sub-XXX_source_ga.csv             grand-average metrics + TVI + ITC (all ROIs)
+            sub-XXX_source_ga_fooof.csv       FOOOF aperiodic (if enabled, all ROIs)
         figures/
-            sub-XXX_source_GA_roi_psd.png
-            sub-XXX_source_GA_<ROI>_fooof.png
-            sub-XXX_source_trial_erd.png
-            sub-XXX_source_GA_lep.png
-            sub-XXX_source_phase_prestim.png
-            sub-XXX_source_phase_poststim.png
-            sub-XXX_source_GA_brain_t<T>s.png (if save_brain_images)
+            sub-XXX_source_GA_brain_t<T>s_lh.png   GA sLORETA brain snapshot
+            sub-XXX_source_GA_brain_t<T>s_rh.png
         fwd/
             sub-XXX_fwd.fif                   cached forward solution
         logs/
             sub-XXX_source_<timestamp>.log
+
+Per-ROI figures (ERD, LEP, FOOOF, phase) are not generated at this stage.
+They will be added in a later pass after R GAMMs identify significant ROIs,
+so only the relevant subset is ever rendered.
 """
 
 from __future__ import annotations
@@ -40,15 +35,13 @@ import pandas as pd
 
 from src_io       import src_open_log, src_logmsg, src_close_log, src_find_set, src_read_epochs
 from src_assets   import src_load_fsaverage_assets, src_load_labels, src_build_custom_rois
-from src_inverse  import src_make_inverse_operator, src_apply_inverse_epochs, src_apply_inverse_evoked
+from src_inverse  import src_make_inverse_operator, src_apply_inverse_epochs
 from src_prestim  import src_compute_prestim_metrics, src_compute_ga_prestim_metrics, src_compute_tvi_alpha
 from src_poststim import src_compute_poststim_metrics, src_compute_ga_poststim_metrics, src_compute_itc
 from src_lep      import src_compute_lep_trial, src_compute_lep_ga
 from src_fooof    import fooof_available, fooof_package_name, src_compute_fooof_ga
 from src_write    import src_write_trial_csv, src_write_ga_csv, src_write_fooof_csv
-from src_render   import src_render_stc_timepoints, src_render_roi_scalar
-from src_plot     import (src_plot_ga_psd, src_plot_fooof, src_plot_erd,
-                          src_plot_lep_ga, src_plot_phase_polar, src_plot_brain)
+from src_plot     import src_plot_ga_timecourse
 
 
 # =============================================================================
@@ -118,18 +111,10 @@ def source_core(cfg: dict, da_root: str, exp_out: str):
                             str(pick_ori_raw).lower() == "none") \
                        else str(pick_ori_raw)
 
-    fooof_cfg  = src_cfg.get("fooof", {})
-    do_fooof   = bool(fooof_cfg.get("enabled", True))
-    save_plots  = bool(src_cfg["qc"].get("save_plots", True))
+    fooof_cfg = src_cfg.get("fooof", {})
+    do_fooof  = bool(fooof_cfg.get("enabled", True))
 
-    rnd_cfg     = src_cfg.get("render", {})
-    do_render   = bool(rnd_cfg.get("enabled",     False))
-    use_mesa    = bool(rnd_cfg.get("use_mesa",    False))
-    do_stc      = bool(rnd_cfg.get("stc_enabled", True))
-    stc_clim    = tuple(rnd_cfg.get("stc_clim_pct", [50, 99]))
-    do_roi_rnd  = bool(rnd_cfg.get("roi_enabled", True))
-    roi_metrics = list(rnd_cfg.get("roi_metrics",
-                       ["BI_pre", "LR_pre", "CoG_pre", "delta_ERD", "n2p2_amp"]))
+    do_brain = bool(src_cfg["qc"].get("save_brain_images", False))
 
     os.makedirs(out_root, exist_ok=True)
 
@@ -138,12 +123,17 @@ def source_core(cfg: dict, da_root: str, exp_out: str):
     labels_all, by_name       = src_load_labels(subjects_dir, parc)
 
     if use_custom and src_cfg["roi"].get("custom_rois"):
-        labels, roi_names = src_build_custom_rois(by_name, src_cfg["roi"]["custom_rois"])
+        custom_rois = {
+            k: v for k, v in src_cfg["roi"]["custom_rois"].items()
+            if isinstance(v, list)
+        }
+        labels, roi_names = src_build_custom_rois(by_name, custom_rois)
     else:
         labels    = labels_all
         roi_names = [lab.name for lab in labels]
 
-    print(f"[LABELS] {len(labels)} ROIs: {roi_names}")
+    print(f"[LABELS] {len(labels)} ROIs loaded "
+          f"({'custom' if use_custom else parc + ' all-labels'})")
 
     # ── Subject loop ──────────────────────────────────────────────────────────
     for sub in [int(s) for s in exp_cfg["subjects"]]:
@@ -198,14 +188,13 @@ def source_core(cfg: dict, da_root: str, exp_out: str):
 
             # 5. Pre-stimulus metrics ──────────────────────────────────────────
             src_logmsg(logf, "[FEAT] Pre-stimulus metrics...")
-            prestim_rows   = src_compute_prestim_metrics(
+            prestim_rows = src_compute_prestim_metrics(
                 tc_pre, tc, times, sfreq, alpha, slow, fast, fmin, fmax,
             )
             ga_prestim_rows, psd_by_roi = src_compute_ga_prestim_metrics(
                 tc_pre, sfreq, alpha, slow, fast, fmin, fmax,
             )
 
-            # TVI_alpha — one scalar per ROI from the per-trial BI_pre sequence
             tvi_by_roi: dict = {}
             pre_df = pd.DataFrame(prestim_rows)
             for ri in range(len(roi_names)):
@@ -220,8 +209,6 @@ def source_core(cfg: dict, da_root: str, exp_out: str):
             )
             itc_rows = src_compute_itc(tc, times, sfreq, slow, post_tmin, post_tmax)
 
-            # GA post-stim — dedicated function avoids the vacuous percentile
-            # threshold guard that causes all-NaN ERD when applied to n=1 trial
             tc_pre_ga  = np.mean(tc_pre,  axis=0, keepdims=True)
             tc_post_ga = np.mean(tc_post, axis=0, keepdims=True)
             tc_ga      = np.mean(tc,      axis=0, keepdims=True)
@@ -237,7 +224,6 @@ def source_core(cfg: dict, da_root: str, exp_out: str):
 
             # 8. FOOOF ─────────────────────────────────────────────────────────
             fooof_rows: list = []
-            fm_by_roi:  dict = {}
             if do_fooof:
                 if not fooof_available():
                     src_logmsg(logf,
@@ -245,7 +231,7 @@ def source_core(cfg: dict, da_root: str, exp_out: str):
                                "is installed. Skipping.")
                 else:
                     src_logmsg(logf, "[FOOOF] Fitting GA PSDs (%s)...", fooof_package_name())
-                    fooof_rows, fm_by_roi = src_compute_fooof_ga(
+                    fooof_rows, _ = src_compute_fooof_ga(
                         psd_by_roi, len(roi_names), sub, fooof_cfg,
                     )
 
@@ -267,98 +253,16 @@ def source_core(cfg: dict, da_root: str, exp_out: str):
                     roi_names, fooof_rows, logf,
                 )
 
-            # 10. QC plots ─────────────────────────────────────────────────────
-            if save_plots:
-                src_plot_ga_psd(
-                    os.path.join(fig_dir, f"{sub_str}_source_GA_roi_psd.png"),
-                    psd_by_roi, roi_names, sub_str, fmin, fmax, logf,
+            # 10. QC heatmap (sanity check only) ─────────────────────────────────
+            # ROI × time heatmap of GA sLORETA amplitude. One figure per subject.
+            # Per-ROI figures (ERD, LEP, FOOOF, phase) are deferred until after
+            # R GAMMs identify significant ROIs.
+            if do_brain:
+                src_plot_ga_timecourse(
+                    os.path.join(fig_dir, f"{sub_str}_source_GA_timecourse"),
+                    tc, times, roi_names, sub_str,
+                    n2_window, p2_window, logf,
                 )
-                for ri, fm in fm_by_roi.items():
-                    roi = roi_names[ri] if ri < len(roi_names) else str(ri)
-                    src_plot_fooof(
-                        os.path.join(fig_dir, f"{sub_str}_source_GA_{roi}_fooof.png"),
-                        fm, title=f"{sub_str} GA {roi} FOOOF", logf=logf,
-                    )
-                src_plot_erd(
-                    os.path.join(fig_dir, f"{sub_str}_source_trial_erd.png"),
-                    poststim_rows, roi_names, sub_str, logf,
-                )
-                src_plot_lep_ga(
-                    os.path.join(fig_dir, f"{sub_str}_source_GA_lep.png"),
-                    tc_post, times_post, roi_names,
-                    n2_window, p2_window, sub_str, logf,
-                )
-                src_plot_phase_polar(
-                    os.path.join(fig_dir, f"{sub_str}_source_phase_prestim.png"),
-                    prestim_rows, roi_names,
-                    phase_col="slow_phase",
-                    sub_str=sub_str,
-                    title_suffix="slow-α pre-stim onset",
-                    logf=logf,
-                )
-                src_plot_phase_polar(
-                    os.path.join(fig_dir, f"{sub_str}_source_phase_poststim.png"),
-                    poststim_rows, roi_names,
-                    phase_col="slow_phase_post",
-                    sub_str=sub_str,
-                    title_suffix=f"slow-α post-stim @ {post_ref_t:.2f}s",
-                    logf=logf,
-                )
-
-            # Compute GA STC once — shared by the 2D brain plot and the 3D renders
-            stc_ga = None
-            if (save_plots and do_brain) or do_render:
-                stc_ga = src_apply_inverse_evoked(epochs, inv, lambda2, pick_ori, logf)
-
-            if save_plots and do_brain and stc_ga is not None:
-                src_plot_brain(
-                    os.path.join(fig_dir,
-                                 f"{sub_str}_source_GA_brain_t{t_snap:.3f}s.png"),
-                    stc_ga, subjects_dir, t_snap, sub_str, logf,
-                )
-
-            # 11. 3-D brain renders ───────────────────────────────────────────
-            if do_render:
-                render_dir = os.path.join(fig_dir, "renders")
-                os.makedirs(render_dir, exist_ok=True)
-
-                if do_stc and stc_ga is not None:
-                    src_render_stc_timepoints(
-                        stc_ga       = stc_ga,
-                        ga_lep_rows  = ga_lep_rows,
-                        roi_names    = roi_names,
-                        times        = stc_ga.times,
-                        pre_tmin     = pre_tmin,
-                        pre_tmax     = pre_tmax,
-                        subjects_dir = subjects_dir,
-                        fig_dir      = render_dir,
-                        sub_str      = sub_str,
-                        clim_pct     = stc_clim,
-                        use_mesa     = use_mesa,
-                        logf         = logf,
-                    )
-
-                if do_roi_rnd:
-                    # Build ga_rows list-of-dicts from the GA CSV data structures
-                    import pandas as _pd
-                    ga_df      = _pd.DataFrame(
-                        [{"roi": roi_names[r["roi_idx"]], **r}
-                         for r in ga_prestim_rows + ga_poststim_rows + ga_lep_rows
-                         if "roi_idx" in r]
-                    ).groupby("roi").first().reset_index()
-                    ga_rows_combined = ga_df.to_dict("records")
-
-                    src_render_roi_scalar(
-                        ga_rows      = ga_rows_combined,
-                        roi_names    = roi_names,
-                        labels       = labels,
-                        metric_cols  = roi_metrics,
-                        subjects_dir = subjects_dir,
-                        fig_dir      = render_dir,
-                        sub_str      = sub_str,
-                        use_mesa     = use_mesa,
-                        logf         = logf,
-                    )
 
             src_logmsg(logf, "===== SOURCE DONE %s =====", sub_str)
 

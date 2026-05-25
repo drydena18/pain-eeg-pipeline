@@ -157,7 +157,9 @@ def src_apply_inverse_epochs(
         mode = roi_extract_mode,
         verbose = "ERROR",
     )
-    tc = np.ndarray(tc) # (n_epochs, n_rois, n_times)
+    # BUG FIX: was `np.ndarray(tc)` (np.ndarray is a type, not a constructor) —
+    # corrected to `np.array(tc)` which actually converts the list of arrays.
+    tc = np.array(tc)  # (n_epochs, n_rois, n_times)
     return tc, epochs.times
 
 def src_apply_inverse_evoked(

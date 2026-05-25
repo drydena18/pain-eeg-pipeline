@@ -181,7 +181,7 @@ Run scripts in this order. Steps 1–3 only need to be run once per dataset; ste
 6.  run_gamm_alpha_metrics_v2.R          → gamm_outputs_v2/
 7.  run_gamm_source.R                    → gamm_outputs_source/
 8.  compare_channel_source_gamm.R        → gamm_comparison/
-9.  run_classical_tests.R               → classical_tests/
+9.  run_classical_tests.R                → classical_tests/
 ```
 
 **Important sequencing constraint:** `merge_source_spectral.R` (step 4) reads the FOOOF GA files (`sub-XXX_source_ga_fooof.csv`) that are produced by the Python source pipeline. Run the Python pipeline with `fooof.enabled = true` first, then run the merge. If FOOOF files are absent, the merge proceeds without FOOOF columns and a warning is printed — models m12–m14 in `run_gamm_source.R` will run but the FOOOF predictors will be all-NA.
