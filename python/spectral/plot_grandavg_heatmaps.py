@@ -200,11 +200,17 @@ def build_heatmap_matrices(
     """
     Build [n_subj × n_trials × N_METRICS] array for one experiment.
 
-    exp_subj_df  : rows for this experiment only, sorted by global_subjid.
-                   Subjects with no data get all-NaN rows (gap preserved).
+    Only subjects who have at least one row in exp_data are included,
+    ordered by global_subjid ascending.
     """
     trial_ids = np.sort(exp_data["trial"].unique()).astype(int)
     trial2col = {int(t): i for i, t in enumerate(trial_ids)}
+
+    # Keep only subjects that actually have data, preserving global_subjid order
+    uids_with_data = set(exp_data["subjid_uid"].unique())
+    exp_subj_df = exp_subj_df[
+        exp_subj_df["subjid_uid"].isin(uids_with_data)
+    ].reset_index(drop=True)
 
     uid_list = exp_subj_df["subjid_uid"].tolist()
     uid2row  = {uid: i for i, uid in enumerate(uid_list)}
