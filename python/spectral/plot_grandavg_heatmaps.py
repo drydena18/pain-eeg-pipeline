@@ -2,24 +2,28 @@
 """
 plot_grandavg_heatmaps.py
 ─────────────────────────────────────────────────────────────────────────────
-Grand-average spectral heatmaps across ALL experiments.
+Grand-average spectral heatmaps, one PNG per metric per experiment.
 
-Produces one standalone PNG per metric (18 total), each showing:
+For each experiment found under --spectral-root, and for each of the 18
+spectral metrics, produces one heatmap where:
 
-    Y-axis  →  subjects, ordered ascending by global_subjid,
+    Y-axis  →  subjects (one row each), ordered ascending by global_subjid,
                labelled with subjid_uid  (e.g. E01_S003)
     X-axis  →  trial number
-    Colour  →  channel-grand-averaged metric value for (subject, trial)
+    Colour  →  channel-grand-averaged metric value for that (subject, trial)
 
-Subjects present in the behavioural master but with no spectral CSV appear
+Output layout:
+    <out-dir>/
+        26ByBiosemi/
+            bi_pre.png
+            cog_pre.png
+            ...
+        142ByBiosemi/
+            bi_pre.png
+            ...
+
+Subjects in the behavioural master with no CSV for that experiment appear
 as an all-NaN (light grey) row, preserving the global_subjid ordering gap.
-
-Pipeline context
-────────────────
-Reads:  *_spectral_chan_by_trial.csv   (one per subject)
-        behavioural_demo_master.csv    (produced by merge_participants_into_behavioural.R)
-
-Writes: <out-dir>/<metric_key>.png   (16 files)
 
 Usage
 ─────
@@ -27,16 +31,17 @@ python plot_grandavg_heatmaps.py \\
     --spectral-root  /cifs/seminowicz/eegPainDatasets/CNED/da-analysis \\
     --behav-master   /path/to/behavioural_demo_master.csv \\
     --out-dir        /path/to/figures/grandavg \\
-    [--colormap      viridis]   \\
-    [--clim-pct      2 98]      \\
+    [--colormap      viridis] \\
+    [--clim-pct      2 98]    \\
     [--dpi           300]
 
-Dependencies: numpy, pandas, matplotlib  (all present in ~/env)
+Dependencies: numpy, pandas, matplotlib
 """
 
 import argparse
 import re
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 import matplotlib
@@ -48,46 +53,40 @@ import pandas as pd
 
 # ─────────────────────────────────────────────────────────────────────────────
 # METRIC DEFINITIONS
-# Each tuple: (csv_column_name, display_title, colormap_hint)
-# colormap_hint: 'seq' = sequential (viridis), 'div' = diverging (RdBu_r)
+# (csv_column_name, display_title, cmap_hint)
+# cmap_hint: 'seq' = sequential (--colormap arg), 'div' = diverging (RdBu_r)
 # ─────────────────────────────────────────────────────────────────────────────
-
-
 METRICS: list[tuple[str, str, str]] = [
-    # ── Pre-stimulus interaction metrics ─────────────────────────────────────
-    ("bi_pre",         "BI_pre  (Balance Index)",            "div"),
-    ("lr_pre",         "LR_pre  (Log-Ratio)",                "div"),
-    ("cog_pre",        "CoG_pre  (Hz)",                      "seq"),
-    ("psi_cog",        "ψ_CoG  (BI_pre × [CoG_pre − 10])",  "div"),
-    # ── Pre-stimulus phase ────────────────────────────────────────────────────
-    ("phase_slow_rad", "Slow α Phase at Onset  (rad)",       "div"),
-    # ── Whole-epoch: absolute power ──────────────────────────────────────────
-    ("pow_slow_alpha", "Slow α Power  (8–10 Hz)",            "seq"),
-    ("pow_fast_alpha", "Fast α Power  (10–12 Hz)",           "seq"),
-    ("pow_alpha_total","Total α Power  (8–12 Hz)",           "seq"),
-    # ── Whole-epoch: relative / ratio metrics ────────────────────────────────
-    ("rel_slow_alpha", "Relative Slow α",                    "seq"),
-    ("rel_fast_alpha", "Relative Fast α",                    "seq"),
-    ("sf_ratio",       "Slow/Fast Ratio",                    "div"),
-    ("sf_logratio",    "Slow/Fast Log-Ratio  (whole epoch)", "div"),
-    ("sf_balance",     "Slow/Fast Balance  (whole epoch)",   "div"),
-    ("slow_alpha_frac","Slow α Fraction",                    "seq"),
-    # ── Whole-epoch: PAF ─────────────────────────────────────────────────────
-    ("paf_cog_hz",     "PAF CoG  (Hz)",                      "seq"),
-    # ── Post-stimulus: ERD ───────────────────────────────────────────────────
-    ("erd_slow",       "ERD_slow  (8–10 Hz)",                "div"),
-    ("erd_fast",       "ERD_fast  (10–12 Hz)",               "div"),
-    ("delta_erd",      "ΔERD  (ERD_slow − ERD_fast)",        "div"),
+    # Pre-stimulus interaction metrics
+    ("bi_pre",          "BI_pre  (Balance Index)",             "div"),
+    ("lr_pre",          "LR_pre  (Log-Ratio)",                 "div"),
+    ("cog_pre",         "CoG_pre  (Hz)",                       "seq"),
+    ("psi_cog",         "ψ_CoG  (BI_pre × [CoG_pre − 10])",   "div"),
+    # Pre-stimulus phase
+    ("phase_slow_rad",  "Slow α Phase at Onset  (rad)",        "div"),
+    # Whole-epoch power
+    ("pow_slow_alpha",  "Slow α Power  (8–10 Hz)",             "seq"),
+    ("pow_fast_alpha",  "Fast α Power  (10–12 Hz)",            "seq"),
+    ("pow_alpha_total", "Total α Power  (8–12 Hz)",            "seq"),
+    # Whole-epoch relative / ratio
+    ("rel_slow_alpha",  "Relative Slow α",                     "seq"),
+    ("rel_fast_alpha",  "Relative Fast α",                     "seq"),
+    ("sf_ratio",        "Slow/Fast Ratio",                     "div"),
+    ("sf_logratio",     "Slow/Fast Log-Ratio  (whole epoch)",  "div"),
+    ("sf_balance",      "Slow/Fast Balance  (whole epoch)",    "div"),
+    ("slow_alpha_frac", "Slow α Fraction",                     "seq"),
+    # Whole-epoch PAF
+    ("paf_cog_hz",      "PAF CoG  (Hz)",                       "seq"),
+    # Post-stimulus ERD
+    ("erd_slow",        "ERD_slow  (8–10 Hz)",                 "div"),
+    ("erd_fast",        "ERD_fast  (10–12 Hz)",                "div"),
+    ("delta_erd",       "ΔERD  (ERD_slow − ERD_fast)",         "div"),
 ]
 
-N_METRICS = len(METRICS)
-
-BG_COLOR  = "white"
-NAN_COLOR = "#D0D0D0"
+N_METRICS   = len(METRICS)
+DIV_CMAP    = "RdBu_r"
+NAN_COLOR   = "#D0D0D0"
 FONT_FAMILY = ["Calibri", "DejaVu Sans", "sans-serif"]
-
-# Diverging colormaps for metrics that have a meaningful zero
-DIV_CMAP = "RdBu_r"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -105,6 +104,7 @@ def normalize_colnames(columns: list[str]) -> list[str]:
 
 
 def resolve_experiment_name(csv_path: Path) -> str:
+    """Extract experiment name from path: segment immediately above 'preproc/'."""
     parts = csv_path.parts
     for i, part in enumerate(parts):
         if part.lower() == "preproc" and i > 0:
@@ -112,21 +112,17 @@ def resolve_experiment_name(csv_path: Path) -> str:
     for i, part in enumerate(parts):
         if re.match(r"^sub-\d+$", part) and i >= 2:
             return parts[i - 2]
-    return ""
+    return "unknown"
 
 
 def load_behav_master(path: Path) -> pd.DataFrame:
     df = pd.read_csv(path, dtype=str)
     df.columns = normalize_colnames(df.columns.tolist())
-
-    required = {"subjid", "subjid_uid", "global_subjid"}
-    missing = required - set(df.columns)
+    missing = {"subjid", "subjid_uid", "global_subjid"} - set(df.columns)
     if missing:
-        raise ValueError(f"behavioural_demo_master.csv missing columns: {missing}")
-
+        raise ValueError(f"behavioural_demo_master missing columns: {missing}")
     df["subjid"]        = df["subjid"].astype(int)
     df["global_subjid"] = df["global_subjid"].astype(int)
-
     return (
         df[["experiment_name", "subjid", "subjid_uid", "global_subjid"]]
         .drop_duplicates()
@@ -141,13 +137,9 @@ def read_chan_trial_csv(
     subj_df: pd.DataFrame,
 ) -> pd.DataFrame | None:
     """
-    Read one *_spectral_chan_by_trial.csv, average across channels per trial,
-    return a tidy DataFrame with columns:
-        [subjid_uid, global_subjid, trial, <metric_col>, ...]
-
-    Only metric columns that actually exist in the CSV are averaged —
-    missing columns (e.g. pre/post metrics not yet computed) are silently
-    skipped; they will remain NaN in the heatmap.
+    Read one CSV, average across channels per trial.
+    Returns tidy DataFrame with columns [subjid_uid, global_subjid, trial, <metrics>]
+    or None on failure.
     """
     try:
         df = pd.read_csv(csv_path)
@@ -157,29 +149,26 @@ def read_chan_trial_csv(
         return None
 
     if not {"subjid", "trial"}.issubset(df.columns):
-        print(f"[WARN] {csv_path.name} missing subjid/trial — skipping.", file=sys.stderr)
+        print(f"[WARN] {csv_path.name}: missing subjid/trial — skipping.", file=sys.stderr)
         return None
 
-    unique_subjids = df["subjid"].unique()
-    if len(unique_subjids) != 1:
-        print(f"[WARN] {csv_path.name} has {len(unique_subjids)} subjid values — skipping.", file=sys.stderr)
+    unique_sids = df["subjid"].unique()
+    if len(unique_sids) != 1:
+        print(f"[WARN] {csv_path.name}: {len(unique_sids)} subjid values — skipping.", file=sys.stderr)
         return None
-    this_subjid = int(unique_subjids[0])
+    this_sid = int(unique_sids[0])
 
-    # Resolve subjid_uid
+    # Resolve to subjid_uid via experiment_name + subjid
     if exp_name and "experiment_name" in subj_df.columns:
         match = subj_df[
             (subj_df["experiment_name"] == exp_name) &
-            (subj_df["subjid"] == this_subjid)
+            (subj_df["subjid"] == this_sid)
         ]
     else:
-        match = subj_df[subj_df["subjid"] == this_subjid]
+        match = subj_df[subj_df["subjid"] == this_sid]
 
     if match.empty:
-        print(
-            f"[WARN] No master entry for subjid={this_subjid}, exp={exp_name!r} — skipping.",
-            file=sys.stderr,
-        )
+        print(f"[WARN] No master entry for subjid={this_sid}, exp={exp_name!r} — skipping.", file=sys.stderr)
         return None
     if len(match) > 1:
         match = match.iloc[[0]]
@@ -187,51 +176,42 @@ def read_chan_trial_csv(
     subjid_uid    = match["subjid_uid"].iloc[0]
     global_subjid = int(match["global_subjid"].iloc[0])
 
-    # Average across channels — only for columns that exist in this CSV
+    # Average across channels per trial for present metric columns only
     metric_cols_present = [m[0] for m in METRICS if m[0] in df.columns]
-    if not metric_cols_present:
-        print(f"[WARN] {csv_path.name} has no recognised metric columns — skipping.", file=sys.stderr)
-        return None
-
     for col in metric_cols_present:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    ga = (
-        df.groupby("trial")[metric_cols_present]
-        .mean(numeric_only=True)
-        .reset_index()
-    )
+    ga = df.groupby("trial")[metric_cols_present].mean(numeric_only=True).reset_index()
 
-    # Add NaN columns for any metrics not present in this CSV
+    # Fill any missing metric columns with NaN
     for col, _, _ in METRICS:
         if col not in ga.columns:
             ga[col] = np.nan
 
     ga["subjid_uid"]    = subjid_uid
     ga["global_subjid"] = global_subjid
-
     return ga
 
 
 def build_heatmap_matrices(
-    all_data: pd.DataFrame,
-    subj_order: pd.DataFrame,
+    exp_data: pd.DataFrame,
+    exp_subj_df: pd.DataFrame,
 ) -> tuple[np.ndarray, np.ndarray, list[str]]:
     """
-    Returns:
-        matrices  : float [n_subj × n_trials × N_METRICS], NaN for gaps
-        trial_ids : int   [n_trials]
-        y_labels  : list  [n_subj]  subjid_uid strings, row 0 = bottom
+    Build [n_subj × n_trials × N_METRICS] array for one experiment.
+
+    exp_subj_df  : rows for this experiment only, sorted by global_subjid.
+                   Subjects with no data get all-NaN rows (gap preserved).
     """
-    trial_ids = np.sort(all_data["trial"].unique()).astype(int)
+    trial_ids = np.sort(exp_data["trial"].unique()).astype(int)
     trial2col = {int(t): i for i, t in enumerate(trial_ids)}
 
-    uid_list = subj_order["subjid_uid"].tolist()
+    uid_list = exp_subj_df["subjid_uid"].tolist()
     uid2row  = {uid: i for i, uid in enumerate(uid_list)}
 
     matrices = np.full((len(uid_list), len(trial_ids), N_METRICS), np.nan)
 
-    for _, row in all_data.iterrows():
+    for _, row in exp_data.iterrows():
         uid = row["subjid_uid"]
         if uid not in uid2row:
             continue
@@ -247,56 +227,41 @@ def build_heatmap_matrices(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FIGURE — one standalone PNG per metric
+# FIGURE
 # ─────────────────────────────────────────────────────────────────────────────
 
-def render_single_heatmap(
-    M:           np.ndarray,
-    trial_ids:   np.ndarray,
-    y_labels:    list[str],
-    metric_key:  str,
+def render_heatmap(
+    M:             np.ndarray,
+    trial_ids:     np.ndarray,
+    y_labels:      list[str],
     display_label: str,
-    cmap_hint:   str,
-    out_path:    Path,
-    default_cmap: str = "viridis",
-    clim_pct:    tuple[float, float] | None = (2.0, 98.0),
-    dpi:         int = 300,
+    exp_name:      str,
+    out_path:      Path,
+    seq_cmap:      str   = "viridis",
+    cmap_hint:     str   = "seq",
+    clim_pct:      tuple | None = (2.0, 98.0),
+    dpi:           int   = 300,
 ) -> None:
-    """
-    Render and save one heatmap PNG for a single metric.
-
-    Parameters
-    ──────────
-    M             : [n_subj × n_trials] float array
-    trial_ids     : int array of actual trial numbers (x-axis)
-    y_labels      : subjid_uid list (y-axis, row 0 = bottom)
-    metric_key    : snake_case column name (used for filename)
-    display_label : human-readable title string
-    cmap_hint     : 'seq' or 'div' — controls colormap choice
-    out_path      : full Path to write the PNG
-    default_cmap  : sequential colormap name (CLI --colormap)
-    clim_pct      : (lo, hi) percentile clip; None = full range
-    dpi           : export resolution
-    """
+    """Render and save one heatmap PNG."""
     matplotlib.rcParams.update({
-        "font.family":      FONT_FAMILY,
-        "figure.facecolor": BG_COLOR,
-        "axes.facecolor":   BG_COLOR,
-        "text.color":       "#1A1A1A",
-        "axes.labelcolor":  "#1A1A1A",
-        "xtick.color":      "#444444",
-        "ytick.color":      "#444444",
-        "axes.edgecolor":   "#CCCCCC",
+        "font.family":       FONT_FAMILY,
+        "figure.facecolor":  "white",
+        "axes.facecolor":    "white",
+        "savefig.facecolor": "white",
+        "text.color":        "#1A1A1A",
+        "axes.labelcolor":   "#1A1A1A",
+        "xtick.color":       "#444444",
+        "ytick.color":       "#444444",
+        "axes.edgecolor":    "#CCCCCC",
     })
 
     n_subj, n_trials = M.shape
 
-    # ── Colormap ─────────────────────────────────────────────────────────────
-    cmap_name = DIV_CMAP if cmap_hint == "div" else default_cmap
-    cmap_obj  = plt.get_cmap(cmap_name).copy()
+    # Colormap
+    cmap_obj = plt.get_cmap(DIV_CMAP if cmap_hint == "div" else seq_cmap).copy()
     cmap_obj.set_bad(NAN_COLOR)
 
-    # ── Colour limits ─────────────────────────────────────────────────────────
+    # Colour limits
     finite_vals = M[np.isfinite(M)]
     if len(finite_vals) == 0:
         vmin, vmax = 0.0, 1.0
@@ -308,17 +273,22 @@ def render_single_heatmap(
     else:
         vmin, vmax = float(finite_vals.min()), float(finite_vals.max())
 
-    # ── Figure sizing ─────────────────────────────────────────────────────────
-    # Width: trial axis — aim for ~8 px per trial, min 8 inches
-    fig_w = max(8.0, n_trials * 8 / 100)
-    # Height: subject axis — aim for 18 px per subject, min 5 inches
-    fig_h = max(5.0, n_subj * 18 / 100 + 1.5)   # +1.5 for title + xlabel
+    # For diverging maps, centre on zero when the data spans zero
+    if cmap_hint == "div" and vmin < 0 < vmax:
+        bound = max(abs(vmin), abs(vmax))
+        vmin, vmax = -bound, bound
 
-    fig, ax = plt.subplots(figsize=(fig_w, fig_h), facecolor=BG_COLOR)
+    # Figure size: aim for square-ish cells
+    # Width: at least 6 in, scale with trial count; height: scale with subject count
+    cell_w   = max(0.18, 8.0 / max(n_trials, 1))   # inches per cell
+    cell_h   = max(0.28, 6.0 / max(n_subj,   1))
+    fig_w    = max(7.0,  cell_w * n_trials + 2.0)   # +2 for colorbar + margins
+    fig_h    = max(4.0,  cell_h * n_subj   + 1.5)   # +1.5 for title + xlabel
 
-    M_masked = np.ma.masked_invalid(M)
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h), facecolor="white")
+
     im = ax.imshow(
-        M_masked,
+        np.ma.masked_invalid(M),
         aspect="auto",
         origin="lower",       # row 0 = bottom = lowest global_subjid
         cmap=cmap_obj,
@@ -331,30 +301,30 @@ def render_single_heatmap(
     cb.ax.tick_params(labelsize=8)
     cb.outline.set_edgecolor("#CCCCCC")
 
-    ax.set_title(display_label, fontsize=13, fontweight="bold", pad=10)
-    ax.set_xlabel("Trial", fontsize=10, labelpad=5)
-    ax.set_ylabel("Subject  (global_uid)", fontsize=10, labelpad=5)
+    ax.set_title(f"{exp_name}  —  {display_label}", fontsize=11,
+                 fontweight="bold", pad=8, color="#1A1A1A")
+    ax.set_xlabel("Trial", fontsize=9, labelpad=4)
+    ax.set_ylabel("Subject  (subjid_uid)", fontsize=9, labelpad=4)
 
-    # Y-axis ticks
+    # Y-axis: one label per subject, thin if many
     y_step = 1
-    if n_subj > 30: y_step = 2
-    if n_subj > 60: y_step = 4
+    if n_subj > 20: y_step = 2
+    if n_subj > 40: y_step = 4
     yt = np.arange(0, n_subj, y_step)
     ax.set_yticks(yt)
-    ax.set_yticklabels([y_labels[i] for i in yt], fontsize=8)
+    ax.set_yticklabels([y_labels[i] for i in yt], fontsize=7,
+                       fontfamily="monospace")
 
-    # X-axis ticks
+    # X-axis: actual trial numbers, thin if many
     x_step = 1
-    if n_trials > 40:  x_step = 5
-    if n_trials > 100: x_step = 10
+    if n_trials > 30:  x_step = 5
+    if n_trials > 80:  x_step = 10
+    if n_trials > 150: x_step = 20
     xt = np.arange(0, n_trials, x_step)
     ax.set_xticks(xt)
-    ax.set_xticklabels(
-        [str(trial_ids[i]) for i in xt],
-        fontsize=8,
-        rotation=45 if n_trials > 20 else 0,
-        ha="right" if n_trials > 20 else "center",
-    )
+    ax.set_xticklabels([str(trial_ids[i]) for i in xt], fontsize=7,
+                       rotation=45 if n_trials > 20 else 0,
+                       ha="right" if n_trials > 20 else "center")
 
     for spine in ax.spines.values():
         spine.set_edgecolor("#CCCCCC")
@@ -362,7 +332,8 @@ def render_single_heatmap(
 
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=dpi, bbox_inches="tight", facecolor=BG_COLOR)
+    fig.savefig(out_path, dpi=dpi, bbox_inches="tight",
+                facecolor="white", edgecolor="none")
     plt.close(fig)
 
 
@@ -372,17 +343,17 @@ def render_single_heatmap(
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Grand-average spectral heatmaps — one PNG per metric.",
+        description="Grand-average spectral heatmaps — one PNG per metric per experiment.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("--spectral-root", required=True,
-        help="Root directory to search recursively for *_spectral_chan_by_trial.csv files.")
+        help="Root dir to search recursively for *_spectral_chan_by_trial.csv files.")
     p.add_argument("--behav-master", required=True,
         help="Path to behavioural_demo_master.csv.")
     p.add_argument("--out-dir", default=None,
-        help="Output directory. Defaults to <spectral-root>/../grandavg_heatmaps.")
+        help="Output root. Defaults to <spectral-root>/../grandavg_heatmaps.")
     p.add_argument("--colormap", default="viridis",
-        help="Sequential colormap name (diverging metrics always use RdBu_r).")
+        help="Sequential colormap name. Diverging metrics always use RdBu_r.")
     p.add_argument("--clim-pct", nargs=2, type=float, default=[2.0, 98.0],
         metavar=("LO", "HI"),
         help="Percentile clip for colour limits. Pass '0 100' for full range.")
@@ -391,87 +362,99 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    args = parse_args()
-
-    spectral_root = Path(args.spectral_root)
-    behav_path    = Path(args.behav_master)
-    out_dir = (
-        Path(args.out_dir) if args.out_dir
-        else spectral_root.parent / "grandavg_heatmaps"
-    )
+    args   = parse_args()
+    root   = Path(args.spectral_root)
+    out_dir = Path(args.out_dir) if args.out_dir else root.parent / "grandavg_heatmaps"
     clim_pct = tuple(args.clim_pct) if args.clim_pct != [0.0, 100.0] else None
 
-    # ── 1. Discover CSVs ─────────────────────────────────────────────────────
-    csv_paths = sorted(spectral_root.rglob("*_spectral_chan_by_trial.csv"))
+    # 1. Discover all CSVs, group by experiment name
+    csv_paths = sorted(root.rglob("*_spectral_chan_by_trial.csv"))
     if not csv_paths:
-        print(f"[ERROR] No CSVs found under {spectral_root}", file=sys.stderr)
-        sys.exit(1)
-    print(f"[GRANDAVG] Found {len(csv_paths)} subject CSV(s).")
-
-    # ── 2. Load master ───────────────────────────────────────────────────────
-    print(f"[GRANDAVG] Loading: {behav_path}")
-    subj_df = load_behav_master(behav_path)
-    print(f"[GRANDAVG] {len(subj_df)} subjects in master.")
-
-    # ── 3. Read + channel-average ────────────────────────────────────────────
-    frames: list[pd.DataFrame] = []
-    for csv_path in csv_paths:
-        exp_name = resolve_experiment_name(csv_path)
-        ga = read_chan_trial_csv(csv_path, exp_name, subj_df)
-        if ga is not None:
-            frames.append(ga)
-            n_metrics_present = sum(
-                1 for col, _, _ in METRICS if ga[col].notna().any()
-            )
-            print(
-                f"[GRANDAVG]   {ga['subjid_uid'].iloc[0]:12s}  "
-                f"exp={exp_name:20s}  "
-                f"trials={len(ga)}  "
-                f"metrics_present={n_metrics_present}/{N_METRICS}"
-            )
-
-    if not frames:
-        print("[ERROR] No valid data loaded.", file=sys.stderr)
+        print(f"[ERROR] No CSVs found under {root}", file=sys.stderr)
         sys.exit(1)
 
-    all_data = pd.concat(frames, ignore_index=True)
-    print(
-        f"[GRANDAVG] Loaded {all_data['subjid_uid'].nunique()} subjects, "
-        f"{all_data['trial'].nunique()} unique trials."
-    )
+    by_exp: dict[str, list[Path]] = defaultdict(list)
+    for p in csv_paths:
+        by_exp[resolve_experiment_name(p)].append(p)
 
-    # ── 4. Build matrices ─────────────────────────────────────────────────────
-    matrices, trial_ids, y_labels = build_heatmap_matrices(all_data, subj_df)
-    n_subj, n_trials, _ = matrices.shape
-    print(f"[GRANDAVG] Matrix: {n_subj} subjects × {n_trials} trials × {N_METRICS} metrics.")
+    print(f"[GRANDAVG] Found {len(csv_paths)} CSV(s) across "
+          f"{len(by_exp)} experiment(s): {sorted(by_exp)}")
 
-    # ── 5. Render one PNG per metric ──────────────────────────────────────────
-    print(f"[GRANDAVG] Writing PNGs to: {out_dir}")
-    for mi, (col, label, hint) in enumerate(METRICS):
-        M = matrices[:, :, mi]
-        n_finite = int(np.isfinite(M).sum())
+    # 2. Load behavioural master
+    print(f"[GRANDAVG] Loading: {args.behav_master}")
+    subj_df = load_behav_master(Path(args.behav_master))
 
-        out_path = out_dir / f"{col}.png"
+    # 3. Process each experiment independently
+    for exp_name, exp_csvs in sorted(by_exp.items()):
+        print(f"\n[GRANDAVG] ── Experiment: {exp_name}  ({len(exp_csvs)} subject(s)) ──")
 
-        if n_finite == 0:
-            print(f"[GRANDAVG]   SKIP  {col:30s} (all NaN — column not yet computed in pipeline)")
+        # Subject rows for this experiment only, sorted by global_subjid
+        if "experiment_name" in subj_df.columns:
+            exp_subj_df = (
+                subj_df[subj_df["experiment_name"] == exp_name]
+                .sort_values("global_subjid")
+                .reset_index(drop=True)
+            )
+        else:
+            exp_subj_df = subj_df.copy()
+
+        if exp_subj_df.empty:
+            print(f"[WARN] No master rows for experiment {exp_name!r} — skipping.")
             continue
 
-        render_single_heatmap(
-            M             = M,
-            trial_ids     = trial_ids,
-            y_labels      = y_labels,
-            metric_key    = col,
-            display_label = label,
-            cmap_hint     = hint,
-            out_path      = out_path,
-            default_cmap  = args.colormap,
-            clim_pct      = clim_pct,
-            dpi           = args.dpi,
-        )
-        print(f"[GRANDAVG]   OK    {col:30s}  ({n_finite} finite cells) → {out_path.name}")
+        # Read + channel-average each subject CSV
+        frames: list[pd.DataFrame] = []
+        for csv_path in exp_csvs:
+            ga = read_chan_trial_csv(csv_path, exp_name, subj_df)
+            if ga is not None:
+                frames.append(ga)
+                n_metrics_present = sum(
+                    1 for col, _, _ in METRICS if ga[col].notna().any()
+                )
+                print(f"  {ga['subjid_uid'].iloc[0]:15s}  "
+                      f"trials={len(ga):3d}  "
+                      f"metrics={n_metrics_present}/{N_METRICS}")
 
-    print("[GRANDAVG] Done.")
+        if not frames:
+            print(f"[WARN] No valid data for {exp_name} — skipping.")
+            continue
+
+        exp_data = pd.concat(frames, ignore_index=True)
+        n_trials_exp = exp_data["trial"].nunique()
+        print(f"  → {exp_data['subjid_uid'].nunique()} subjects, "
+              f"{n_trials_exp} unique trial numbers")
+
+        # Build matrices for this experiment
+        matrices, trial_ids, y_labels = build_heatmap_matrices(exp_data, exp_subj_df)
+        n_subj, n_trials, _ = matrices.shape
+        print(f"  → Matrix: {n_subj} subjects × {n_trials} trials × {N_METRICS} metrics")
+
+        # Render one PNG per metric
+        exp_out = out_dir / exp_name
+        n_written = 0
+        for mi, (col, label, hint) in enumerate(METRICS):
+            M = matrices[:, :, mi]
+            if not np.isfinite(M).any():
+                print(f"  SKIP  {col} (all NaN)")
+                continue
+            out_path = exp_out / f"{col}.png"
+            render_heatmap(
+                M             = M,
+                trial_ids     = trial_ids,
+                y_labels      = y_labels,
+                display_label = label,
+                exp_name      = exp_name,
+                out_path      = out_path,
+                seq_cmap      = args.colormap,
+                cmap_hint     = hint,
+                clim_pct      = clim_pct,
+                dpi           = args.dpi,
+            )
+            n_written += 1
+
+        print(f"  → {n_written} PNGs written to {exp_out}/")
+
+    print("\n[GRANDAVG] Done.")
 
 
 if __name__ == "__main__":
