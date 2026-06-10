@@ -86,7 +86,7 @@ METRICS: list[tuple[str, str, str]] = [
 N_METRICS   = len(METRICS)
 DIV_CMAP    = "RdBu_r"
 NAN_COLOR   = "#D0D0D0"
-FONT_FAMILY = ["Calibri", "DejaVu Sans", "sans-serif"]
+FONT_FAMILY = ["sans-serif"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
