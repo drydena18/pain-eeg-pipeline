@@ -271,64 +271,14 @@
     "roi": {
       "parcellation": "aparc",
       "mode": "mean_flip",
-      "use_custom_rois": false,
+      "use_custom_rois": true,
       "custom_rois": {
         "_note": "Disabled (use_custom_rois=false). Set use_custom_rois=true to activate. Keys are ROI names; values are lists of aparc label strings (lh-* / rh-*).",
-        "lTC": [
-          "lh-superiortemporal",
-          "lh-middletemporal",
-          "lh-inferiortemporal",
-          "lh-bankssts",
-          "lh-transversetemporal",
-          "lh-temporalpole"
-        ],
-        "rTC": [
-          "rh-superiortemporal",
-          "rh-middletemporal",
-          "rh-inferiortemporal",
-          "rh-bankssts",
-          "rh-transversetemporal",
-          "rh-temporalpole"
-        ],
-        "lPC": [
-          "lh-inferiorparietal",
-          "lh-superiorparietal",
-          "lh-supramarginal",
+        "S1": [
           "lh-postcentral",
-          "lh-precuneus"
-        ],
-        "rPC": [
-          "rh-inferiorparietal",
-          "rh-superiorparietal",
-          "rh-supramarginal",
           "rh-postcentral",
-          "rh-precuneus"
-        ],
-        "lFC": [
-          "lh-superiorfrontal",
-          "lh-rostralmiddlefrontal",
-          "lh-caudalmiddlefrontal",
-          "lh-inferiorfrontal",
-          "lh-precentral"
-        ],
-        "rFC": [
-          "rh-superiorfrontal",
-          "rh-rostralmiddlefrontal",
-          "rh-caudalmiddlefrontal",
-          "rh-inferiorfrontal",
-          "rh-precentral"
-        ],
-        "lOC": [
-          "lh-lateraloccipital",
-          "lh-cuneus",
-          "lh-lingual",
-          "lh-pericalcarine"
-        ],
-        "rOC": [
-          "rh-lateraloccipital",
-          "rh-cuneus",
-          "rh-lingual",
-          "rh-pericalcarine"
+          "lh-paracentral",
+          "rh-paracentral"
         ]
       }
     },
