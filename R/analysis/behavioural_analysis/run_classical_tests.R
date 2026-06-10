@@ -291,7 +291,7 @@ if (exists("test1_results") && nrow(test1_results) > 0) {
       scale_fill_gradient2(low = "#2166ac", mid = "white", high = "#d6604d",
                            midpoint = 0, limits = c(-d_lim, d_lim),
                            name = "Cohen's d") +
-      labs(title    = paste0("Test 1: ERD Significance", title_suffix),
+      labs(title    = paste0("ERD Significance", title_suffix),
            subtitle = "Cohen's d (pre vs post stimulus); FDR-corrected (* p<0.05  ** p<0.01  *** p<0.001)",
            x = NULL, y = NULL) +
       theme_bw(base_size = 10) +
@@ -427,7 +427,7 @@ if (nrow(test2_plot_df) > 0) {
                        label = "p.signif", size = 3.5,
                        comparisons = list(domain_lvls[1:2])) +
     facet_wrap(~concept, scales = "free_y", nrow = 1) +
-    labs(title    = "Test 2: Per-Subject R² — Channel vs Source GAMM",
+    labs(title    = "Per-Subject R² — Channel vs Source GAMM",
          subtitle = "Lines connect the same subject; diamond = mean ± SE",
          x = NULL, y = "Per-subject R²", colour = NULL) +
     theme_bw(base_size = 10) +
@@ -548,7 +548,7 @@ if (length(test3_plot_list) > 0L) {
                      fill = "steelblue", colour = "grey20") +
         geom_jitter(aes(colour = subjid_uid),
                     height = 0.12, size = 1.2, alpha = 0.7) +
-        labs(title    = paste0("Test 3: ", this_metric, " Across ROIs",
+        labs(title    = paste0("Boxplot: ", this_metric, " Across ROIs",
                                title_suffix, " (rmANOVA)"),
              subtitle = "Each point = one subject grand-average; boxes = group distribution",
              x = this_metric, y = NULL, colour = "Subject") +
@@ -702,7 +702,7 @@ if (length(test4_plot_list) > 0L) {
                        height = 0.35, colour = "grey30") +
         scale_fill_gradient(low = "#d1e5f0", high = "#2166ac",
                             name = "Mean R\u00b2") +
-        labs(title    = paste0("Test 4: Per-Subject R\u00b2 \u2014 ",
+        labs(title    = paste0("Per-Subject R\u00b2 \u2014 ",
                                this_model, title_suffix),
              subtitle = "Mean \u00b1 SE across subjects; rmANOVA tests ROI differences",
              x = "Mean per-subject R\u00b2", y = NULL) +
@@ -843,7 +843,7 @@ for (pcol in phase_cols) {
       geom_text(aes(label = sig), size = 2.8, colour = "black") +
       scale_fill_gradient(low = "white", high = "#b2182b", limits = c(0, 1),
                           name = "R (mean\nresultant)") +
-      labs(title    = paste0("Test 5: Rayleigh Test \u2014 ", pcol, title_suffix),
+      labs(title    = paste0("Rayleigh Test \u2014 ", pcol, title_suffix),
            subtitle = "Fill = mean resultant length R; label = FDR significance",
            x = "Subject", y = NULL) +
       theme_bw(base_size = 9) +
@@ -879,7 +879,7 @@ report <- c(
 )
 
 # Test 1
-report <- c(report, "TEST 1: ERD Significance (pre vs post alpha power)",
+report <- c(report, "ERD Significance (pre vs post alpha power)",
             strrep("-", 40))
 if (exists("test1_results") && nrow(test1_results) > 0) {
   for (i in seq_len(nrow(test1_results))) {
@@ -895,7 +895,7 @@ if (exists("test1_results") && nrow(test1_results) > 0) {
 }
 
 # Test 2
-report <- c(report, "", "TEST 2: Channel vs Source R² (paired t-test)",
+report <- c(report, "", "Channel vs Source R² (paired t-test)",
             strrep("-", 40))
 if (exists("test2_results") && nrow(test2_results) > 0) {
   for (i in seq_len(nrow(test2_results))) {
@@ -910,7 +910,7 @@ if (exists("test2_results") && nrow(test2_results) > 0) {
 }
 
 # Test 3
-report <- c(report, "", "TEST 3: rmANOVA — metrics across ROIs",
+report <- c(report, "", "rmANOVA — metrics across ROIs",
             strrep("-", 40))
 for (metric in rmanova_metrics) {
   f <- file.path(out3, paste0("test3_rmanova_", metric, ".csv"))
@@ -930,7 +930,7 @@ for (metric in rmanova_metrics) {
 }
 
 # Test 4
-report <- c(report, "", "TEST 4: ANOVA — deviance across ROIs",
+report <- c(report, "", "ANOVA — deviance across ROIs",
             strrep("-", 40))
 for (src_model in source_models_for_r2) {
   f <- file.path(out4, paste0("test4_roi_anova_", src_model, ".csv"))
@@ -952,7 +952,7 @@ for (src_model in source_models_for_r2) {
 }
 
 # Test 5
-report <- c(report, "", "TEST 5: Rayleigh test — phase uniformity",
+report <- c(report, "", "Rayleigh test — phase uniformity",
             strrep("-", 40))
 for (pcol in phase_cols) {
   f <- file.path(out5, paste0("test5_rayleigh_summary_", pcol, ".csv"))
