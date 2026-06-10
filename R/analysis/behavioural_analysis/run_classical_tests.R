@@ -187,14 +187,24 @@ chan_fitted  <- read_safe(channel_fitted_file)
 if (is.null(src_master)) stop("source_pain_master.csv not found.")
 
 all_rois <- sort(unique(src_master$roi))
-message("ROIs: ", paste(all_rois, collapse = ", "))
+message("ROIs in data: ", paste(all_rois, collapse = ", "))
+
+# ── S1-only filter ────────────────────────────────────────────────────────────
+# Restrict all plotting and ROI-stratified analyses to S1 only.
+# Override all_rois here so every downstream loop (Tests 1, 3, 4, 5) picks
+# up the restriction automatically without further changes.
+PLOT_ROIS <- "S1"
+if (!PLOT_ROIS %in% all_rois) {
+  warning("Requested ROI '", PLOT_ROIS, "' not found in source_pain_master.csv. ",
+          "Available ROIs: ", paste(all_rois, collapse = ", "))
+}
+all_rois <- intersect(PLOT_ROIS, all_rois)
+message("Plotting ROIs (restricted): ", paste(all_rois, collapse = ", "))
 
 # Hemisphere filter list — drives all ROI-stratified plot sections.
-# Each element produces one figure: combined, left hemisphere, right hemisphere.
+# S1 carries no -lh / -rh suffix, so the combined entry is the only one needed.
 hemi_filters <- list(
-  list(suffix = "",    label = "All ROIs",         rois = all_rois),
-  list(suffix = "_lh", label = "Left hemisphere",  rois = all_rois[str_ends(all_rois, "-lh")]),
-  list(suffix = "_rh", label = "Right hemisphere", rois = all_rois[str_ends(all_rois, "-rh")])
+  list(suffix = "",    label = "All ROIs",         rois = all_rois)
 )
 
 # Subject-level GA per ROI (used by Tests 1, 3, 4)
