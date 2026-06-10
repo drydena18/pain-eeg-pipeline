@@ -174,8 +174,8 @@
   },
   "preproc": {
     "concat": {
-      "enabled": false,
-      "n-sessions": 1,
+      "enabled": true,
+      "n-sessions": 3,
       "session_pattern": ""
     },
     "filter": {
