@@ -460,12 +460,12 @@ for (metric in rmanova_metrics) {
   }
   message("  Running rmANOVA for: ", metric)
 
-  # Need at least 2 ROIs and 3 subjects with complete data across all ROIs
+  # Need subjects with data in all requested ROIs (works for any n_rois >= 1).
+  # rmANOVA itself requires >= 2 ROI levels; handled below.
   rm_df <- src_subject_ga %>%
     select(subjid_uid, roi, all_of(metric)) %>%
     rename(value = all_of(metric)) %>%
     filter(!is.na(value)) %>%
-    # Keep only subjects with data in all ROIs
     group_by(subjid_uid) %>%
     filter(n_distinct(roi) == length(all_rois)) %>%
     ungroup() %>%
@@ -476,6 +476,15 @@ for (metric in rmanova_metrics) {
 
   if (n_distinct(rm_df$subjid_uid) < 3L) {
     message("  [SKIP] Fewer than 3 complete subjects for: ", metric)
+    next
+  }
+
+  # rmANOVA requires >= 2 ROI levels. With a single ROI, skip the ANOVA but
+  # still store the data so the distribution plot is produced.
+  if (n_distinct(rm_df$roi) < 2L) {
+    message("  [NOTE] Only 1 ROI (", paste(all_rois, collapse = ", "),
+            ") — skipping rmANOVA for ", metric, "; plot still produced.")
+    test3_plot_list[[metric]] <- rm_df %>% mutate(metric = metric)
     next
   }
 
@@ -600,8 +609,8 @@ for (src_model in source_models_for_r2) {
     r2_by_roi[[this_roi]] <- r2_sub
   }
 
-  if (length(r2_by_roi) < 2L) {
-    message("  [SKIP] Fewer than 2 ROIs for model: ", src_model)
+  if (length(r2_by_roi) < 1L) {
+    message("  [SKIP] No ROI fitted data found for model: ", src_model)
     next
   }
 
@@ -612,23 +621,46 @@ for (src_model in source_models_for_r2) {
       subjid_uid = as.factor(subjid_uid)
     )
 
-  if (n_distinct(anova_df$roi) < 2L || nrow(anova_df) < 6L) {
+  if (n_distinct(anova_df$roi) < 1L || nrow(anova_df) < 3L) {
     message("  [SKIP] Insufficient data for model: ", src_model,
             " (", n_distinct(anova_df$roi), " ROIs, ", nrow(anova_df), " rows)")
     next
   }
 
-  # Relax balance requirement: include subjects with data in ≥ 2 ROIs.
-  # The strict "all ROIs" filter used by Test 3 would exclude everyone at
-  # N=11 across 68 ROIs. The base-R Error() path handles mild imbalance.
+  # Relax balance requirement: include subjects with data in >= 1 ROI.
   anova_df_rm <- anova_df %>%
     group_by(subjid_uid) %>%
-    filter(n_distinct(roi) >= 2L) %>%
+    filter(n_distinct(roi) >= 1L) %>%
     ungroup()
 
   n_subj_rm  <- n_distinct(anova_df_rm$subjid_uid)
   n_roi_rm   <- n_distinct(anova_df_rm$roi)
-  message("  Model ", src_model, ": ", n_subj_rm, " subjects × ", n_roi_rm, " ROIs after filtering")
+  message("  Model ", src_model, ": ", n_subj_rm, " subjects x ", n_roi_rm, " ROIs after filtering")
+
+  # rmANOVA requires >= 2 ROI levels. With a single ROI, produce a descriptive
+  # summary (mean, SD, SE per subject) and skip straight to the plot.
+  if (n_roi_rm < 2L) {
+    message("  [NOTE] Only 1 ROI -- replacing rmANOVA with descriptive summary for ", src_model)
+    anova_summ <- anova_df_rm %>%
+      group_by(roi) %>%
+      summarise(
+        term       = "descriptive (single ROI)",
+        n_subjects = n(),
+        mean_r2    = round(mean(r2, na.rm = TRUE), 4),
+        sd_r2      = round(sd(r2,   na.rm = TRUE), 4),
+        se_r2      = round(sd(r2,   na.rm = TRUE) / sqrt(sum(!is.na(r2))), 4),
+        model      = src_model,
+        note       = "rmANOVA requires >= 2 ROI levels; descriptive stats only",
+        .groups    = "drop"
+      )
+    posthoc4 <- tibble(note = "No post-hoc: single ROI")
+    test4_rows[[src_model]]     <- anova_summ
+    test4_plot_list[[src_model]] <- anova_df
+    write_csv(anova_summ, file.path(out4, paste0("test4_roi_anova_", src_model, ".csv")))
+    write_csv(posthoc4,   file.path(out4, paste0("test4_posthoc_",  src_model, ".csv")))
+    message("  Saved test4_roi_anova_", src_model, ".csv (descriptive, single ROI)")
+    next
+  }
 
   anova_summ <- tryCatch({
     if (.afex_ok && n_distinct(anova_df_rm$subjid_uid) >= 3L) {
