@@ -55,7 +55,7 @@ if isfield(cfg, 'preproc') && isfield(cfg.preproc, 'concat') && ...
 end
 
 % Raw extensions to try (ordered by preference)
-exts = {'.bdf', '.BDF', '.eeg', '.EEG'};
+exts = {'.vhdr', '.vmrk', '.bdf', '.BDF', '.eeg', '.EEG'};
 
 % ----------------------------------------------------------------
 % Fallback 3 pre-computation: collect all raw files for this subject
