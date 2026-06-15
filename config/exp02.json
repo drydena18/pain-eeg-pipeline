@@ -62,7 +62,7 @@
   "preproc": {
     "concat": {
       "enabled": false,
-      "n-sessions": 1,
+      "n-sessions": 4,
       "session_pattern": ""
     },
     "filter": {
@@ -130,9 +130,14 @@
       "enabled": true,
       "events": [
         {
-          "code": "54",
+          "code": "32",
           "condition": "pain",
-          "intensity": "single"
+          "intensity": "low"
+        },
+        {
+            "code": "64",
+            "condition": "pain",
+            "intensity": "high"
         }
       ],
       "tmin_sec": -1.0,
