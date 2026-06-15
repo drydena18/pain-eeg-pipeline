@@ -110,8 +110,8 @@ for s = 1:nSessions
                 sprintf('%s_%s_eeg%s', subDir, sessStr1, ext{1}))
         };
         for c = 1:numel(cands)
-            if exist(cands{c}, 'file')
-                found = cands{c};
+            if exist(char(cands{c}), 'file')
+                found = char(cands{c});
                 break;
             end
         end
@@ -124,8 +124,8 @@ for s = 1:nSessions
             % Try with 4 args first (subjid, sess, subjid, sess)
             rel4 = sprintf(char(pat), subjid, s, subjid, s);
             cand4 = fullfile(string(P.INPUT.EXP), rel4);
-            if exist(cand4, 'file')
-                found = cand4;
+            if exist(char(cand4), 'file')
+                found = char(cand4);
             end
         catch
         end
@@ -134,8 +134,8 @@ for s = 1:nSessions
                 % Try with 2 args (subjid, sess)
                 rel2 = sprintf(char(pat), subjid, s);
                 cand2 = fullfile(string(P.INPUT.EXP), rel2);
-                if exist(cand2, 'file')
-                    found = cand2;
+                if exist(char(cand2), 'file')
+                    found = char(cand2);
                 end
             catch
             end
@@ -172,7 +172,7 @@ for s = 1:nSessions
     coordJson = fullfile(eegDir, [baseStem '_coordsystem.json']);
 
     sidecar = struct();
-    if exist(chanTsv, 'file')
+    if exist(char(chanTsv), 'file')
         sidecar.channels_tsv = char(chanTsv);
         logmsg(logf, '[CONCAT] sub-%03d sess %d: channels.tsv -> %s', subjid, s, chanTsv);
     else
@@ -180,7 +180,7 @@ for s = 1:nSessions
         logmsg(logf, '[CONCAT][WARN] sub-%03d sess %d: channels.tsv not found: %s', subjid, s, chanTsv);
     end
 
-    if exist(coordJson, 'file')
+    if exist(char(coordJson), 'file')
         sidecar.coordsystem_json = char(coordJson);
         logmsg(logf, '[CONCAT] sub-%03d sess %d: coordsystem.json -> %s', subjid, s, coordJson);
     else
