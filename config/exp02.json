@@ -9,7 +9,7 @@
     "da_root": "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis"
   },
   "exp": {
-    "id": "exp01",
+    "id": "exp02",
     "task": "29ByANT",
     "out_dirname": "29ByANT",
     "out_prefix": "29ANT_32_",
