@@ -1,0 +1,101 @@
+"""
+exp02_source.py - Entry point for source localization (Experiment 1)
+V 2.1.0
+
+Call Chain:
+    exp02_source.py -> source_default.py -> source_core.py
+                                         -> src_io / src_assets / src_inverse /
+                                            src_spectral / src_prestim /
+                                            src_poststim / src_lep /
+                                            src_fooof / src_write / src_plot
+
+Run steps
+---------
+    1. Activate the venv:
+       source ~/envs/thesis/bin/activate
+
+    2. Change to the source pipeline directory:
+       cd ~/Documents/GitHub/pain-alpha-dynamics/python/source
+
+    3. Run:
+       # All subjects
+       python exp02_source.py --cfg ../../config/exp02.json
+
+       # Subset (recommended for first run)
+       python exp02_source.py --cfg ../../config/exp02.json --subjects 1 2 3
+
+Usage (command line):
+    python exp02_source.py
+    python exp02_source.py --subjects 1 2 3 10
+    python exp02_source.py --cfg /path/to/exp02.json
+
+Config JSON expected at: <repo_root>/config/exp02.json
+
+Minimum required JSON keys
+---------------------------
+    cfg.exp.out_prefix                  filename prefix for preprocessed .set files
+    cfg.exp.subjects                    list of integer subject IDs
+    cfg.source.fsaverage.subjects_dir   path to the directory containing fsaverage/
+
+All other cfg.source keys have safe defaults (see source_default.py).
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+
+# -- Ensure python/source/ is on sys.path -----
+# Makes source_default, source_core, and all src_*.py importable regardless of
+# the working directory the script in launched from. Must precede local imports.
+_this_dir = os.path.dirname(os.path.abspath(__file__))
+if _this_dir not in sys.path:
+    sys.path.insert(0, _this_dir)
+
+from source_default import source_default # noqa: E402
+
+def exp02_source(subjects_override = None, cfg_path: str = None):
+    """
+    Entrypoint for Experiment 1 source localization.
+    
+    Args:
+        subjects_override : Optional list of integer subject IDs.
+                            When provided, overrides cfg.exp.subjects.
+        cfg_path          : Optional explicit path to the experiment JSON config.
+                            Defaults to <repo_root>/config/exp02.json.
+    """
+    exp_id = "exp02"
+
+    cfg_path = "/home/UWO/darsenea/Documents/GitHub/pain-alpha-dynamics/config/exp02.json"
+
+    if cfg_path is None:
+        repo_root = os.path.dirname(os.path.join(_this_dir, "..", ".."))
+        cfg_path = os.path.join(repo_root, "config", f"{exp_id}.json")
+
+    print(f"[exp02_source] Script dir: {_this_dir}")
+    print(f"[exp02_source] Config path: {cfg_path}")
+
+    if not os.path.exists(cfg_path):
+        raise FileNotFoundError(
+            f"Config JSON not found: {cfg_path}\n"
+            "Pass --cfg /path/to/config.json or set cfg_path explicitly."
+        )
+    
+    with open(cfg_path, "r") as fh:
+        cfg_in = json.load(fh)
+
+    source_default(exp_id = exp_id, cfg_in = cfg_in, subjects_override = subjects_override)
+
+def _parse_args():
+    ap = argparse.ArgumentParser(description = "sLORETA source localization - Experiment 1.")
+    ap.add_argument("--cfg", default = None, metavar = "PATH",
+                    help = "Path to experiment JSON config (default: <repo>/config/exp02.json)")
+    ap.add_argument("--subjects", nargs = "+", type = int, default = None, metavar = "ID",
+                    help = "Subject IDs to process (overrides cfg.exp.subjects).")
+    return ap.parse_args()
+
+if __name__ == "__main__":
+    args = _parse_args()
+    exp02_source(subjects_override = args.subjects, cfg_path = args.cfg)
