@@ -61,9 +61,9 @@
   },
   "preproc": {
     "concat": {
-      "enabled": false,
+      "enabled": true,
       "n-sessions": 4,
-      "session_pattern": ""
+      "session_pattern": "ses-%01d"
     },
     "filter": {
       "enabled": true,
