@@ -18,10 +18,10 @@
       "search_recursive": true
     },
     "montage": {
-      "enabled": true,
+      "enabled": false,
       "csv": "",
       "select_ab_only": false,
-      "do_lookup": true
+      "do_lookup": false
     },
     "subjects": [
       1,
