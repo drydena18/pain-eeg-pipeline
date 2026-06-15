@@ -118,7 +118,7 @@ for i = 1:numel(subs)
 
         if ~didLoad
             try
-                sessPaths = resolve_raw_session_files(P, cfg, subjid, nSess, logf);
+                [sessPaths, sessSidecars] = resolve_raw_session_files(P, cfg, subjid, nSess, logf);
             catch ME
                 logmsg(logf, '[CONCAT][ERROR] %s -- skipping subject.', ME.message);
                 continue;
@@ -127,9 +127,29 @@ for i = 1:numel(subs)
             sessEEGs = cell(nSess, 1);
             for s = 1:nSess
                 logmsg(logf, '[CONCAT] Loading session %d: %s', s, sessPaths{s});
-                Etmp = pop_biosig(sessPaths{s});
+
+                % Use pop_loadset for .set files, pop_biosig for .bdf/.eeg
+                [~, ~, rawExt] = fileparts(sessPaths{s});
+                if strcmpi(rawExt, '.set')
+                    Etmp = pop_loadset('filename', sessPaths{s});
+                else
+                    Etmp = pop_biosig(sessPaths{s});
+                end
                 Etmp = eeg_checkset(Etmp);
                 Etmp = normalize_chan_labels(Etmp);
+
+                % Apply BIDS channels.tsv labels before coordinate lookup.
+                % This relabels EEG.chanlocs to match the dataset's channel
+                % naming, which is required for the .elp lookup to align.
+                sidecar = sessSidecars{s};
+                if ~isempty(sidecar.channels_tsv)
+                    try
+                        Etmp = apply_bids_channel_labels(Etmp, sidecar.channels_tsv, logf);
+                        Etmp = eeg_checkset(Etmp);
+                    catch ME
+                        logmsg(logf, '[CONCAT][WARN] channels.tsv apply failed sess %d: %s', s, ME.message);
+                    end
+                end
 
                 % Montage applied per-session so channel counts match before merge
                 if isfield(cfg.exp, 'montage') && isfield(cfg.exp.montage, 'enabled') && ...
@@ -175,6 +195,7 @@ for i = 1:numel(subs)
             EEG.etc.concat = struct();
             EEG.etc.concat.n_sessions    = nSess;
             EEG.etc.concat.session_files = sessPaths;
+            EEG.etc.concat.session_sidecars = sessSidecars;
 
             tags{end+1} = concatTag;
             save_stage(ST.CONCAT, P, subjid, tags, EEG, logf);

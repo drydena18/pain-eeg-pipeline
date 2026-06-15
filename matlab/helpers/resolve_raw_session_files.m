@@ -1,16 +1,16 @@
-function sessPaths = resolve_raw_session_files(P, cfg, subjid, nSessions, logf)
-% RESOLVE_RAW_SESSION_FILES  Locate raw EEG files for every session
-% V 1.0.0
+function [sessPaths, sessSidecars] = resolve_raw_session_files(P, cfg, subjid, nSessions, logf)
+% RESOLVE_RAW_SESSION_FILES  Locate raw EEG files and BIDS sidecars for every session
+% V 1.1.0
 %
 % Tries three strategies in order for each session index (1..nSessions):
 %
 %   1. BIDS multi-session layout:
-%        <INPUT.EXP>/sub-NNN/ses-NN/eeg/sub-NNN_ses-NN_task-TASK_eeg.bdf|eeg
+%        <INPUT.EXP>/sub-NNN/ses-NN/eeg/sub-NNN_ses-NN_task-TASK_eeg.set|bdf|eeg
 %
 %   2. cfg.preproc.concat.session_pattern — a printf format string whose
 %      arguments are (subjid, session_index), e.g.:
-%        "sub%03d/ses%02d/sub%03d_ses%02d_eeg.bdf"   -> (subjid, sess, subjid, sess)
-%        "sub%03d_ses%02d.bdf"                        -> (subjid, sess)
+%        "sub%03d/ses%02d/sub%03d_ses%02d_eeg.set"   -> (subjid, sess, subjid, sess)
+%        "sub%03d_ses%02d.set"                        -> (subjid, sess)
 %      The pattern is interpreted relative to P.INPUT.EXP.
 %      The function tries formatting with 2 or 4 arguments automatically.
 %
@@ -20,6 +20,11 @@ function sessPaths = resolve_raw_session_files(P, cfg, subjid, nSessions, logf)
 %      datasets but requires that directory listing order matches session
 %      order (usually true when filenames contain a session number).
 %
+% After resolving each raw file, the function also searches for BIDS sidecar
+% files in the same eeg/ directory:
+%   channels.tsv   — channel labels (applied to EEG.chanlocs before .elp lookup)
+%   coordsystem.json — logged for provenance only; not parsed
+%
 % Inputs:
 %   P          : paths struct from config_paths.m
 %   cfg        : pipeline cfg struct
@@ -27,13 +32,17 @@ function sessPaths = resolve_raw_session_files(P, cfg, subjid, nSessions, logf)
 %   nSessions  : number of sessions to resolve (= cfg.preproc.concat.n_sessions)
 %   logf       : (optional) log file handle
 %
-% Output:
-%   sessPaths  : [nSessions x 1] cell array of char file paths.
-%                Throws an error if any session file cannot be resolved.
+% Outputs:
+%   sessPaths    : [nSessions x 1] cell array of char raw file paths.
+%                  Throws an error if any session file cannot be resolved.
+%   sessSidecars : [nSessions x 1] cell array of structs with fields:
+%                    .channels_tsv     — char path, or '' if not found
+%                    .coordsystem_json — char path, or '' if not found
 
 if nargin < 5, logf = 1; end
 
-sessPaths = cell(nSessions, 1);
+sessPaths    = cell(nSessions, 1);
+sessSidecars = cell(nSessions, 1);
 
 subDir = sprintf('sub-%03d', subjid);
 
@@ -55,10 +64,13 @@ if isfield(cfg, 'preproc') && isfield(cfg.preproc, 'concat') && ...
 end
 
 % Raw extensions to try (ordered by preference)
-exts = {'.vhdr', '.vmrk', '.bdf', '.BDF', '.eeg', '.EEG'};
+% .set first: EEGLAB native format (also handles .fdt automatically)
+exts = {'.set', '.bdf', '.BDF', '.eeg', '.EEG'};
 
 % ----------------------------------------------------------------
-% Fallback 3 pre-computation: collect all raw files for this subject
+% Fallback 3 pre-computation: collect all raw files for this subject.
+% Break on the first extension that yields results so we never mix
+% .set and .eeg files from the same sessions in allRaw.
 % ----------------------------------------------------------------
 allRaw = {};
 for e = 1:numel(exts)
@@ -67,11 +79,13 @@ for e = 1:numel(exts)
         % Broaden to whole dataset
         d = dir(fullfile(string(P.INPUT.EXP), '**', [subDir '*' exts{e}]));
     end
-    for k = 1:numel(d)
-        allRaw{end+1} = fullfile(d(k).folder, d(k).name); %#ok<AGROW>
+    if ~isempty(d)
+        for k = 1:numel(d)
+            allRaw{end+1} = fullfile(d(k).folder, d(k).name); %#ok<AGROW>
+        end
+        break;  % stop at first extension that finds files
     end
 end
-allRaw = unique(allRaw);
 allRaw = sort(allRaw);   % alphabetical -> session order when names contain sess index
 
 % ----------------------------------------------------------------
@@ -89,9 +103,11 @@ for s = 1:nSessions
         cands = {
             fullfile(bidsDir, sprintf('%s_%s_task-%s_eeg%s', subDir, sessStr2, task, ext{1}))
             fullfile(bidsDir, sprintf('%s_%s_eeg%s',          subDir, sessStr2,        ext{1}))
-            % non-padded session variant
+            % non-padded session variant (ses-1 instead of ses-01)
             fullfile(string(P.INPUT.EXP), subDir, sessStr1, 'eeg', ...
                 sprintf('%s_%s_task-%s_eeg%s', subDir, sessStr1, task, ext{1}))
+            fullfile(string(P.INPUT.EXP), subDir, sessStr1, 'eeg', ...
+                sprintf('%s_%s_eeg%s', subDir, sessStr1, ext{1}))
         };
         for c = 1:numel(cands)
             if exist(cands{c}, 'file')
@@ -141,5 +157,36 @@ for s = 1:nSessions
 
     logmsg(logf, '[CONCAT] sub-%03d sess %d -> %s', subjid, s, found);
     sessPaths{s} = char(found);
+
+    % ---- Sidecar resolution ----
+    % Derive the eeg/ directory from the resolved raw file path.
+    % Both channels.tsv and coordsystem.json follow the same BIDS naming
+    % convention rooted in the same folder.
+    eegDir   = fileparts(found);
+    % Strip the raw file suffix to get the BIDS basename stem
+    [~, rawName] = fileparts(found);   % e.g. sub-001_ses-1_task-29ByANT_eeg
+    % Replace trailing _eeg (from _eeg.set) to build sidecar stems
+    baseStem = regexprep(rawName, '_eeg$', '');  % sub-001_ses-1_task-29ByANT
+
+    chanTsv  = fullfile(eegDir, [baseStem '_channels.tsv']);
+    coordJson = fullfile(eegDir, [baseStem '_coordsystem.json']);
+
+    sidecar = struct();
+    if exist(chanTsv, 'file')
+        sidecar.channels_tsv = char(chanTsv);
+        logmsg(logf, '[CONCAT] sub-%03d sess %d: channels.tsv -> %s', subjid, s, chanTsv);
+    else
+        sidecar.channels_tsv = '';
+        logmsg(logf, '[CONCAT][WARN] sub-%03d sess %d: channels.tsv not found: %s', subjid, s, chanTsv);
+    end
+
+    if exist(coordJson, 'file')
+        sidecar.coordsystem_json = char(coordJson);
+        logmsg(logf, '[CONCAT] sub-%03d sess %d: coordsystem.json -> %s', subjid, s, coordJson);
+    else
+        sidecar.coordsystem_json = '';
+    end
+
+    sessSidecars{s} = sidecar;
 end
 end
