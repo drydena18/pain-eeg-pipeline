@@ -82,6 +82,12 @@ concept_pairs <- tribble(
 
 alpha_level <- 0.05   # significance threshold for all tests
 
+# ROI filter (set in USER SETTINGS, applied after data load)
+# ── Character vector  → restrict analyses to those ROIs only.
+#    e.g.  filter_rois <- c("S1", "ACC", "insula")
+# ── NULL              → run all ROIs found in source_pain_master.csv.
+filter_rois <- NULL
+
 # =============================================================================
 # HELPERS
 # =============================================================================
@@ -189,17 +195,27 @@ if (is.null(src_master)) stop("source_pain_master.csv not found.")
 all_rois <- sort(unique(src_master$roi))
 message("ROIs in data: ", paste(all_rois, collapse = ", "))
 
-# ── S1-only filter ────────────────────────────────────────────────────────────
-# Restrict all plotting and ROI-stratified analyses to S1 only.
-# Override all_rois here so every downstream loop (Tests 1, 3, 4, 5) picks
-# up the restriction automatically without further changes.
-PLOT_ROIS <- "S1"
-if (!PLOT_ROIS %in% all_rois) {
-  warning("Requested ROI '", PLOT_ROIS, "' not found in source_pain_master.csv. ",
-          "Available ROIs: ", paste(all_rois, collapse = ", "))
+# ── filter_rois guard ─────────────────────────────────────────────────────────
+# If filter_rois is NULL (default), all ROIs found in the data are used.
+# If filter_rois is a character vector, analyses are restricted to those entries.
+# Any requested ROI not present in the data triggers a warning (not a hard stop).
+if (!is.null(filter_rois)) {
+  missing_rois <- setdiff(filter_rois, all_rois)
+  if (length(missing_rois) > 0L) {
+    warning(
+      "filter_rois: the following ROI(s) were not found in source_pain_master.csv ",
+      "and will be ignored: ", paste(missing_rois, collapse = ", "), "\n",
+      "Available ROIs: ", paste(all_rois, collapse = ", ")
+    )
+  }
+  all_rois <- intersect(filter_rois, all_rois)
+  if (length(all_rois) == 0L) {
+    stop("filter_rois produced an empty ROI set — check spelling against available ROIs above.")
+  }
+  message("ROI filter applied. Running ROIs: ", paste(all_rois, collapse = ", "))
+} else {
+  message("No filter_rois set — running all ", length(all_rois), " ROIs.")
 }
-all_rois <- intersect(PLOT_ROIS, all_rois)
-message("Plotting ROIs (restricted): ", paste(all_rois, collapse = ", "))
 
 # Hemisphere filter list — drives all ROI-stratified plot sections.
 # S1 carries no -lh / -rh suffix, so the combined entry is the only one needed.
