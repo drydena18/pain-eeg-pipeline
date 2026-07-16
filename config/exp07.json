@@ -389,7 +389,7 @@
     "inverse": {
       "method": "sLORETA",
       "snr": 3.0,
-      "pick_ori": null
+      "pick_ori": "normal"
     },
     "roi": {
       "parcellation": "aparc",
@@ -397,11 +397,36 @@
       "use_custom_rois": true,
       "custom_rois": {
         "_note": "Disabled (use_custom_rois=false). Set use_custom_rois=true to activate. Keys are ROI names; values are lists of aparc label strings (lh-* / rh-*).",
+        "_comment": "S2 is a proxy, supramarginal is the closest cortical surface label but isn't perfectly S2 anatomically. M1 is included as it frequently appears in pain neuromatrix discussions.",
         "S1": [
           "lh-postcentral",
           "rh-postcentral",
           "lh-paracentral",
           "rh-paracentral"
+        ],
+        "S2": [
+          "lh-supramarginal",
+          "rh-supramarginal"
+        ],
+        "ACC": [
+          "lh-caudalanteriorcingulate",
+          "rh-caudalanteriorcingulate",
+          "lh-rostralanteriorcingulate",
+          "rh-resotralanteriorcingulate"
+        ],
+        "Insula": [
+          "lh-insula",
+          "rh-insula"
+        ],
+        "dlPFC": [
+          "lh-rostralmiddlefrontal",
+          "rh-rostralmiddlefrontal",
+          "lh-caudalmiddlefrontal",
+          "rh-caudalmiddlefrontal"
+        ],
+        "M1": [
+          "lh-precentral",
+          "rh-precentral"
         ]
       }
     },

@@ -1,27 +1,27 @@
 {
   "meta": {
     "schema": "v1",
-    "config": "exp01_v2.3.0"
+    "config": "exp03_v2.3.0"
   },
   "paths": {
-    "raw_root": "/cifs/seminowicz/eegPainDatasets/CNED/29ByANT",
-    "proj_root": "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/29ByANT",
+    "raw_root": "/cifs/seminowicz/eegPainDatasets/CNED/39ByBP",
+    "proj_root": "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/39ByBP",
     "da_root": "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis"
   },
   "exp": {
-    "id": "exp02",
-    "task": "29ByANT",
-    "out_dirname": "29ByANT",
+    "id": "exp03",
+    "task": "39ByBP",
+    "out_dirname": "39ByBP",
     "out_prefix": "29ANT_32_",
     "raw": {
-      "pattern": "sub-%03d/eeg/sub-%03d_task-29ByANT_eeg.vhdr",
+      "pattern": "sub-%03d/eeg/sub-%03d_task-39ByBP_eeg.bdf",
       "search_recursive": true
     },
     "montage": {
-      "enabled": false,
+      "enabled": true,
       "csv": "",
       "select_ab_only": false,
-      "do_lookup": false
+      "do_lookup": true
     },
     "subjects": [
       1,
@@ -61,9 +61,9 @@
   },
   "preproc": {
     "concat": {
-      "enabled": true,
+      "enabled": false,
       "n-sessions": 4,
-      "session_pattern": "ses-%01d"
+      "session_pattern": ""
     },
     "filter": {
       "enabled": true,
