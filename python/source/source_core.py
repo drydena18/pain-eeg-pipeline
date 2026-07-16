@@ -217,6 +217,16 @@ def source_core(cfg: dict, da_root: str, exp_out: str):
                 alpha, slow, fast, fmin, fmax, post_ref_t,
             )
 
+            ga_tc = np.mean(tc, axis=0)   # (n_rois, n_times)
+            npy_path = os.path.join(csv_dir, f"{sub_str}_source_ga_timecourse.npy")
+            np.save(npy_path, ga_tc)
+            src_logmsg(logf, "[NPY] Saved GA timecourse: %s  shape=%s", npy_path, str(ga_tc.shape))
+ 
+            # Also save times and roi_names once per subject (needed by plotting script)
+            times_path = os.path.join(csv_dir, f"{sub_str}_source_times.npy")
+            np.save(times_path, times)
+            src_logmsg(logf, "[NPY] Saved times: %s", times_path)
+
             # 7. LEP features ─────────────────────────────────────────────────
             src_logmsg(logf, "[FEAT] LEP features (N2/P2)...")
             lep_trial_rows = src_compute_lep_trial(tc_post, times_post, n2_window, p2_window)
