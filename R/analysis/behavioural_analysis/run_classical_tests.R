@@ -218,10 +218,33 @@ if (!is.null(filter_rois)) {
 }
 
 # Hemisphere filter list — drives all ROI-stratified plot sections.
-# S1 carries no -lh / -rh suffix, so the combined entry is the only one needed.
+# Built dynamically from all_rois so it works regardless of which ROIs are
+# active (via filter_rois) or how many hemispheres are present.
+#
+# ROI naming convention assumed: left-hemisphere ROIs end in "-lh",
+# right-hemisphere ROIs end in "-rh". ROIs with neither suffix (e.g. "S1",
+# "midline") are included in the combined plot only.
+#
+# Always produces up to three entries:
+#   ""    → all active ROIs combined
+#   "_lh" → left-hemisphere ROIs only   (omitted if none present)
+#   "_rh" → right-hemisphere ROIs only  (omitted if none present)
+.lh_rois <- grep("-lh$", all_rois, value = TRUE)
+.rh_rois <- grep("-rh$", all_rois, value = TRUE)
+
 hemi_filters <- list(
-  list(suffix = "",    label = "All ROIs",         rois = all_rois)
+  list(suffix = "",    label = "All ROIs",          rois = all_rois)
 )
+if (length(.lh_rois) > 0L)
+  hemi_filters <- c(hemi_filters,
+                    list(list(suffix = "_lh", label = "Left hemisphere",  rois = .lh_rois)))
+if (length(.rh_rois) > 0L)
+  hemi_filters <- c(hemi_filters,
+                    list(list(suffix = "_rh", label = "Right hemisphere", rois = .rh_rois)))
+
+message("Hemisphere splits: combined (", length(all_rois), " ROIs)",
+        if (length(.lh_rois) > 0L) paste0(", lh (", length(.lh_rois), ")") else "",
+        if (length(.rh_rois) > 0L) paste0(", rh (", length(.rh_rois), ")") else "")
 
 # Subject-level GA per ROI (used by Tests 1, 3, 4)
 src_subject_ga <- src_master %>%

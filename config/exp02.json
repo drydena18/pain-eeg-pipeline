@@ -279,7 +279,7 @@
     "roi": {
       "parcellation": "aparc",
       "mode": "mean_flip",
-      "use_custom_rois": true,
+      "use_custom_rois": false,
       "custom_rois": {
         "_note": "Disabled (use_custom_rois=false). Set use_custom_rois=true to activate. Keys are ROI names; values are lists of aparc label strings (lh-* / rh-*).",
         "_comment": "S2 is a proxy, supramarginal is the closest cortical surface label but isn't perfectly S2 anatomically. M1 is included as it frequently appears in pain neuromatrix discussions.",
