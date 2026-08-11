@@ -20,16 +20,16 @@ library(stringr)
 library(purrr)
 library(tibble)
 
-source("merge_defaults.R")
-source("helpers/read_helpers.R")
-source("helpers/db_write_helpers.R")
-source("helpers/split_helpers.R")
+source("R/merge/merge_defaults.R")
+source("R/merge/helpers/read_helpers.R")
+source("R/merge/helpers/db_write_helpers.R")
+source("R/merge/helpers/split_helpers.R")
 
 # =============================================================================
 # CONNECT + INIT SCHEMA
 # =============================================================================
 con <- connect_or_create_data_db(merge_cfg$data_db_path)
-init_data_schema(db)
+init_data_schema(con)
 
 exp_lookup <- merge_cfg$experiment_lookup
 
@@ -45,6 +45,9 @@ behaviour_all <- map(behav_files, ~tryCatch(
     read_behavioural_file(.x, exp_lookup),
     error = function(e) { warning(.x, ": ", conditionMessage(e)); NULL }
 )) %>% compact() %>% bind_rows()
+
+cat("Columns after bind_rows:", paste(names(behaviour_all), collapse = ", "), "\n")
+cat("Rows:", nrow(behaviour_all), "\n")
 
 # trial_index: position within (experiment_id, subjid), same derivation as
 # the old merge_behavioural.R
