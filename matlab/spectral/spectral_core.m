@@ -1,6 +1,22 @@
 function spectral_core(P, cfg)
 % SPECTRAL_CORE  Trial-wise spectral features + interaction metrics + LEP + phase
-% V 2.1.0
+% V 2.2.0
+%
+% V 2.2.0 changes vs V 2.1.0:
+%   - Every alpha feature (all 10 from spec_compute_alpha_features_from_psd, plus
+%     psi_cog) is now computed for THREE windows and prefixed accordingly:
+%     whole_<name> (full epoch), pre_<name> (pre-stim), post_<name> (post-stim)
+%   - Every metric additionally gets a generic delta_<name> = post - pre
+%     (spec_compute_metric_deltas.m), on top of the existing ERD-specific
+%     fractional change (erd_slow, erd_fast, and the new erd_pow_alpha_total)
+%     for the 3 power metrics only.
+%   - bi_pre / lr_pre / cog_pre / psi_cog (pre-stim only, V2.1.0) are retired
+%     in favour of pre_sf_balance / pre_sf_logratio / pre_paf_cog_hz / pre_psi_cog,
+%     which are numerically identical but unify with the new whole_/pre_/post_/delta_ family
+%   - See spec_compute_interaction_metrics.m V2.0.0 for changelog for the corresponding
+%     ERD-side changes.
+%   - TVI_alpha remains pre-stim only (out of scope for this update); its input field
+%     is renamed featGA.bi_pre -> featGA.pre_sf_balance only.
 %
 % V 2.1.0 changes vs V 2.0.1:
 %   - Pain ratings are loaded from P.CORE.CSV_SINGLETRIAL (experiment-level
@@ -132,14 +148,19 @@ for i = 1:numel(subs)
     [f, Pxx] = spec_compute_psd_trials(EEG, psd);  % [nChan x nFreq x nTr]
  
     spec_logmsg(logf, '[FEAT] Full-epoch alpha features...');
-    featChan = spec_compute_alpha_features_from_psd(f, Pxx, alpha);
+    featChan_whole = spec_compute_alpha_features_from_psd(f, Pxx, alpha);
+    featChan_whole = spec_compute_psi_cog(featChan_whole);
  
     gaPxx = squeeze(mean(Pxx, 1, 'omitnan'));   % [nFreq x nTr]
     if size(gaPxx, 1) ~= numel(f)
         gaPxx = gaPxx';
     end
-    featGA = spec_compute_alpha_features_from_psd(f, reshape(gaPxx, [1 numel(f) nTr]), alpha);
-    featGA = spec_squeeze_ga_features(featGA);
+    featGA_whole = spec_compute_alpha_features_from_psd(f, reshape(gaPxx, [1 numel(f) nTr]), alpha);
+    featGA_whole = spec_squeeze_ga_features(featGA_whole);
+    featGA_whole = spec_compute_psi_cog(featGA_whole);
+
+    featChan = spec_add_prefix(featChan_whole, 'whole_');
+    featGA = spec_add_prefix(featGA_whole, 'whole_');
  
     % ---------------------------------------------------------------
     % 2. Pre/post-stim windowed PSDs  ->  interaction metrics
@@ -157,12 +178,37 @@ for i = 1:numel(subs)
     if ~isempty(f2)
         spec_logmsg(logf, '[INTERACT] Computing BI_pre, LR_pre, CoG_pre, DELTA_ERD...');
         try
+            featChan_pre = spec_compute_alpha_features_from_psd(f2, prePxx, alpha);
+            featChan_pre = spec_compute_psi_cog(featChan_pre);
+            featChan_post = spec_compute_alpha_features_from_psd(f2, postPxx, alpha);
+            featChan_post = spec_compute_psi_cog(featChan_post);
+
+            % Generic delta_<name> = post - pre, all 11 metric families
+            featChan_delta = spec_compute_metric_deltas(featChan_pre, featChan_post);
+
+            % GA: channel-mean of the per-channel features
+            featGA_pre = spec_ga_mean_feat(featChan_pre);
+            featGA_post = spec_ga_mean_feat(featChan_post);
+            featGA_delta = spec_compute_metric_deltas(featChan_delta);
+
+            featChan = spec_merge_structs(featChan, ...
+                spec_add_prefix(featChan_pre, 'pre_'), ...
+                spec_add_prefix(featChan_post, 'post_'), ...
+                featChan_delta);
+
+            featGA = spec_merge_structs(featGA, ...
+                spec_add_prefix(featGA_pre, 'pre_'), ...
+                spec_add_prefix(featGA_post, 'post_'), ...
+                featGA_delta);
+        catch ME
+            spec_logmsg(logf, '[WARN] Interaction metrics failed: %s', ME.message);
+        end
+
+        spec_logmsg(logf, '[INTERACT] Computing ERD family (erd_slow, erd_fast, erd_pow_alpha_total, delta_erd) + p5_flag...');
+        try
             [intChan, intGA] = spec_compute_interaction_metrics(f2, prePxx, postPxx, alpha, logf);
-            fn = fieldnames(intChan);
-            for k = 1:numel(fn)
-                featChan.(fn{k}) = intChan.(fn{k});
-                featGA.(fn{k})   = intGA.(fn{k});
-            end
+            featChan = spec_merge_structs(featChan, intChan);
+            featGA = spec_merge_structs(featGA, intGA);
         catch ME
             spec_logmsg(logf, '[WARN] Interaction metrics failed: %s', ME.message);
         end
@@ -288,10 +334,10 @@ for i = 1:numel(subs)
     % spec_compute_tvi_alpha  -> tviOut    struct
     % spec_compute_ga_rcl     -> gaRclOut  struct
     % ---------------------------------------------------------------
-    if isfield(featGA, 'bi_pre')
+    if isfield(featGA, 'pre_sf_balance')
         outSumCSV = fullfile(outCSV, sprintf('sub-%03d_subject_summary.csv', subjid));
         try
-            tviOut   = spec_compute_tvi_alpha(featGA.bi_pre, logf);
+            tviOut   = spec_compute_tvi_alpha(featGA.pre_sf_balance, logf);
             gaRclOut = spec_compute_ga_rcl(rclTable, logf);
             spec_write_subject_summary_csv(outSumCSV, subjid, tviOut, gaRclOut, logf);
         catch ME
@@ -328,7 +374,7 @@ for i = 1:numel(subs)
             spec_plot_heatmap_panel(outFig, featChan, chanLabels, subjid);
         end
  
-        if isfield(featGA, 'bi_pre')
+        if isfield(featGA, 'pre_sf_balance')
             outInteractFig = fullfile(outFig, sprintf('sub-%03d_interaction_summary.png', subjid));
             spec_plot_interaction_summary(outInteractFig, featChan, featGA, chanLabels, subjid, logf);
         end

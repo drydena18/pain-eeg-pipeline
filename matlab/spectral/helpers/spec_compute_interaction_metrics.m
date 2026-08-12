@@ -1,14 +1,21 @@
 function [featChan, featGA] = spec_compute_interaction_metrics(f, prePxx, postPxx, alpha, logf)
 % SPEC_COMPUTE_INTERACTION_METRICS  Pre-stimulus alpha interaction metrics
-% V 1.1.0
+% V 2.0.0
+%
+% V2.0.0 changes vs V1.1.0:
+%   - REMOVED bi_pre, lr_pre, cog_pre, psi_cog. These are not computed
+%     generically for every window (whole/pre/post) directly in spectral_core.m
+%     via spec_compute_alpha_features_from_psd + spec_compute_psi_cog,
+%     with delta_<name> from spec_compute_metric_deltas.m. This function now owns
+%     ONLY the fractional (ERD-style) pre->post change, which is NOT produced
+%     generically because it is not meaningful for bounded/ratio metrics
+%   - ADDED erd_pow_alpha_total: fractional pre->post change for total
+%     alpha power, completing the family alongside the pre-existing erd_slow / erd_fast.
 %
 % Computes the following per-channel x trial fields:
-%   bi_pre     : Balance Index [-1,+1]  (slow-fast)/(slow+fast+eps0)
-%   lr_pre     : Log Ratio (unbounded)  log(slow+eps0) - log(fast+eps0)
-%   cog_pre    : Centre of Gravity [Hz] over full alpha band [8, 12] Hz
-%   psi_cog    : Interaction term  bi_pre x (cog_pre - 10)
 %   erd_slow   : Slow-alpha ERD  (post-pre)/pre  (negative = desynchronisation)
 %   erd_fast   : Fast-alpha ERD  (post-pre)/pre
+%   erd_pow_alpha_total : (post_alpha - pre_alpha) / pre_alpha
 %   delta_erd  : DELTA-ERD = erd_slow - erd_fast
 %   p5_flag    : 1 if pre-stim power in either sub-band < 5th percentile (session)
 %
@@ -87,34 +94,12 @@ eps0 = compute_noise_floor(f, prePxx);
 spec_logmsg(logf, '[INTERACT] eps0 (noise floor) = %.4g uV^2/Hz', eps0);
 
 % ---------------------------------------------------------------
-% BI_pre and LR_pre
+% ERD family (signed; negative = power decrease = desynchronization)
+% Each sub-band / total-alpha normalizes by its own pre-stim baseline
 % ---------------------------------------------------------------
-bi_pre = (pow_pre_slow - pow_pre_fast) ./ (pow_pre_slow + pow_pre_fast + eps0);
-lr_pre = log(pow_pre_slow + eps0) - log(pow_pre_fast + eps0);
-
-% ---------------------------------------------------------------
-% CoG_pre  (frequency-weighted centroid over full alpha band [8, 12] Hz)
-% Uses trapz to match the band-power integration above.
-% eps0 in denominator guards against division by zero on near-flat trials;
-% effect is negligible when alpha power is in a normal physiological range.
-% ---------------------------------------------------------------
-fA_3d   = reshape(fA, [1, numel(fA), 1]);   % [1 x nAlphaBins x 1] for broadcasting
-num_cog = ensure_2d(squeeze(trapz(fA, bsxfun(@times, prePxx(:, idxA, :), fA_3d), 2)), nChan, nTr);
-cog_pre = num_cog ./ (pow_pre_alpha + eps0);
-
-% Interaction term: BI_pre x (CoG_pre - 10 Hz boundary)
-% Centring at 10 Hz: gives psi_cog a meaningful zero (CoG at the slow/fast
-% boundary), keeps main effects interpretable, prevents collinearity.
-psi_cog = bi_pre .* (cog_pre - 10);
-
-% ---------------------------------------------------------------
-% ERD (signed; negative = power decrease = desynchronisation)
-%   ERD_slow = (post_slow - pre_slow) / pre_slow
-%   ERD_fast = (post_fast - pre_fast) / pre_fast
-% Each sub-band normalises by its own pre-stimulus baseline.
-% ---------------------------------------------------------------
-erd_slow  = (pow_post_slow - pow_pre_slow) ./ (pow_pre_slow + eps0);
-erd_fast  = (pow_post_fast - pow_pre_fast) ./ (pow_pre_fast + eps0);
+erd_slow = (pow_post_slow - pow_pre_slow) ./ (pow_pre_slow + eps0);
+erd_fast = (pow_post_fast - pow_pre_fast) ./ (pow_pre_fast + eps0);
+erd_pow_alpha_total = (pow_post_alpha - pow_pre_alpha) ./ (pow_pre_alpha + eps0);
 delta_erd = erd_slow - erd_fast;
 
 % ---------------------------------------------------------------
@@ -127,12 +112,12 @@ all_fast = pow_pre_fast(~isnan(pow_pre_fast));
 
 if isempty(all_slow) || isempty(all_fast)
     p5_flag = zeros(nChan, nTr);
-    spec_logmsg(logf, '[INTERACT][WARN] All pre-stim power values are NaN; p5_flag set to zero.');
+    spec_logmsg(logf, '[INTERACT][WARN] All pre-stim ower values are NaN; p5_flag set to zero.');
 else
     thr_slow = prctile(all_slow, 5);
     thr_fast = prctile(all_fast, 5);
-    p5_flag  = double((pow_pre_slow < thr_slow) | (pow_pre_fast < thr_fast));
-    spec_logmsg(logf, '[INTERACT] p5 thresholds: slow=%.4g fast=%.4g  flagged %d / %d cells', ...
+    p5_flag = double((pow_pre_slow < thr_slow) | (pow_pre_fast < thr_fast));
+    spec_logmsg(logf, '[INTERACT] p5 thresholds: slow = %.4g fast = %.4g flagged %d / %d cells', ...
         thr_slow, thr_fast, sum(p5_flag(:)), numel(p5_flag));
 end
 
@@ -140,46 +125,42 @@ end
 % Pack per-channel x trial struct
 % ---------------------------------------------------------------
 featChan = struct( ...
-    'bi_pre',    bi_pre,    ...
-    'lr_pre',    lr_pre,    ...
-    'cog_pre',   cog_pre,   ...
-    'psi_cog',   psi_cog,   ...
-    'erd_slow',  erd_slow,  ...
-    'erd_fast',  erd_fast,  ...
+    'erd_slow', erd_slow, ...
+    'erd_fast', erd_fast, ...
+    'erd_pow_alpha_total', erd_pow_alpha_total, ...
     'delta_erd', delta_erd, ...
-    'p5_flag',   p5_flag    ...
+    'p5_flag', p5_flag ...
 );
 
 % ---------------------------------------------------------------
-% GA: mean across channels (omitnan), normalised to [nTrials x 1].
-% Exception: p5_flag uses logical OR across channels — a trial is
+% GA: mean across channels (omitnan), normalized to [nTrials x 1].
+% Exception: p5_flag uses logical OR across channels -- a trial is
 % flagged if ANY channel meets the threshold, not on the average.
 % ---------------------------------------------------------------
 fn = fieldnames(featChan);
 featGA = struct();
 for i = 1:numel(fn)
     if strcmp(fn{i}, 'p5_flag')
-        % Logical OR: flag trial if any channel is flagged
-        featGA.p5_flag = double(any(featChan.p5_flag, 1))';   % [nTrials x 1]
+        featGA.p5_flag = double(any(featChan.p5_flag, 1))'; % [nTrials x 1]
     else
-        m = mean(featChan.(fn{i}), 1, 'omitnan');   % [1 x nTrials]
-        featGA.(fn{i}) = m(:);                       % [nTrials x 1]
+        m = mean(featChan.(fn{i}), 1, 'omitnan'); % [1 x nTrials]
+        featGA.(fn{i}) = m(:); % [nTrials x 1]
     end
 end
 end
 
 % ================================================================
-%  Local: noise-floor epsilon_0
-%  Try the 45-55 Hz "quiet band" first; fall back to a small
-%  fraction of the median total power if the band is unavailable.
+% Local: noise-floor epsilon_0
+% Try the 45-55 Hz "quiet band" first; fall back to a small
+% fraction of the median total power if the band in unavailable
 % ================================================================
 function eps0 = compute_noise_floor(f, Pxx)
 lo = 45; hi = 55;
-idxQ = (f >= lo) & (f <= hi);
+idx! = (f >= lo) & (f <= hi);
 
 if sum(idxQ) >= 2
     qvals = Pxx(:, idxQ, :);
-    eps0  = median(qvals(~isnan(qvals)), 'all');
+    eps0 = median(qvals(~isnan(qvals)), 'all');
     if isnan(eps0) || eps0 <= 0
         eps0 = median(Pxx(~isnan(Pxx)), 'all') * 1e-3;
     end
@@ -187,15 +168,15 @@ else
     eps0 = median(Pxx(~isnan(Pxx)), 'all') * 1e-3;
 end
 
-eps0 = max(eps0, 1e-12);   % hard lower bound
+eps0 = max(eps0, 1e-12); % hard lower bound
 end
 
 % ================================================================
-%  Local: ensure a band-power result is exactly [nChan x nTrials].
-%  squeeze() on a 1-channel or 1-trial array may silently drop a
-%  dimension. Explicit reshape using caller-provided target shape
-%  makes the intention unambiguous and fails loudly if sizes don't
-%  match rather than producing a silently wrong orientation.
+% Local: ensure a band-power result is exactly [nChan x nTrials].
+% squeeze() on a 1-channel or 1-trial array may silently drop a
+% dimension. Explicit reshape using caller-provided target shape
+% makes the intention unambiguous and fails loudly if sizes don't
+% match rather than producing a silently wrong orientation.
 % ================================================================
 function X = ensure_2d(X, nChan, nTr)
 if ~isequal(size(X), [nChan, nTr])
