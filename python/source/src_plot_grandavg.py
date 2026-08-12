@@ -149,19 +149,19 @@ def _plot_heatmap(
     )
 
     ax.set_yticks(range(n_roi))
-    ax.set_yticklabels(roi_labels, fontsize=7)
-    ax.set_xlabel("Time (ms)", fontsize=9)
+    ax.set_yticklabels(roi_labels, fontsize = 7)
+    ax.set_xlabel("Time (ms)", fontsize = 9)
     ax.set_title(
         f"Grand-Average sLORETA  {hemi}  (z-scored per ROI)  N={n_subjects}",
         fontsize=10,
     )
 
-    ax.axvline(0, color="k", lw=1.2, linestyle="--")
+    ax.axvline(0, color = "k", lw = 1.2, linestyle = "--")
 
     legend_elements = [
-        Line2D([0], [0], color="k", lw=1.2, linestyle="--", label="Stimulus onset"),
+        Line2D([0], [0], color = "k", lw = 1.2, linestyle = "--", label = "Stimulus onset"),
     ]
-    ax.legend(handles=legend_elements, fontsize=7, loc="upper right", framealpha=0.7)
+    ax.legend(handle = legend_elements, fontsize = 7, loc = "upper right", framealpha = 0.7)
 
     plt.colorbar(im, ax=ax, label="Z-score", shrink=0.6, pad=0.01)
 

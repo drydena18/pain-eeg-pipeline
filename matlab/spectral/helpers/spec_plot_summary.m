@@ -1,6 +1,9 @@
 function spec_plot_summary(outPath, f, gaPxx, featGA, fooofOut, alpha, cfg, subjid)
 % SPEC_PLOT_SUMMARY  One-page per-subject summary figure
-% V 1.3.0
+% V 2.0.0
+%
+% V2.0.0: field renames only (no behaviour change) to match the whole_/pre_/post_/delta_
+%         metric scheme in spectral_core.m.
 %
 % V1.3.0: calls both spec_plot_fooof_summary and spec_plot_fooof_aperiodic,
 %         passing f and gaPxx to the latter so spectral panels are populated.
@@ -29,7 +32,7 @@ grid on;
 
 % ---- 2) PAF CoG over trials ----
 nexttile;
-plot(1:nTr, featGA.paf_cog_hz, '-o', 'MarkerSize', 3);
+plot(1:nTr, featGA.whole_paf_cog_hz, '-o', 'MarkerSize', 3);
 yline(alpha.slow_hz(2), '--', '10 Hz', 'LabelHorizontalAlignment', 'left');
 xlabel('Trial'); ylabel('Frequency (Hz)');
 title('PAF (CoG) over trials', 'Interpreter', 'none');
@@ -37,11 +40,11 @@ grid on;
 
 % ---- 3) Pre-stim interaction metrics (or fallback to full-epoch) ----
 nexttile;
-hasPreStim = isfield(featGA, 'bi_pre') && ~all(isnan(featGA.bi_pre));
+hasPreStim = isfield(featGA, 'pre_sf_balance') && ~all(isnan(featGA.pre_sf_balance));
 
 if hasPreStim
     yyaxis left;
-    plot(1:nTr, featGA.bi_pre, '-o', 'MarkerSize', 3); hold on;
+    plot(1:nTr, featGA.pre_sf_balance, '-o', 'MarkerSize', 3); hold on;
     yline(0, ':', 'Color', [0.5 0.5 0.5]);
     ylabel('BI_{pre}');
 
@@ -53,8 +56,8 @@ if hasPreStim
     legend({'BI_{pre}', '\DeltaERD'}, 'Interpreter', 'tex', 'Location', 'best');
     title('Pre-stim BI & \DeltaERD over trials', 'Interpreter', 'tex');
 else
-    plot(1:nTr, featGA.sf_balance,  '-o', 'MarkerSize', 3); hold on;
-    plot(1:nTr, featGA.sf_logratio, '-s', 'MarkerSize', 3);
+    plot(1:nTr, featGA.whole_sf_balance,  '-o', 'MarkerSize', 3); hold on;
+    plot(1:nTr, featGA.whole_sf_logratio, '-s', 'MarkerSize', 3);
     legend({'sf\_balance', 'sf\_logratio'}, 'Interpreter', 'none', 'Location', 'best');
     title('Alpha interaction over trials', 'Interpreter', 'none');
 end

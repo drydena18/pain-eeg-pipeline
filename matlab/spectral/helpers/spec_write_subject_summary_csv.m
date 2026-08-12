@@ -5,7 +5,7 @@ function spec_write_subject_summary_csv(outPath, subjid, tvi, gaRcl, logf)
 % Pure writer — no statistics are computed here.  All inputs must be
 % pre-computed by the appropriate helpers before calling this function:
 %
-%   tvi   = spec_compute_tvi_alpha(featGA.bi_pre, logf)
+%   tvi   = spec_compute_tvi_alpha(featGA.pre_sf_balance, logf)
 %   gaRcl = spec_compute_ga_rcl(rclTable, logf)
 %
 % Rows are appended so that all subjects accumulate in a single CSV across

@@ -1,6 +1,13 @@
 function spec_plot_heatmap_panel(outDir, featChan, chanLabels, subjid)
 % SPEC_PLOT_HEATMAP_PANEL Channel x trial heatmaps split into three figures
-% V 2.0.0
+% V 2.1.0
+%
+% V 2.1.0 changes vs V 2.0.0:
+%   - Field renames to match the new whole_/pre_/post_/delta_ metric
+%     scheme in spectral_core.m: the "full-epoch" items in Group 1 now
+%     carry the whole_ prefix; bi_pre/lr_pre/cog_pre/psi_cog -> pre_*.
+%   - Added erd_pow_alpha_total to Group 2 (fills the ERD family gap for
+%     total alpha power, alongside the pre-existing erd_slow/erd_fast).
 %
 % V2.0.0 redesign:
 %   - Three separare output tiles instead of one giant figure:
@@ -35,20 +42,20 @@ yt = 1:step:nChan;
 
 % --- Group 1: Pre-stim (full-epoch + pre-stimulus metrics) ---
 preStimItems = {
-    'paf_cog_hz', 'PAF CoG (Hz)', false;
-    'pow_slow_alpha', 'Slow \alpha Power (8–10 Hz)', false;
-    'pow_fast_alpha', 'Fast \alpha Power (10–12 Hz)', false;
-    'pow_alpha_total', 'Total \alpha Power (8–12 Hz)', false;
-    'rel_slow_alpha', 'Relative Slow \alpha', false;
-    'rel_fast_alpha', 'Relative Fast \alpha', false;
-    'sf_ratio', 'Slow/Fast Ratio', false;
-    'sf_logratio', 'Slow/Fast Log Ratio', true;
-    'sf_balance', 'Slow-Fast Balance', true;
-    'slow_alpha_frac', 'Slow \alpha Fraction', false;
-    'bi_pre', 'BI_{pre} | Pre-stim Balance Index', true;
-    'lr_pre', 'LR_{pre} | Pre-stim Log Ratio', true;
-    'cog_pre', 'CoG_{pre} | Pre-stim CoG (Hz)', false;
-    'psi_cog', '\Psi_{cog} | BI x (CoG - 10)', true;
+    'whole_paf_cog_hz', 'PAF CoG (Hz)', false;
+    'whole_pow_slow_alpha', 'Slow \alpha Power (8–10 Hz)', false;
+    'whole_pow_fast_alpha', 'Fast \alpha Power (10–12 Hz)', false;
+    'whole_pow_alpha_total', 'Total \alpha Power (8–12 Hz)', false;
+    'whole_rel_slow_alpha', 'Relative Slow \alpha', false;
+    'whole_rel_fast_alpha', 'Relative Fast \alpha', false;
+    'whole_sf_ratio', 'Slow/Fast Ratio', false;
+    'whole_sf_logratio', 'Slow/Fast Log Ratio', true;
+    'whole_sf_balance', 'Slow-Fast Balance', true;
+    'whole_slow_alpha_frac', 'Slow \alpha Fraction', false;
+    'pre_sf_balance', 'BI_{pre} | Pre-stim Balance Index', true;
+    'pre_sf_logratio', 'LR_{pre} | Pre-stim Log Ratio', true;
+    'pre_paf_cog_hz', 'CoG_{pre} | Pre-stim CoG (Hz)', false;
+    'pre_psi_cog', '\Psi_{cog} | BI x (CoG - 10)', true;
     'p5_flag', 'p5 Flag (unstable pre-stim power)', false;
 };
 
@@ -56,6 +63,7 @@ preStimItems = {
 postStimItems = {
     'erd_slow', 'ERD_{slow} | Slow-\alpha ERD', true;
     'erd_fast', 'ERD_{fast} | Fast-\alpha ERD', true;
+    'erd_pow_alpha_total', 'ERD_{total} | Total-\alpha ERD', true;
     'delta_erd', '\DeltaERD | ERD_{slow} - ERD_{fast}', true;
 };
 

@@ -1,7 +1,14 @@
 function spec_plot_interaction_summary(outPath, featChan, featGA, chanLabels, subjid, logf)
 %% SPEC_PLOT_INTERACTION_SUMMARY
 % Per-subject overview of pre-stim interaction metrics
-% V 1.1.0
+% V 2.0.0
+%
+% V 2.0.0 changes vs V 1.1.0:
+%   Field renames only (no behaviour change) to match the new
+%   whole_/pre_/post_/delta_ metric scheme in spectral_core.m.
+%       bi_pre -> pre_sf_balance
+%       lr_pre -> pre_sf_logratio
+%       cog_pre -> pre_paf_cog_hz
 %
 % V 1.1.0 changes vs V 1.0.0:
 %   - Fixed "Parent input must be a polaraxes object" error: nexttile returns
@@ -68,13 +75,13 @@ trials = (1:nTr)';
 % [1,1] BI_pre + LR_pre on dual axes
 ax = nexttile(tl, 1);
 yyaxis(ax, 'left');
-plot(ax, trials, featGA.bi_pre, '-o', 'MarkerSize', 3, 'Color', [0.13 0.47 0.71]);
+plot(ax, trials, featGA.pre_sf_balance, '-o', 'MarkerSize', 3, 'Color', [0.13 0.47 0.71]);
 yline(ax, 0, ':', 'Color', [0.5 0.5 0.5]);
 ylabel(ax, 'BI_{pre} [-1, +1]', 'Interpreter', 'tex');
 ylim(ax, [-1.05 1.05]);
  
 yyaxis(ax, 'right');
-plot(ax, trials, featGA.lr_pre, '-s', 'MarkerSize', 3, 'Color', [0.84 0.15 0.16]);
+plot(ax, trials, featGA.pre_sf_logratio, '-s', 'MarkerSize', 3, 'Color', [0.84 0.15 0.16]);
 yline(ax, 0, ':', 'Color', [0.5 0.5 0.5]);
 ylabel(ax, 'LR_{pre} (log ratio)', 'Interpreter', 'tex');
  
@@ -85,7 +92,7 @@ grid(ax, 'on');
  
 % [1,2] CoG_pre – weighted spectral centroid within alpha band
 ax = nexttile(tl, 2);
-plot(ax, trials, featGA.cog_pre, '-o', 'MarkerSize', 3, 'Color', [0.17 0.63 0.17]);
+plot(ax, trials, featGA.pre_paf_cog_hz, '-o', 'MarkerSize', 3, 'Color', [0.17 0.63 0.17]);
 yline(ax, 10, '--k', '10 Hz', 'LabelHorizontalAlignment', 'left', 'FontSize', 9);
 ylabel(ax, 'CoG_{pre} (Hz)', 'Interpreter', 'tex');
 xlabel(ax, 'Trial');
@@ -105,9 +112,9 @@ grid(ax, 'on');
 % ROW 2 – Channel x trial heatmaps
 % ================================================================
 heatmap_items = {
-    4, 'bi_pre',    'BI_{pre} [chan \times trial]';
+    4, 'pre_sf_balance',    'BI_{pre} [chan \times trial]';
     5, 'delta_erd', '\DeltaERD [chan \times trial]';
-    6, 'cog_pre',   'CoG_{pre} [chan \times trial]';
+    6, 'pre_paf_cog_hz',   'CoG_{pre} [chan \times trial]';
 };
  
 for r = 1:size(heatmap_items, 1)
@@ -208,7 +215,7 @@ end
 % Slow decay -> rigid state; rapid decay -> flexible state
 % ---------------------------------------------------------------
 ax = nexttile(tl, 9);
-b    = featGA.bi_pre;
+b    = featGA.pre_sf_balance;
 b_ok = b(~isnan(b));
 maxLag = min(10, floor(numel(b_ok) / 3));
  

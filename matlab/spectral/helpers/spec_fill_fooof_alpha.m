@@ -77,8 +77,8 @@ for t = 1:nTr
 
         if all(isnan(y)) || numel(y) < 3
             % last resort: use PAF CoG (still gives you “where alpha is”)
-            if isfield(featGA,'paf_cog_hz') && numel(featGA.paf_cog_hz) >= t
-                fooofOut.trials(t).alpha_cf_filled = featGA.paf_cog_hz(t);
+            if isfield(featGA,'whole_paf_cog_hz') && numel(featGA.whole_paf_cog_hz) >= t
+                fooofOut.trials(t).alpha_cf_filled = featGA.whole_paf_cog_hz(t);
                 fooofOut.trials(t).alpha_cf_source = "paf_cog";
                 fooofOut.trials(t).alpha_found = 1;
             end
