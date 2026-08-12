@@ -189,7 +189,7 @@ for i = 1:numel(subs)
             % GA: channel-mean of the per-channel features
             featGA_pre = spec_ga_mean_feat(featChan_pre);
             featGA_post = spec_ga_mean_feat(featChan_post);
-            featGA_delta = spec_compute_metric_deltas(featChan_delta);
+            featGA_delta = spec_ga_mean_feat(featChan_delta);
 
             featChan = spec_merge_structs(featChan, ...
                 spec_add_prefix(featChan_pre, 'pre_'), ...

@@ -48,7 +48,7 @@ function spec_plot_interaction_summary(outPath, featChan, featGA, chanLabels, su
 if nargin < 6, logf = []; end
 if isstring(chanLabels), chanLabels = cellstr(chanLabels); end
  
-nTr = numel(featGA.bi_pre);
+nTr = numel(featGA.pre_sf_balance);
 nC_panels = 3;
 nR_panels = 3;
  
