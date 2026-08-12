@@ -29,17 +29,13 @@ merge_cfg <- list(
     participants_filename = "participants.tsv",
 
     # -- Experiment Lookup ----
-    experiment_lookup = tibble::tibble(
-        ~experiment_name, ~experiment_id,
-        "26ByBiosemi", 1L,
-        "29ByANT", 2L,
-        "39ByBP", 3L,
-        "30ByANT", 4L,
-        "65ByANT", 5L,
-        "95ByBP", 6L,
-        "142ByBiosemi", 7L,
-        "223ByBP", 8L,
-        "29ByBP", 9L
+    experiment_lookup <- tibble::tibble(
+        experiment_name = c(
+            "26ByBiosemi", "29ByANT", "39ByBP",
+            "30ByANT", "65ByANT", "95ByBP",
+            "142ByBiosemi", "223ByBP", "29ByBP"
+        ),
+        experiment_id = 1:9
     ),
 
     # -- Train / holdout split ----
@@ -47,6 +43,6 @@ merge_cfg <- list(
     # helpers/split_helpers.R). Fixed seed for reproducibility; do not change
     # once any subject has been assigned, or existing assignments won't be
     # reproducible from a fresh run
-    split_siid = 42L,
+    split_seed = 42L,
     split_train_frac = 0.75
 )
