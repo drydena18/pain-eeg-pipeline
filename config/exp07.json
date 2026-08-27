@@ -18,10 +18,10 @@
       "search_recursive": true
     },
     "montage": {
-      "enabled": true,
+      "enabled": false,
       "csv": "/home/UWO/darsenea/Documents/GitHub/pain-alpha-dynamics/montage_biosemi64_AB_to_1020_v1.csv",
-      "select_ab_only": true,
-      "do_lookup": true
+      "select_ab_only": false,
+      "do_lookup": false
     },
     "subjects": [
       1,
