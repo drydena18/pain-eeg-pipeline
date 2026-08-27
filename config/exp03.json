@@ -14,7 +14,7 @@
     "out_dirname": "39ByBP",
     "out_prefix": "39ANT_64_",
     "raw": {
-      "pattern": "sub-%03d/eeg/sub-%03d_task-39ByBP_eeg.bdf",
+      "pattern": "sub-%03d/ses-5/eeg/sub-%03d_ses-5_task-39ByBP_eeg.vhdr",
       "search_recursive": true
     },
     "montage": {
@@ -140,14 +140,9 @@
       "enabled": true,
       "events": [
         {
-          "code": "32",
+          "code": "77",
           "condition": "pain",
-          "intensity": "low"
-        },
-        {
-            "code": "64",
-            "condition": "pain",
-            "intensity": "high"
+          "intensity": ""
         }
       ],
       "tmin_sec": -1.0,
