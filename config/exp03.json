@@ -12,7 +12,7 @@
     "id": "exp03",
     "task": "39ByBP",
     "out_dirname": "39ByBP",
-    "out_prefix": "29ANT_32_",
+    "out_prefix": "39ANT_64_",
     "raw": {
       "pattern": "sub-%03d/eeg/sub-%03d_task-39ByBP_eeg.bdf",
       "search_recursive": true
@@ -52,7 +52,17 @@
       26,
       27,
       28,
-      29
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39
     ],
     "channel_locs": {
       "use_elp": true,
@@ -62,7 +72,7 @@
   "preproc": {
     "concat": {
       "enabled": false,
-      "n-sessions": 4,
+      "n-sessions": 5,
       "session_pattern": ""
     },
     "filter": {
