@@ -12,16 +12,16 @@
     "id": "exp03",
     "task": "39ByBP",
     "out_dirname": "39ByBP",
-    "out_prefix": "39ANT_64_",
+    "out_prefix": "39BP_64_",
     "raw": {
       "pattern": "sub-%03d/ses-5/eeg/sub-%03d_ses-5_task-39ByBP_eeg.vhdr",
       "search_recursive": true
     },
     "montage": {
-      "enabled": true,
+      "enabled": false,
       "csv": "",
       "select_ab_only": false,
-      "do_lookup": true
+      "do_lookup": false
     },
     "subjects": [
       1,
