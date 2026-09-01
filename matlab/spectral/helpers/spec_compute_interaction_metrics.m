@@ -1,6 +1,10 @@
 function [featChan, featGA] = spec_compute_interaction_metrics(f, prePxx, postPxx, alpha, logf)
 % SPEC_COMPUTE_INTERACTION_METRICS  Pre-stimulus alpha interaction metrics
-% V 2.0.0
+% V 2.1.0
+%
+% V2.1.0: 
+%   - Added explicit nargin / ndims / size-match check on prePxx and
+%     postPxx BEFORE any band-power computation.
 %
 % V2.0.0 changes vs V1.1.0:
 %   - REMOVED bi_pre, lr_pre, cog_pre, psi_cog. These are not computed
@@ -41,7 +45,27 @@ function [featChan, featGA] = spec_compute_interaction_metrics(f, prePxx, postPx
 %   - TVI_alpha (between-subjects) and phase (Hilbert-based) are computed
 %     upstream and are not part of this function.
 
+if nargin < 4
+    error('spec_compute_interaction_metrics:MissingArg', ...
+        'spec_compute_interaction_metrics requires at least 4 arguments (f, prePxx, postPxx, alpha); got %d.', nargin);
+end
+
 if nargin < 5, logf = 1; end
+
+if isempty(prePxx) || isempty(postPxx)
+    error('spec_compute_interaction_metrics:EmptyPxx', ...
+        'prePxx/postPxx must not be empty (isempty(prePxx) = %d, isempty(postPxx) = %d).', isempty(prePxx), isempty(postPxx));
+end
+
+if ~isequal(size(prePxx), size(postPxx))
+    error('spec_compute_interaction_metrics:SizeMismatch', ...
+        'prePxx and postPxx must have identical shape. Got prePxx = %s, postPxx = %s.', mat2str(size(prePxx)), mat2str(size(postPxx)));
+end
+
+if numel(f) ~= size(prePxx, 2)
+    error('spec_compute_interaction_metrics:FreqMismatch', ...
+        'numel(f) = %d does not match size(prePxx, 2) = %d.', numel(f), size(prePxx, 2));
+end
 
 slow_hz  = alpha.slow_hz;   % [8  10]
 fast_hz  = alpha.fast_hz;   % [10 12]
@@ -71,21 +95,12 @@ nTr   = size(prePxx, 3);
 % ensure_2d guards against squeeze dropping a dimension when
 % nChan=1 or nTrials=1, using explicit target shape [nChan, nTr].
 % ---------------------------------------------------------------
-pow_pre_slow  = ensure_2d(squeeze(trapz(fS, prePxx(:, idxS, :), 2)),  nChan, nTr);
-pow_pre_fast  = ensure_2d(squeeze(trapz(fF, prePxx(:, idxF, :), 2)),  nChan, nTr);
-pow_post_slow = ensure_2d(squeeze(trapz(fS, postPxx(:, idxS, :), 2)), nChan, nTr);
-pow_post_fast = ensure_2d(squeeze(trapz(fF, postPxx(:, idxF, :), 2)), nChan, nTr);
-pow_pre_alpha = ensure_2d(squeeze(trapz(fA, prePxx(:, idxA, :), 2)),  nChan, nTr);
-
-% Verify shapes after squeeze + ensure_2d
-expected = [nChan, nTr];
-for chk = {pow_pre_slow, pow_pre_fast, pow_post_slow, pow_post_fast, pow_pre_alpha}
-    if ~isequal(size(chk{1}), expected)
-        error('spec_compute_interaction_metrics:ShapeMismatch', ...
-            'Band-power array shape %s != expected [%d %d]. Check prePxx/postPxx dimensions.', ...
-            mat2str(size(chk{1})), expected(1), expected(2));
-    end
-end
+pow_pre_slow = band_power(fS, prePxx, idxS, nChan, nTr, 'pow_pre_slow');
+pow_pre_fast = band_power(fF, prePxx, idxF, nChan, nTr, 'pow_pre_fast');
+pow_pre_alpha = band_power(fA, prePxx, idxA, nChan, nTr, 'pow_pre_alpha');
+pow_post_slow = band_power(fS, postPxx, idxS, nChan, nTr, 'pow_post_slow');
+pow_post_fast = band_power(fF, postPxx, idxF, nChan, nTr, 'pow_post_fast');
+pow_post_alpha = band_power(fA, postPxx, idxA, nChan, nTr, 'pow_post_alpha');
 
 % ---------------------------------------------------------------
 % Noise floor epsilon_0  (see compute_noise_floor below)
@@ -156,7 +171,7 @@ end
 % ================================================================
 function eps0 = compute_noise_floor(f, Pxx)
 lo = 45; hi = 55;
-idx! = (f >= lo) & (f <= hi);
+idxQ = (f >= lo) & (f <= hi);
 
 if sum(idxQ) >= 2
     qvals = Pxx(:, idxQ, :);
@@ -172,14 +187,18 @@ eps0 = max(eps0, 1e-12); % hard lower bound
 end
 
 % ================================================================
-% Local: ensure a band-power result is exactly [nChan x nTrials].
-% squeeze() on a 1-channel or 1-trial array may silently drop a
-% dimension. Explicit reshape using caller-provided target shape
-% makes the intention unambiguous and fails loudly if sizes don't
-% match rather than producing a silently wrong orientation.
+% Local: band power via trapz, shape-checked with a caller-supplied
+% name so a failure identifies exactly which (band x window) broke.
 % ================================================================
-function X = ensure_2d(X, nChan, nTr)
-if ~isequal(size(X), [nChan, nTr])
-    X = reshape(X, nChan, nTr);
+function X = band_power(fBand, Pxx, idxBand, nChan, nTr, label)
+try
+    X = squeeze(trapz(fBand, Pxx(:, idxBand, :), 2));
+    if ~isequal(size(X), [nChan, nTr])
+        X = reshape(X, nChan, nTr);
+    end
+catch ME
+    error('spec_compute_interaction_metrics:BandPowerFailed', ...
+        '%s failed: Pxx size = %s, idxBand true-count = %d, target shape = [%d %d]. Underlying error: %s', ...
+        label, mat2str(size(Pxx)), sum(idxBand), nChan, nTr, ME.message);
 end
 end
