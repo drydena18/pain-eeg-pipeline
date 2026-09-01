@@ -16,7 +16,7 @@ Two classes of render
    right medial.
 
 2. ROI scalar maps  (src_render_roi_scalar)
-   A metric scalar (e.g. BI_pre, CoG_pre, delta_ERD) is painted onto the
+   A metric scalar (e.g. pre_sf_balance, pre_paf_cog_hz, delta_erd) is painted onto the
    cortical surface by filling each ROI's vertices with its GA value.
    Useful for spatially visualising where a metric is strongest across the
    parcellation. Rendered for a user-specified list of metric columns.
@@ -290,7 +290,9 @@ def src_render_roi_scalar(
         roi_names   : Ordered list of ROI names (matches labels order).
         labels      : List of mne.Label objects from src_load_labels / custom ROIs.
         metric_cols : Which metric columns to render (e.g.
-                      ["BI_pre", "CoG_pre", "delta_ERD", "n2p2_amp"]).
+                      ["pre_sf_balance", "pre_paf_cog_hz", "delta_erd", "n2p2_amp"]).
+                      [V3.0.0: renamed from BI_pre/CoG_pre/delta_ERD to match
+                      the whole_/pre_/post_/delta_ scheme in source_core.py.]
         subjects_dir : Path containing the fsaverage/ folder.
         fig_dir     : Output directory.
         sub_str     : Subject string (e.g. "sub-001").

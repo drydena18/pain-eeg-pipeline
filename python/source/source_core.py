@@ -1,6 +1,23 @@
 """
 source_core.py  –  Per-subject orchestration loop for sLORETA source analysis.
-V 2.2.0
+V 3.0.0
+
+V3.0.0 changes vs V2.2.0 (whole/pre/post/delta metric generalization, to
+match spectral_core.m V2.2.0 -- see src_alpha_features.py, src_erd.py,
+src_compute_metric_deltas.py, src_merge_rows.py, src_add_prefix.py for the
+new shared modules this pulls in):
+    - Every alpha feature (10 from src_compute_alpha_features, plus
+    psi_cog) is now computed for THREE windows and prefixed accordingly:
+    whole_<name> (full epoch), pre_<name>, post_<name>
+    - Every metric additionally gets a generic delta_<name> = post - pre
+    (src_compute_metric_deltas.py), on top of the ERD-specific
+    functional change
+    - p5_flag added
+    - 4 previously-missing metric families added: rel_slow_alpha,
+    rel_fast_alpha, sf_ratio, slow_alpha_frac
+    - Field names now match spectral_core.m exactly (snake_case,
+    whole_/pre_/post_/delta_ predixes) so channel-space and source-space
+    metrics can be compared directly by metric_name
 
 Call chain:
     exp01_source.py  ->  source_default.py  ->  source_core()
@@ -36,8 +53,13 @@ import pandas as pd
 from src_io       import src_open_log, src_logmsg, src_close_log, src_find_set, src_read_epochs
 from src_assets   import src_load_fsaverage_assets, src_load_labels, src_build_custom_rois
 from src_inverse  import src_make_inverse_operator, src_apply_inverse_epochs
-from src_prestim  import src_compute_prestim_metrics, src_compute_ga_prestim_metrics, src_compute_tvi_alpha
-from src_poststim import src_compute_poststim_metrics, src_compute_ga_poststim_metrics, src_compute_itc
+from src_alpha_features import src_compute_window_alpha_features, src_compute_ga_window_alpha_features
+from src_add_prefix import src_add_prefix_rows
+from src_merge_rows import src_merge_rows
+from src_compute_metric_deltas import src_compute_metric_deltas
+from src_erd import src_compute_noise_stats, src_compute_erd_metrics
+from src_prestim  import (src_compute_prestim_metrics, src_compute_ga_prestim_metrics, src_compute_tvi_alpha)
+from src_poststim import (src_compute_poststim_metrics, src_compute_ga_poststim_metrics, src_compute_itc)
 from src_lep      import src_compute_lep_trial, src_compute_lep_ga
 from src_fooof    import fooof_available, fooof_package_name, src_compute_fooof_ga
 from src_write    import src_write_trial_csv, src_write_ga_csv, src_write_fooof_csv
@@ -186,76 +208,132 @@ def source_core(cfg: dict, da_root: str, exp_out: str):
             src_logmsg(logf, "[POST] %.3f – %.3f s  (%d samples)",
                        times_post[0], times_post[-1], len(times_post))
 
-            # 5. Pre-stimulus metrics ──────────────────────────────────────────
-            src_logmsg(logf, "[FEAT] Pre-stimulus metrics...")
-            prestim_rows = src_compute_prestim_metrics(
-                tc_pre, tc, times, sfreq, alpha, slow, fast, fmin, fmax,
+            # 5. Whole / pre / post alpha features ──────────────────────────────
+            src_logmsg(logf, "[FEAT] Whole-epoch alpha features...")
+            whole_rows = src_compute_window_alpha_features(
+                tc, sfreq, alpha, slow, fast, fmin, fmax,
             )
-            ga_prestim_rows, psd_by_roi = src_compute_ga_prestim_metrics(
+            ga_whole_rows, psd_by_roi_whole = src_compute_ga_window_alpha_features(
+                tc, sfreq, alpha, slow, fast, fmin, fmax,
+            )
+
+            src_logmsg(logf, "[FEAT] Pre-stimulus alpha features...")
+            pre_rows = src_compute_window_alpha_features(
+                tc_pre, sfreq, alpha, slow, fast, fmin, fmax,
+            )
+            ga_pre_rows, _ = src_compute_ga_window_alpha_features(
                 tc_pre, sfreq, alpha, slow, fast, fmin, fmax,
             )
 
+            src_logmsg(logf, "[FEAT] Post-stimulus alpha features...")
+            post_rows = src_compute_window_alpha_features(
+                tc_post, sfreq, alpha, slow, fast, fmin, fmax,
+            )
+            ga_post_rows, _ = src_compute_ga_window_alpha_features(
+                tc_post, sfreq, alpha, slow, fast, fmin, fmax,
+            )
+
+            # Generic delta_<name> = post - pre
+            delta_rows = src_compute_metric_deltas(pre_rows, post_rows, key_cols = ("trial", "roi_idx"))
+            ga_delta_rows = src_compute_metric_deltas(ga_pre_rows, ga_post_rows, key_cols = ("roi_idx",))
+
+            # ERD family (fractional change, power metrics only) + p5_flag.
+            src_logmsg(logf, "[ERD] Computing ERD family (erd_slow, erd_fast, erd_pow_alpha_total, delta_erd) + p5_flag...")
+            noise_stats = src_compute_noise_stats(tc_pre, sfreq, slow, fast, fmin, fmax)
+            erd_rows = src_compute_erd_metrics(
+                pre_rows, post_rows, noise_stats, key_cols = ("trial", "roi_idx"), use_p5_flag = True,
+            )
+            ga_erd_rows = src_compute_erd_metrics(
+                ga_pre_rows, ga_post_rows, noise_stats, key_cols = ("roi_idx",), use_p5_flag = False,
+            )
+
+            # 6. Hilbert phase (unchanged windows: t = 0 for pre, poststim_ref_t
+            #    for post; both derived from the full epoch, not the cropped
+            #    pre/post windows, to avoid Hilbert edge effects) ---------------
+            src_logmsg(logf, "[FEAT] Hilbert phase (pre + post)...")
+            phase_pre_rows = src_compute_prestim_phase(tc, times, sfreq, slow)
+            phase_post_rows = src_compute_poststim_phase(tc, times, sfreq, slow, post_ref_t)
+
+            # 7. TVI_alpha (pre-stim-oly, unchanged in behaviour; input
+            #    renamed BI_pre -> pre_sf_balance) ------------------------------
             tvi_by_roi: dict = {}
-            pre_df = pd.DataFrame(prestim_rows)
+            pre_df = pd.DataFrame(pre_rows)
             for ri in range(len(roi_names)):
-                bi_seq = pre_df.loc[pre_df["roi_idx"] == ri, "BI_pre"].values
+                bi_seq = pre_df.loc[pre_df["roi_idx"] == ri, "sf_balance"].values
                 tvi_by_roi[ri] = src_compute_tvi_alpha(bi_seq)
 
-            # 6. Post-stimulus metrics ─────────────────────────────────────────
-            src_logmsg(logf, "[FEAT] Post-stimulus metrics + ITC...")
-            poststim_rows = src_compute_poststim_metrics(
-                tc_pre, tc_post, tc, times, sfreq,
-                alpha, slow, fast, fmin, fmax, post_ref_t,
-            )
+            # 8. ITC (unchanged) + GA time courses / phase -------------------------
             itc_rows = src_compute_itc(tc, times, sfreq, slow, post_tmin, post_tmax)
 
-            tc_pre_ga  = np.mean(tc_pre,  axis=0, keepdims=True)
-            tc_post_ga = np.mean(tc_post, axis=0, keepdims=True)
-            tc_ga      = np.mean(tc,      axis=0, keepdims=True)
-            ga_poststim_rows = src_compute_ga_poststim_metrics(
-                tc_pre_ga, tc_post_ga, tc_ga, times, sfreq,
-                alpha, slow, fast, fmin, fmax, post_ref_t,
-            )
+            itc_ga = np.mean(tc, axis = 0, keepdims = True)
 
-            ga_tc = np.mean(tc, axis=0)   # (n_rois, n_times)
+            phase_pre_ga_rows = src_compute_ga_prestim_phase(tc_ga, times, sfreq, slow)
+            phase_post_ga_rows = src_compute_ga_poststim_phase(tc_ga, times, sfreq, slow, post_ref_t)
+
+            ga_tc = np.mean(tc, axis = 0)
             npy_path = os.path.join(csv_dir, f"{sub_str}_source_ga_timecourse.npy")
             np.save(npy_path, ga_tc)
-            src_logmsg(logf, "[NPY] Saved GA timecourse: %s  shape=%s", npy_path, str(ga_tc.shape))
- 
-            # Also save times and roi_names once per subject (needed by plotting script)
+            src_logmsg(logf, "[NPY] Saved GA timecourse: %s shape = %s", npy_path, str(ga_tc.shape))
+
             times_path = os.path.join(csv_dir, f"{sub_str}_source_times.npy")
             np.save(times_path, times)
             src_logmsg(logf, "[NPY] Saved times: %s", times_path)
 
-            # 7. LEP features ─────────────────────────────────────────────────
+            # 9. LEP features -----------------------------------------------------
             src_logmsg(logf, "[FEAT] LEP features (N2/P2)...")
             lep_trial_rows = src_compute_lep_trial(tc_post, times_post, n2_window, p2_window)
-            ga_lep_rows    = src_compute_lep_ga(tc_post, times_post, n2_window, p2_window)
+            ga_lep_rows = src_compute_lep_ga(tc_post, times_post, n2_window, p2_window)
 
-            # 8. FOOOF ─────────────────────────────────────────────────────────
+            # 10. FOOOF -----------------------------------------------------------
+            # NOTE: Now fits the whole-epoch GA PSD, not the pre-stim GA PSD
             fooof_rows: list = []
             if do_fooof:
                 if not fooof_available():
                     src_logmsg(logf,
-                               "[WARN] FOOOF enabled but neither 'specparam' nor 'fooof' "
-                               "is installed. Skipping.")
+                               "[WARN] FOOOF enabled but neither 'specparam' nor 'fooof' is installed, skipping.")
                 else:
                     src_logmsg(logf, "[FOOOF] Fitting GA PSDs (%s)...", fooof_package_name())
-                    fooof_rows, _ = src_compute_fooof_ga(
-                        psd_by_roi, len(roi_names), sub, fooof_cfg,
+                    fooof_rows = src_compute_fooof_ga(
+                        psd_by_roi_whole, len(roi_names), sub, fooof_cfg,
                     )
 
-            # 9. Write CSVs ────────────────────────────────────────────────────
+            # 11. Assemble + write CSVs ------------------------------------------------
+            trial_rows_merged = src_merge_rows(
+                src_add_prefix_rows(whole_rows, "whole_"),
+                src_add_prefix_rows(pre_rows, "pre_"),
+                src_add_prefix_rows(post_rows, "post_"),
+                delta_rows,
+                erd_rows,
+                phase_pre_rows,
+                phase_post_rows,
+                lep_trial_rows,
+                key_cols = ("trial", "roi_idx"),
+            )
+
+            tvi_rows = [{"roi_idx": ri, "TVI_alpha": tvi_by_roi[ri]} for ri in range(len(roi_names))]
+
+            ga_rows_merged = src_merge_rows(
+                src_add_prefix_rows(ga_whole_rows, "whole_"),
+                src_add_prefix_rows(ga_pre_rows, "pre_"),
+                src_add_prefix_rows(ga_post_rows, "post_"),
+                ga_delta_rows,
+                ga_erd_rows,
+                phase_pre_ga_rows,
+                phase_post_ga_rows,
+                ga_lep_rows,
+                tvi_rows,
+                itc_ga_rows,
+                fooof_rows,
+                key_cols = ("roi_idx",)
+            )
+
             src_write_trial_csv(
                 os.path.join(csv_dir, f"{sub_str}_source_trial.csv"),
-                sub, roi_names,
-                prestim_rows, poststim_rows, lep_trial_rows, logf,
+                sub, roi_names, trial_rows_merged, logf,
             )
             src_write_ga_csv(
-                os.path.join(csv_dir, f"{sub_str}_source_ga.csv"),
-                sub, roi_names,
-                ga_prestim_rows, ga_poststim_rows, ga_lep_rows,
-                tvi_by_roi, itc_rows, logf,
+                os.path.join(csv_dir, f"{sub_str}_source_ga_fooof.csv"),
+                sub, roi_names, ga_rows_merged, logf,
             )
             if fooof_rows:
                 src_write_fooof_csv(
@@ -263,10 +341,7 @@ def source_core(cfg: dict, da_root: str, exp_out: str):
                     roi_names, fooof_rows, logf,
                 )
 
-            # 10. QC heatmap (sanity check only) ─────────────────────────────────
-            # ROI × time heatmap of GA sLORETA amplitude. One figure per subject.
-            # Per-ROI figures (ERD, LEP, FOOOF, phase) are deferred until after
-            # R GAMMs identify significant ROIs.
+            # 12. QC heatmap (sanity check only) --------------------------------------
             if do_brain:
                 src_plot_ga_timecourse(
                     os.path.join(fig_dir, f"{sub_str}_source_GA_timecourse"),
@@ -274,14 +349,13 @@ def source_core(cfg: dict, da_root: str, exp_out: str):
                     n2_window, p2_window, logf,
                 )
 
-            src_logmsg(logf, "===== SOURCE DONE %s =====", sub_str)
+            src_logmsg(logf, "==== SOURCE DONE %s ====", sub_str)
 
         except FileNotFoundError as e:
-            src_logmsg(logf, "[SKIP] %s — file not found: %s", sub_str, str(e))
+            src_logmsg(logf, "[SKIP] %s - File not found: %s", sub_str, str(e))
         except ValueError as e:
-            src_logmsg(logf, "[SKIP] %s — config/data issue: %s", sub_str, str(e))
+            src_logmsg(logf, "[SKIP] %s - config/data issue: %s", sub_str, str(e))
         except Exception:
-            src_logmsg(logf, "[ERROR] %s — unexpected error:\n%s",
-                       sub_str, traceback.format_exc())
+            src_logmsg(logf, "[ERROR] %s - unexpected error:\n%s", sub_str, traceback.format_exc())
         finally:
             src_close_log(logf)

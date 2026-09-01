@@ -1,8 +1,25 @@
 """
-src_write.py - CSV writers for the source localization pipeline
+src_write.py - CSV writers for the source localization pipeline.
+V 2.0.0
+
+V2.0.0 changes vs V1.x:
+    - src_write_trial_csv and src_write_ga_csv now accept a SINGLE
+      already-merged list of rows (built with src_merge_rows.py in
+      source_core.py) instead of several separate row-lists merged here
+      via pandas .merge(..., suffixes=(...)). The old pattern silently
+      dropped a column if two row-lists happened to define the same
+      non-key field name (the "_dup" columns were dropped without a
+      warning) — exactly the kind of silent-failure mode this codebase
+      tries to avoid elsewhere. With merging now done explicitly via
+      src_merge_rows.py before these functions are called, a field
+      collision is visible in the merge step itself rather than silently
+      resolved by a suffix-matching rule here.
+    - TVI_alpha is no longer special-cased into the writer; it's expected
+      to already be a column on the GA rows passed in (added via
+      src_merge_rows in source_core.py), same as every other metric.
 
 All writers follow the same pattern:
-    - Accept pre-assembled list-of-dicts (rows)
+    - Accept pre-assembled, pre-merged list-of-dicts (rows)
     - Resolve roi_idx -> roi_name using a shared roi_names list
     - Prepend subject ID
     - Write via pandas, log path via logf
@@ -10,11 +27,13 @@ All writers follow the same pattern:
 Output files produced
 ----------------------
 Per-subject, per-trial:
-    sub-XXX_source_trial.csv        pre+post spectral + LEP + phase metrics
+    sub-XXX_source_trial.csv        whole+pre+post+delta+ERD+LEP+phase metrics
 
 Per-subject, grand-average:
-    sub-XXX_source_ga.csv           GA pre+post spectral + LEP + TVI_alpha _ITC
-    sub-XXX_source_ga_fooof.csv     GA FOOOF metrics (optional)
+    sub-XXX_source_ga.csv           GA whole+pre+post+delta+ERD+LEP+TVI_alpha+ITC
+
+Per-subject, FOOOF (optional):
+    sub-XXX_source_ga_fooof.csv     GA FOOOF metrics
 """
 
 from __future__ import annotations
@@ -40,107 +59,59 @@ def _add_roi_name(rows: list[dict], roi_names: list[str]) -> list[dict]:
     return out
 
 # ====================================================================
-# TRIAL CSV (pre-stim + post-stim + LEP merged)
+# TRIAL CSV (already merged: whole + pre + post + delta + ERD + LEP + phase)
 # ====================================================================
 def src_write_trial_csv(
         path: str,
         sub: int,
         roi_names: list[str],
-        prestim_rows: list[dict],
-        poststim_rows: list[dict],
-        lep_rows: list[dict],
+        trial_rows: list[dict],
         logf,
 ):
     """
-    Merge pre-stim, post-stim, and LEP rows into a single trial-level CSV
-
-    All three lists have the same (trial, roi_idx) key pairs. They are merged
-    on those keys so each output row represents one (subject, trial, ROI)
+    Write the per-subject trial-level CSV from an already-merged row list.
 
     Args:
-        path            : Output CSV path
-        sub             : Subject ID (integer)
-        roi_names       : List mapping roi_idx -> roi_name
-        prestim_rows    : List of dicts with pre-stim metrics, each with keys
-                          'trial', 'roi_idx', and metric fields
-        poststim_rows   : List of dicts with post-stim metrics, each with keys
-                          'trial', 'roi_idx', and metric fields
-        lep_rows        : List of dicts with LEP metrics, each with keys
-                          'trial', 'roi_idx', and metric fields
-        logf            : Open file handle for logging
+        path        : Output CSV path
+        sub         : Subject ID (integer)
+        roi_names   : List mapping roi_idx -> roi_name
+        trial_rows  : List of dicts, one per (trial, roi), already merged
+                      via src_merge_rows.py (whole_/pre_/post_/delta_/erd_
+                      metrics, LEP, phase, p5_flag, etc.)
+        logf        : Open file handle for logging
     """
-    def _to_df(rows, roi_names):
-        named = _add_roi_name(rows, roi_names)
-        return pd.DataFrame(named)
-    
-    df_pre = _to_df(prestim_rows, roi_names)
-    df_post = _to_df(poststim_rows, roi_names)
-    df_lep = _to_df(lep_rows, roi_names)
-
-    # Merge on (trial, roi)
-    df = df_pre.merge(df_post, on = ["trial", "roi"], how = "outer", suffixes = ("", "_post_dup"))
-    df = df.merge(df_lep, on = ["trial", "roi"], how = "outer", suffixes = ("", "_lep_dup"))
-
-    # Drop any accidential duplicate columns from suffix collisions
-    dup_cols = [c for c in df.columns if c.endswith("_post_dup") or c.endswith("_lep_dup")]
-    df.drop(columns = dup_cols, inplace = True)
-
+    df = pd.DataFrame(_add_roi_name(trial_rows, roi_names))
     df.insert(0, "subject", sub)
-    df.to_csv(path, index = False)
+    df.to_csv(path, index=False)
     src_logmsg(logf, "[CSV] %s (%d rows x %d cols)", path, len(df), len(df.columns))
 
 # ====================================================================
-# GRAND-AVERAGE CSV (pre + post + LEP GA + TVI_alpha + ITC)
+# GRAND-AVERAGE CSV (already merged: whole + pre + post + delta + ERD +
+# LEP + TVI_alpha + ITC)
 # ====================================================================
 def src_write_ga_csv(
         path: str,
         sub: int,
         roi_names: list[str],
-        ga_prestim_rows: list[dict],
-        ga_poststim_rows: list[dict],
-        ga_lep_rows: list[dict],
-        tvi_by_roi: dict,
-        itc_rows: list[dict],
+        ga_rows: list[dict],
         logf,
 ):
     """
-    Write the grand-average CSV combining pre-stim, post-stim, LEP, TVI_alpha,
-    and ITC metrics, one row per ROI
+    Write the grand-average CSV from an already-merged row list, one row
+    per ROI.
 
     Args:
-        path              : Output CSV file path.
-        sub               : Integer subject ID.
-        roi_names         : Ordered list of ROI name strings.
-        ga_prestim_rows   : From src_compute_ga_prestim_metrics().
-        ga_poststim_rows  : From src_compute_ga_poststim_metrics().
-        ga_lep_rows       : From src_compute_lep_ga().
-        tvi_by_roi        : Dict mapping roi_idx -> TVI_alpha scalar.
-        itc_rows          : From src_compute_itc().
-        logf              : Log file handle.
+        path      : Output CSV file path.
+        sub       : Integer subject ID.
+        roi_names : Ordered list of ROI name strings.
+        ga_rows   : List of dicts, one per ROI, already merged via
+                    src_merge_rows.py (whole_/pre_/post_/delta_/erd_
+                    metrics, LEP, TVI_alpha, ITC, etc.)
+        logf      : Log file handle.
     """
-    def _named(rows):
-        return pd.DataFrame(_add_roi_name(rows, roi_names))
-    
-    df_pre = _named(ga_prestim_rows)
-    df_post = _named(ga_poststim_rows)
-    df_lep = _named(ga_lep_rows)
-    df_itc = _named(itc_rows)
-
-    # Add TVI_alpha into the pre-stim frame
-    df_pre["TVI_alpha"] = df_pre["roi"].map(
-        {roi_names[ri]: v for ri, v in tvi_by_roi.items()}
-    )
-
-    df = df_pre \
-        .merge(df_post, on = "roi", how = "outer", suffixes = ("", "_post_dup")) \
-        .merge(df_lep, on = "roi", how = "outer", suffixes = ("", "_lep_dup")) \
-        .merge(df_itc, on = "roi", how = "outer", suffixes = ("", "_itc_dup"))
-    
-    dup_cols = [c for c in df.columns if c.endswith(("_post_dup", "_lep_dup", "_itc_dup"))]
-    df.drop(columns = dup_cols, inplace = True)
-
-    df.insert(0, "subjects", sub)
-    df.to_csv(path, index = False)
+    df = pd.DataFrame(_add_roi_name(ga_rows, roi_names))
+    df.insert(0, "subject", sub)
+    df.to_csv(path, index=False)
     src_logmsg(logf, "[CSV] %s (%d rows x %d cols)", path, len(df), len(df.columns))
 
 
@@ -154,7 +125,7 @@ def src_write_fooof_csv(
         logf,
 ):
     """
-    Write the grand-average FOOOF metrics CSV
+    Write the grand-average FOOOF metrics CSV. Unchanged from V1.x.
 
     Args:
         path        : Output CSV file path
@@ -163,5 +134,5 @@ def src_write_fooof_csv(
         logf        : Log file handle
     """
     df = pd.DataFrame(_add_roi_name(fooof_rows, roi_names))
-    df.to_csv(path, index = False)
+    df.to_csv(path, index=False)
     src_logmsg(logf, "[CSV] %s (%d rows x %d cols)", path, len(df), len(df.columns))

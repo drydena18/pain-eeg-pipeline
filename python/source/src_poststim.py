@@ -1,38 +1,36 @@
 """
-src_poststim.py  –  Post-stimulus alpha metrics.
+src_poststim.py - Post-stimulus Hilbert phase + inter-trial phase coherence.
 
-Metrics implemented
-───────────────────
-ERD (event-related desynchronization) family [Metric 5 — sub-band ERD asymmetry]:
-    ERD_slow        Fractional slow-alpha power change: (post−pre)/pre
-    ERD_fast        Fractional fast-alpha power change: (post−pre)/pre
-    delta_ERD       ERD_slow − ERD_fast
-                    < 0: fast-ERD dominates (nociceptive gating)
-                    > 0: slow-ERD dominates (diffuse arousal / saliency)
+V2.0.0 changes vs V1.x:
+    - REMOVED pow_slow_post/pow_fast_post/pow_alpha_post computation. These
+      are now computed generically as part of the post_ window family by
+      src_alpha_features.src_compute_window_alpha_features /
+      src_compute_ga_window_alpha_features, called from source_core.py.
+    - REMOVED ERD_slow/ERD_fast/delta_ERD computation, including the old
+      NaN-on-low-power denominator guard. This is now src_erd.py
+      (src_compute_erd_metrics), which always returns a numeric ERD value
+      using an epsilon floor and flags low-power trials separately via
+      p5_flag, matching spec_compute_interaction_metrics.m. See src_erd.py
+      for why the noise-floor/percentile stats are computed per-ROI here
+      rather than pooled across ROIs the way MATLAB pools across channels.
+    - This file now owns ONLY:
+        - Hilbert instantaneous phase at poststim_ref_t (slow_phase_post,
+          sin_phase_post, cos_phase_post) — unchanged from V1.x.
+        - Inter-trial phase coherence (ITC) — unchanged from V1.x.
 
-Post-stimulus total alpha power:
-    pow_slow_post   Slow alpha [8, 10] Hz power in post-stim window
-    pow_fast_post   Fast alpha [10, 12] Hz power in post-stim window
-    pow_alpha_post  Total alpha [8, 12] Hz power in post-stim window
-
+Metrics Implemented
+--------------------
 Hilbert instantaneous phase (post-stimulus):
-    slow_phase_post Instantaneous phase of the 8–10 Hz analytic signal
+    slow_phase_post Instantaneous phase of the 8-10 Hz analytic signal
                     at the sample nearest to poststim_ref_t (default: 0.2 s,
                     corresponding to early post-stimulus alpha suppression).
-    sin_phase_post  sin(slow_phase_post)  — linear GAMM regressor
-    cos_phase_post  cos(slow_phase_post)  — linear GAMM regressor
+    sin_phase_post  sin(slow_phase_post)  - linear GAMM regressor
+    cos_phase_post  cos(slow_phase_post)  - linear GAMM regressor
 
 Inter-trial phase coherence (ITC):
     Computed at the GA level (one value per ROI, not per trial) because ITC
     (also called phase-locking value) is inherently a population statistic.
     Written to the GA CSV.
-
-Notes
-─────
-ERD denominators: if pre-stimulus power in either band falls below the
-5th-percentile of the session distribution on any trial, ERD for that trial
-is set to NaN rather than propagating a near-zero denominator. The threshold
-is computed once per subject × ROI and passed in as pre_percentile_threshold.
 
 References
 ──────────
@@ -44,213 +42,98 @@ from __future__ import annotations
 import numpy as np
 from scipy.signal import hilbert
 
-from src_spectral import src_psd_welch, src_bandpower, src_bandpass_filter
-
+from src_spectral import src_bandpass_filter
 
 _EPS = 1e-12
 
 
 # =============================================================================
-# PER-TRIAL POST-STIMULUS METRICS
+# PER-TRIAL POST-STIMULUS PHASE
 # =============================================================================
-
-def src_compute_poststim_metrics(
-    tc_pre: np.ndarray,
-    tc_post: np.ndarray,
+def src_compute_poststim_phase(
     tc_full: np.ndarray,
     times_full: np.ndarray,
     sfreq: float,
-    alpha: tuple[float, float],
     slow: tuple[float, float],
-    fast: tuple[float, float],
-    fmin: float,
-    fmax: float,
     poststim_ref_t: float = 0.2,
-    psd_window_sec: float = 0.5,
 ) -> list[dict]:
     """
-    Compute per-trial post-stimulus metrics for every (trial, ROI).
-
-    Pre-stimulus power is re-computed here from tc_pre rather than imported
-    from src_prestim.py to keep the two modules independent. The values are
-    identical since both use src_psd_welch with the same parameters.
+    Compute the Hilbert instantaneous phase of the slow-alpha (8-10 Hz)
+    signal at poststim_ref_t for every (trial, ROI).
 
     Args:
-        tc_pre         : (n_epochs, n_rois, n_times_pre)  — pre-stim window.
-        tc_post        : (n_epochs, n_rois, n_times_post) — post-stim window.
-        tc_full        : (n_epochs, n_rois, n_times)       — full epoch.
-        times_full     : (n_times,) — full epoch time axis in seconds.
-        sfreq          : Sampling frequency in Hz.
-        alpha          : Total alpha band (lo, hi) in Hz.
-        slow           : Slow alpha sub-band (lo, hi) in Hz.
-        fast           : Fast alpha sub-band (lo, hi) in Hz.
-        fmin, fmax     : PSD frequency range for Welch estimation.
-        poststim_ref_t : Time (s) at which the post-stim Hilbert phase is read.
-                         Default 0.2 s captures early alpha suppression.
-        psd_window_sec : Welch segment length in seconds.
+        tc_full         : (n_epochs, n_rois, n_times) — full epoch.
+        times_full      : (n_times,) — full epoch time axis in seconds.
+        sfreq           : Sampling frequency in Hz.
+        slow            : (lo, hi) slow-alpha sub-band bounds in Hz.
+        poststim_ref_t  : Time (s) at which the post-stim phase is read.
 
     Returns:
-        List of dicts, one per (trial, ROI), with fields:
-            trial, roi_idx,
-            pow_slow_post, pow_fast_post, pow_alpha_post,
-            ERD_slow, ERD_fast, delta_ERD,
-            slow_phase_post, sin_phase_post, cos_phase_post
+        List of dicts, one per (trial, ROI):
+            {trial, roi_idx, slow_phase_post, sin_phase_post, cos_phase_post}
     """
-    n_epochs, n_rois, _ = tc_pre.shape
-
-    # Index of poststim_ref_t in the full epoch
+    n_epochs, n_rois, _ = tc_full.shape
     ref_idx = int(np.argmin(np.abs(times_full - poststim_ref_t)))
 
-    # ── Session-level 5th-percentile thresholds for ERD denominator guard ────
-    # Compute per ROI across all epochs and both sub-bands.
-    slow_pre_all = np.full((n_epochs, n_rois), np.nan)
-    fast_pre_all = np.full((n_epochs, n_rois), np.nan)
-
-    for ei in range(n_epochs):
-        for ri in range(n_rois):
-            f, p = src_psd_welch(tc_pre[ei, ri, :], sfreq, fmin, fmax, psd_window_sec)
-            slow_pre_all[ei, ri] = src_bandpower(f, p, slow[0], slow[1])
-            fast_pre_all[ei, ri] = src_bandpower(f, p, fast[0], fast[1])
-
-    slow_thresh = np.nanpercentile(slow_pre_all, 5, axis=0)   # (n_rois,)
-    fast_thresh = np.nanpercentile(fast_pre_all, 5, axis=0)
-
     rows: list[dict] = []
-
     for ei in range(n_epochs):
         for ri in range(n_rois):
-            # ── Pre-stim power for ERD denominator ───────────────────────────
-            pow_slow_pre = slow_pre_all[ei, ri]
-            pow_fast_pre = fast_pre_all[ei, ri]
-
-            # ── Post-stim power ───────────────────────────────────────────────
-            f_post, p_post = src_psd_welch(tc_post[ei, ri, :], sfreq, fmin, fmax, psd_window_sec)
-            pow_slow_post  = src_bandpower(f_post, p_post, slow[0], slow[1])
-            pow_fast_post  = src_bandpower(f_post, p_post, fast[0], fast[1])
-            pow_alpha_post = src_bandpower(f_post, p_post, alpha[0], alpha[1])
-
-            # ── ERD (fractional change; NaN if denominator near noise floor) ──
-            if pow_slow_pre > slow_thresh[ri] and pow_slow_pre > _EPS:
-                erd_slow = float((pow_slow_post - pow_slow_pre) / pow_slow_pre)
-            else:
-                erd_slow = float("nan")
-
-            if pow_fast_pre > fast_thresh[ri] and pow_fast_pre > _EPS:
-                erd_fast = float((pow_fast_post - pow_fast_pre) / pow_fast_pre)
-            else:
-                erd_fast = float("nan")
-
-            if not (np.isnan(erd_slow) or np.isnan(erd_fast)):
-                delta_erd = float(erd_slow - erd_fast)
-            else:
-                delta_erd = float("nan")
-
-            # ── Post-stim Hilbert phase at poststim_ref_t ────────────────────
             try:
-                x_filt      = src_bandpass_filter(tc_full[ei, ri, :], sfreq, slow[0], slow[1])
-                analytic    = hilbert(x_filt)
-                phase_post  = float(np.angle(analytic[ref_idx]))
+                x_filt = src_bandpass_filter(tc_full[ei, ri, :], sfreq, slow[0], slow[1])
+                analytic = hilbert(x_filt)
+                phase_post = float(np.angle(analytic[ref_idx]))
             except Exception:
-                phase_post  = float("nan")
+                phase_post = float("nan")
 
             rows.append({
-                "trial":          ei + 1,
-                "roi_idx":        ri,
-                "pow_slow_post":  pow_slow_post,
-                "pow_fast_post":  pow_fast_post,
-                "pow_alpha_post": pow_alpha_post,
-                "ERD_slow":       erd_slow,
-                "ERD_fast":       erd_fast,
-                "delta_ERD":      delta_erd,
-                "slow_phase_post":  phase_post,
-                "sin_phase_post":   float(np.sin(phase_post)) if not np.isnan(phase_post) else float("nan"),
-                "cos_phase_post":   float(np.cos(phase_post)) if not np.isnan(phase_post) else float("nan"),
+                "trial":           ei + 1,
+                "roi_idx":         ri,
+                "slow_phase_post": phase_post,
+                "sin_phase_post":  float(np.sin(phase_post)) if not np.isnan(phase_post) else float("nan"),
+                "cos_phase_post":  float(np.cos(phase_post)) if not np.isnan(phase_post) else float("nan"),
             })
 
     return rows
 
 
 # =============================================================================
-# GRAND-AVERAGE POST-STIM METRICS
+# GRAND-AVERAGE POST-STIMULUS PHASE
 # =============================================================================
-
-def src_compute_ga_poststim_metrics(
-    tc_pre: np.ndarray,
-    tc_post: np.ndarray,
-    tc_full: np.ndarray,
+def src_compute_ga_poststim_phase(
+    tc_full_ga: np.ndarray,
     times_full: np.ndarray,
     sfreq: float,
-    alpha: tuple[float, float],
     slow: tuple[float, float],
-    fast: tuple[float, float],
-    fmin: float,
-    fmax: float,
     poststim_ref_t: float = 0.2,
-    psd_window_sec: float = 0.5,
 ) -> list[dict]:
     """
-    Compute GA post-stimulus metrics for each ROI from the mean time course.
-
-    This is a separate function from src_compute_poststim_metrics because the
-    5th-percentile denominator guard used in the per-trial function is vacuous
-    when applied to a single (GA) trial — the percentile of one value equals
-    that value itself, making the guard always fail and all ERD values NaN.
-    Here, ERD is computed directly as (post - pre) / pre with only a simple
-    noise-floor epsilon guard.
+    Same as src_compute_poststim_phase but for the GA (trial-averaged) time
+    course.
 
     Args:
-        tc_pre, tc_post, tc_full : (1, n_rois, n_times_*) — GA mean time courses,
-                                    keepdims=True so shape is (1, n_rois, n_times).
-        All other args same as src_compute_poststim_metrics.
+        tc_full_ga : (1, n_rois, n_times) — GA mean time course, keepdims=True.
+        Other args same as src_compute_poststim_phase.
 
     Returns:
-        List of dicts, one per ROI (no 'trial' key), with same metric fields
-        as src_compute_poststim_metrics.
+        List of dicts, one per ROI: {roi_idx, slow_phase_post, sin_phase_post, cos_phase_post}
     """
-    _, n_rois, _ = tc_pre.shape
+    _, n_rois, _ = tc_full_ga.shape
     ref_idx = int(np.argmin(np.abs(times_full - poststim_ref_t)))
 
     rows: list[dict] = []
-
     for ri in range(n_rois):
-        # Pre-stim power (from GA mean)
-        f_pre, p_pre = src_psd_welch(tc_pre[0, ri, :], sfreq, fmin, fmax, psd_window_sec)
-        pow_slow_pre  = src_bandpower(f_pre, p_pre, slow[0], slow[1])
-        pow_fast_pre  = src_bandpower(f_pre, p_pre, fast[0], fast[1])
-
-        # Post-stim power
-        f_post, p_post = src_psd_welch(tc_post[0, ri, :], sfreq, fmin, fmax, psd_window_sec)
-        pow_slow_post  = src_bandpower(f_post, p_post, slow[0], slow[1])
-        pow_fast_post  = src_bandpower(f_post, p_post, fast[0], fast[1])
-        pow_alpha_post = src_bandpower(f_post, p_post, alpha[0], alpha[1])
-
-        # ERD: simple epsilon guard (no percentile, since n=1)
-        erd_slow = float((pow_slow_post - pow_slow_pre) / pow_slow_pre) \
-                   if pow_slow_pre > _EPS else float("nan")
-        erd_fast = float((pow_fast_post - pow_fast_pre) / pow_fast_pre) \
-                   if pow_fast_pre > _EPS else float("nan")
-        delta_erd = float(erd_slow - erd_fast) \
-                    if not (np.isnan(erd_slow) or np.isnan(erd_fast)) else float("nan")
-
-        # Post-stim Hilbert phase at poststim_ref_t
         try:
-            x_filt     = src_bandpass_filter(tc_full[0, ri, :], sfreq, slow[0], slow[1])
-            analytic   = hilbert(x_filt)
+            x_filt = src_bandpass_filter(tc_full_ga[0, ri, :], sfreq, slow[0], slow[1])
+            analytic = hilbert(x_filt)
             phase_post = float(np.angle(analytic[ref_idx]))
         except Exception:
             phase_post = float("nan")
 
         rows.append({
-            "roi_idx":          ri,
-            "pow_slow_post":    pow_slow_post,
-            "pow_fast_post":    pow_fast_post,
-            "pow_alpha_post":   pow_alpha_post,
-            "ERD_slow":         erd_slow,
-            "ERD_fast":         erd_fast,
-            "delta_ERD":        delta_erd,
-            "slow_phase_post":  phase_post,
-            "sin_phase_post":   float(np.sin(phase_post)) if not np.isnan(phase_post) else float("nan"),
-            "cos_phase_post":   float(np.cos(phase_post)) if not np.isnan(phase_post) else float("nan"),
+            "roi_idx":         ri,
+            "slow_phase_post": phase_post,
+            "sin_phase_post":  float(np.sin(phase_post)) if not np.isnan(phase_post) else float("nan"),
+            "cos_phase_post":  float(np.cos(phase_post)) if not np.isnan(phase_post) else float("nan"),
         })
 
     return rows
@@ -259,7 +142,6 @@ def src_compute_ga_poststim_metrics(
 # =============================================================================
 # GRAND-AVERAGE POST-STIM: INTER-TRIAL PHASE COHERENCE (ITC)
 # =============================================================================
-
 def src_compute_itc(
     tc_full: np.ndarray,
     times_full: np.ndarray,
@@ -270,7 +152,7 @@ def src_compute_itc(
 ) -> list[dict]:
     """
     Compute inter-trial phase coherence (ITC) of the slow-alpha band over the
-    post-stimulus window.
+    post-stimulus window. Unchanged from V1.x.
 
     ITC (also called the phase-locking value, PLV) measures how consistently
     the slow-alpha oscillation is phase-reset by the laser stimulus across
@@ -278,9 +160,9 @@ def src_compute_itc(
     clustered across trials; ITC = 1 is perfect coherence, ITC = 0 is uniform
     phase distribution.
 
-        ITC(t) = | (1/K) Σ_k  exp(i · φ_k(t)) |
+        ITC(t) = | (1/K) sum_k  exp(i . phi_k(t)) |
 
-    where φ_k(t) is the instantaneous phase on trial k at time t.
+    where phi_k(t) is the instantaneous phase on trial k at time t.
 
     Args:
         tc_full    : (n_epochs, n_rois, n_times) — full epoch source time courses.
@@ -301,20 +183,17 @@ def src_compute_itc(
     rows: list[dict] = []
 
     for ri in range(n_rois):
-        # (n_epochs, n_times_post) complex analytic signal
         phases = np.full((n_epochs, int(np.sum(mask_post))), np.nan, dtype=complex)
 
         for ei in range(n_epochs):
             try:
                 x_filt   = src_bandpass_filter(tc_full[ei, ri, :], sfreq, slow[0], slow[1])
                 analytic = hilbert(x_filt)
-                # Unit-norm complex phasors for ITC
                 phases[ei, :] = np.exp(1j * np.angle(analytic[mask_post]))
             except Exception:
-                pass   # leave as NaN; valid trials still contribute
+                pass
 
-        # ITC = |mean phasor| across trials
-        itc = np.abs(np.nanmean(phases, axis=0))    # (n_times_post,)
+        itc = np.abs(np.nanmean(phases, axis=0))
 
         itc_mean = float(np.nanmean(itc))
         peak_idx = int(np.nanargmax(itc))
