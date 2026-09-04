@@ -391,6 +391,9 @@ for i = 1:numel(subs)
                 end
             end
 
+            % Manual visual QC: channel scroll (config-gated)
+            prompt_scroll_eeg(EEG, cfg.preproc.initrej.scroll, logf, 'channels', 'INITREJ channel scroll');
+
             % Manual decision: which to interp
             interpChans = prompt_channel_interp(EEG, badChans);
 
@@ -519,6 +522,19 @@ for i = 1:numel(subs)
                         
                     end
 
+                    % Topomap grid of the first N ICs (config-gated)
+                    if isfield(cfg.preproc.ica, 'grid') && isfield(cfg.preproc.ica.grid, 'enabled') && cfg.preproc.ica.grid.enabled
+                        try
+                            save_ic_topomap_grid(QC, subjid, EEG, cfg.preproc.ica.grid.n_ics);
+                            logmsg(logf, '[ICQC] Saved first-%d IC topomap grid to QC.', cfg.preproc.ica.grid.n_ics);
+                        catch ME
+                            logmsg(logf, '[WARN] IC topomap grid generation failed: %s', ME.message);
+                        end
+                    end
+
+                    % Manual visual QC: IC activation scroll (config-gated)
+                    prompt_scroll_eeg(EEG, cfg.preproc.ica.scroll, logf, 'components', 'ICA component scroll');
+
                     % Manual reject (default none)
                     removedICs = prompt_ic_reject(suggestICs);
 
@@ -541,6 +557,9 @@ for i = 1:numel(subs)
                             end
                         end
                     end
+
+                    % Manual visual QC: channel scroll confirming the post-removal result (config-gated)
+                    prompt_scroll_eeg(EEG, cfg.preproc.ica.confirm_scroll, logf, 'channels', 'ICA post-reject confirmation scroll');
 
                 catch ME
                     logmsg(logf, '[WARN] ICLabel failed: %s', ME.message);

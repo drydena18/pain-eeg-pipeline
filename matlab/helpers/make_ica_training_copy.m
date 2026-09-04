@@ -25,6 +25,14 @@ end
 
 logmsg(logf, '[ICA-TRAIN] Detected %d intervals (%.2f%% of samples).', segInfo.n_intervals, segInfo.pct_time);
 
+% Manual visual QC: channel scroll of the full data, to help judge the detected
+% bad segements before answering the y/n prompt (config-gated)
+scrollBlock = struct('enabled', false);
+if isfield(cfg.preproc, 'ica') && isfield(cfg.preproc.ica, 'train_scroll')
+    scrollBlock = cfg.preproc.ica.train_scroll;
+end
+prompt_scroll_eeg(EEG, scrollBlock, logf, 'channels', 'ICA pre-train channel scroll');
+
 doRemove = prompt_yesno('Remove detected bad segments from ICA training copy? (y/n) [n]: ', false);
 if ~doRemove
     logmsg(logf, '[ICA-TRAIN] Keeping all segments (manual decision).');

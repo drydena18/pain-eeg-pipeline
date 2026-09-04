@@ -92,6 +92,9 @@
     "initrej": {
       "enabled": true,
       "tag": "initrej",
+      "scroll": {
+        "enabled": true
+      },
       "badchan": {
         "enabled": false,
         "method": "flatline_or_variance",
@@ -110,6 +113,10 @@
       "runica": {
         "extended": 1
       },
+      "train_scroll": { "enabled": true },
+      "scroll": { "enabled": true },
+      "confirm_scroll": { "enabled": true },
+      "grid": { "enabled": true, "n_ics:": 20 },
       "tag": "ica",
       "iclabel": {
         "enabled": true,
