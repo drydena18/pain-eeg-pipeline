@@ -525,7 +525,7 @@ for i = 1:numel(subs)
                     % Topomap grid of the first N ICs (config-gated)
                     if isfield(cfg.preproc.ica, 'grid') && isfield(cfg.preproc.ica.grid, 'enabled') && cfg.preproc.ica.grid.enabled
                         try
-                            save_ic_topomap_grid(QC, subjid, EEG, cfg.preproc.ica.grid.n_ics);
+                            save_ic_topo_grid(QC, subjid, EEG, cfg.preproc.ica.grid.n_ics);
                             logmsg(logf, '[ICQC] Saved first-%d IC topomap grid to QC.', cfg.preproc.ica.grid.n_ics);
                         catch ME
                             logmsg(logf, '[WARN] IC topomap grid generation failed: %s', ME.message);
