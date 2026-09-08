@@ -57,7 +57,7 @@ Pp.ica.train_scroll = defaultField(Pp.ica.train_scroll, 'enabled', false);
 Pp.ica.train_scroll = defaultField(Pp.ica.train_scroll, 'winlength_sec', 10);
 Pp.ica.train_scroll = defaultField(Pp.ica.train_scroll, 'spacing_uv', []);
 
-Pp.ica = defailtStruct(Pp.ica, 'confirm_scroll');
+Pp.ica = defaultStruct(Pp.ica, 'confirm_scroll');
 Pp.ica.confirm_scroll = defaultField(Pp.ica.confirm_scroll, 'enabled', false);
 Pp.ica.confirm_scroll = defaultField(Pp.ica.confirm_scroll, 'winlength_sec', 10);
 Pp.ica.confirm_scroll = defaultField(Pp.ica.confirm_scroll, 'spacing_uv', []);
