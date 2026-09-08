@@ -1,4 +1,4 @@
-function save_ic_topo_grid(QC, subjid, EEG, nICs)
+function save_ic_topomap_grid(QC, subjid, EEG, nICs)
 % SAVE_IC_TOPO_GRID Save one figure with topomaps for the first N ICs.
 %   Complements save_ic_qc_packets.m, which only generates full 4-panel
 %   figures for ICLabel-flagged ICs. This gives a quick-look grid across
