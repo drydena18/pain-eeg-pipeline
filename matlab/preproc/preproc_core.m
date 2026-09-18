@@ -816,7 +816,8 @@ for i = 1:numel(subs)
                     phase_slow = phaseSlow;
                     t_ms = EEG.times;
                     stimOnsetIdx = t0idx;
-                    chan_labels = {EEG.chanlocs.labels};
+                    nChan = EEG.nbchan; nTr = EEG.trials; nTime = EEG.pnts;
+                    chan_labels = get_chan_labels(EEG, sprintf('sud-%03d stage09', subjid));
                     slow_hz = slowHz;
                     subjid_save = subjid;
 

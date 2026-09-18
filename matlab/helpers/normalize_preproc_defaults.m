@@ -50,17 +50,18 @@ Pp.ica.iclabel = defaultStruct(Pp.ica.iclabel, 'thresholds');
 Pp.ica = defaultStruct(Pp.ica, 'scroll');
 Pp.ica.scroll = defaultField(Pp.ica.scroll, 'enabled', false);
 Pp.ica.scroll = defaultField(Pp.ica.scroll, 'winlength_sec', 10);
+% Pp.ica.scroll = defaultField(Pp.ica.scroll, 'spacing_uv', 50);
 
 % Manual visual QC: channel scroll before the training-copy y/n prompt
 Pp.ica = defaultStruct(Pp.ica, 'train_scroll');
 Pp.ica.train_scroll = defaultField(Pp.ica.train_scroll, 'enabled', false);
 Pp.ica.train_scroll = defaultField(Pp.ica.train_scroll, 'winlength_sec', 10);
-Pp.ica.train_scroll = defaultField(Pp.ica.train_scroll, 'spacing_uv', []);
+Pp.ica.train_scroll = defaultField(Pp.ica.train_scroll, 'spacing_uv', 50);
 
 Pp.ica = defaultStruct(Pp.ica, 'confirm_scroll');
 Pp.ica.confirm_scroll = defaultField(Pp.ica.confirm_scroll, 'enabled', false);
 Pp.ica.confirm_scroll = defaultField(Pp.ica.confirm_scroll, 'winlength_sec', 10);
-Pp.ica.confirm_scroll = defaultField(Pp.ica.confirm_scroll, 'spacing_uv', []);
+Pp.ica.confirm_scroll = defaultField(Pp.ica.confirm_scroll, 'spacing_uv', 50);
 
 % Topomap grid of the first N ICs (beyond just ICLabel-flagged ones)
 Pp.ica = defaultStruct(Pp.ica, 'grid');
