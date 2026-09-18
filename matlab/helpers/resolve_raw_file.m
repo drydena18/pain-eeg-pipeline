@@ -42,18 +42,28 @@ end
 
 % If the pattern is relative, interpret relative to P.INPUT.EXP
 if strlength(pat) > 0
-    % Allow patterns that include directories
     try
-        rel = sprintf(char(pat), subjid);
+        % Try with subjid repeated (common BIDS case)
+        rel = sprintf(char(pat), subjid, subjid);
         cand2 = fullfile(string(P.INPUT.EXP), rel);
         if exist(cand2, 'file')
             rawPath = string(cand2);
             return;
         end
     catch
-        % ignore pattern errors, fall through
     end
-end
+    if isempty(rawPath) || rawPath == ""
+        try
+            % Fall back to single-arg pattern
+            rel = sprintf(char(pat), subjid);
+            cand2 = fullfile(string(P.INPUT.EXP), rel);
+            if exist(cand2, 'file')
+                rawPath = string(cand2);
+                return;
+            end
+        catch
+        end
+    end
 
 % -----------------------------
 % 2) Recursive fallback search

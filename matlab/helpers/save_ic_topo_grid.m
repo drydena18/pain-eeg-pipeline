@@ -13,7 +13,7 @@ if nargin < 4 || isempty(nICs)
     nICs = 20;
 end
 
-if ~isfield(QC, 'icawinv') || isempty(EEG.icawinv) || ~has_chanlocs(EEG)
+if ~isfield(EEG, 'icawinv') || isempty(EEG.icawinv) || ~has_chanlocs(EEG)
     return;
 end
 
@@ -27,7 +27,7 @@ nCols = ceil(sqrt(nShow));
 nRows = ceil(nShow / nCols);
 
 C = [];
-if isfield(EEG, 'etc') && isfield(EEG.etc, 'ic_classification') && isfield(EEG.etc.ica_classification, 'ICLabel') && isfield(EEG.etc.ica_classification.ICLabel, 'classifications')
+if isfield(EEG, 'etc') && isfield(EEG.etc, 'ic_classification') && isfield(EEG.etc.ic_classification, 'ICLabel') && isfield(EEG.etc.ic_classification.ICLabel, 'classifications')
     C = EEG.etc.ic_classification.ICLabel.classifications;
 end
 classNames = {'Brain', 'Muscle', 'Eye', 'Heart', 'Line', 'ChanNoise', 'Other'};

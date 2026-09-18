@@ -103,7 +103,8 @@
       "enabled": true,
       "tag": "initrej",
       "scroll": {
-        "enabled": true
+        "enabled": true,
+        "spacing-uv": 50
       },
       "badchan": {
         "enabled": false,
@@ -123,10 +124,10 @@
       "runica": {
         "extended": 1
       },
-      "train_scroll": { "enabled": true },
-      "scroll": { "enabled": true },
-      "confirm_scroll": { "enabled": true },
-      "grid": { "enabled": true, "n_ics:": 20 },
+      "train_scroll": { "enabled": true, "spacing_uv": 50 },
+      "scroll": { "enabled": true, "spacing_uv": 50 },
+      "confirm_scroll": { "enabled": true, "spacing_uv": 50 },
+      "grid": { "enabled": true, "n_ics": 20 },
       "tag": "ica",
       "iclabel": {
         "enabled": true,
@@ -147,8 +148,8 @@
       "enabled": true,
       "events": [
         {
-          "code": "77",
-          "condition": "pain",
+          "code": "2",
+          "condition": "pain_2",
           "intensity": ""
         }
       ],
