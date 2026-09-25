@@ -137,8 +137,8 @@ def source_default(exp_id: str, cfg_in: dict, subjects_override=None):
 
     # Pre-stimulus window
     _d(src, "prestim", {})
-    _d(src["prestim"], "tmin", -0.5)
-    _d(src["prestim"], "tmax",  0.0)
+    _d(src["prestim"], "tmin", -1.0)
+    _d(src["prestim"], "tmax",  -0.1)
 
     # Post-stimulus window
     _d(src, "poststim", {})
@@ -185,6 +185,16 @@ def source_default(exp_id: str, cfg_in: dict, subjects_override=None):
     _d(src["spectral"], "alpha_band",      [8.0, 12.0])
     _d(src["spectral"], "slow_alpha_band", [8.0, 10.0])
     _d(src["spectral"], "fast_alpha_band", [10.0, 12.0])
+    # Band power (slow / fast / total alpha) = filter-Hilbert power on the full
+    # epoch, averaged within each window. FIR transition bandwidth in Hz;
+    # filter length ~ 3.3 / trans_bw s (1.5 Hz -> 2.2s, fits a 3s epoch).
+    _d(src["spectral"], "filter_trans_bw_hz", 1.5)
+    # Welch PSD (used only for paf_cog_hz and FOOOF); segment length (clipped
+    # to each window) and zero-padded frequency-grid spacing.
+    _d(src["spectral"], "psd_window_sec", 2.0)
+    _d(src["spectral"], "psd_df_target", 0.25)
+    # Quiet band for the ERD noise floor (eps0), as in compute_noise_floor.m
+    _d(src["spectral"], "quiet_band", [45.0, 55.0])
 
     # FOOOF (Fitting Oscillations & One Over F / specparam)
     _d(src, "fooof", {})

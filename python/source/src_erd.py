@@ -1,5 +1,6 @@
 """
 src_erd.py - ERD family (fractional pre -> post change) + p5_flag QC gate.
+V2.0.0
 
 Python counterpart to spec_compute_interaction_metrics.m V2.1.0. This
 module now owns ONLY the fractional (ERD-style) pre -> post change, which is
@@ -10,6 +11,16 @@ Behaviour matches MATLAB exactly; always computes a numeric ERD value using
 an epsilon floor on the denominator (never NaN due to low pre-stim power),
 and flags low-power trials separately via p5_flag rather than dropping the
 value.
+
+V2.0.0 changes vs V1.0.0:
+    - src_compute_noise_stats no longer computes its own Welch PSDs. The
+        5th-percentile thresholds now come from the pre-stim slow/fast
+        powers already in pre_rows (filter-Hilbert, see src_alpha_features.py),
+        so the p5_flag threshold and the value it is compared against use the
+        same estimator.
+    - The 45-55 Hz "quiet band" noise floor is now a filter-Hilbert power
+        passed in by the caller, divided by the bandwidth so it is a
+        density (per Hz).
 """
 
 from __future__ import annotations
@@ -24,13 +35,9 @@ _EPS0 = 1e-12
 # NOISE-FLOOR / 5TH-PERCENTILE THRESHOLDS (per ROI, pooled across trials)
 # ==================================================================
 def src_compute_noise_stats(
-        tc_pre: np.ndarray,
-        sfreq: float,
-        slow: tuple[float, float],
-        fast: tuple[float, float],
-        fmin: float,
-        fmax: float,
-        psd_window_sec: float = 0.5,
+        pre_rows: list[dict],
+        quiet_pow_pre: np.ndarray | None,
+        quiet_band: tuple[float, float] = (45.0, 55.0),
 ) -> dict:
     """
     Per-ROI noise floor (eps0) and 5th-percentile pre-stim power thresholds
@@ -43,43 +50,34 @@ def src_compute_noise_stats(
     ROI.
 
     Args:
-        tc_pre : (n_epochs, n_rois, n_times_pre)
-        sfreq : Sampling frequency in Hz
-        slow, fast : (lo, hi) band bounds in Hz
-        fmin, fmax : PSD frequency range for Welch estimation
-        psd_window_sec : Welch segment length (s)
+        pre_rows: List of dictionaries containing pre-stimulus data
+        quiet_pow_pre: Array of quiet band power values or None
+        quiet_band: Tuple of (lo, hi) bounds for the quiet band in Hz
 
     Returns:
         Dict roi_idx -> {"eps0": float, "thr_slow": float, "thr_fast": float}
     """
-    n_epochs, n_rois, _ = tc_pre.shape
+    roi_ids = sorted({r["roi_idx"] for r in pre_rows})
+    bw = float(quiet_band[1] - quiet_band[0])
     stats: dict = {}
 
-    for ri in range(n_rois):
-        slow_vals: list[float] = []
-        fast_vals: list[float] = []
-        quiet_vals: list[float] = []
-
-        for ei in range(n_epochs):
-            freqs, psd = src_psd_welch(tc_pre[ei, ri, :], sfreq, fmin, fmax, psd_window_sec)
-            slow_vals.append(src_bandpower(freqs, psd, slow[0], slow[1]))
-            fast_vals.append(src_bandpower(freqs, psd, fast[0], fast[1]))
-            idxQ = (freqs >= 45.0) & (freqs <= 55.0)
-            if np.any(idxQ):
-                quiet_vals.append(float(np.nanmedian(psd[idxQ])))
-
-        slow_arr = np.asarray(slow_vals, dtype = float)
-        fast_arr = np.asarray(fast_vals, dtype = float)
+    for ri in roi_ids:
+        slow_arr = np.asarray([r["pow_slow_alpha"] for r in pre_rows if r["roi_idx"] == ri], dtype = float)
+        fast_arr = np.asarray([r["pow_fast_alpha"] for r in pre_rows if r["roi_idx"] == ri], dtype = float)
 
         thr_slow = float(np.nanpercentile(slow_arr, 5)) if np.any(~np.isnan(slow_arr)) else float("nan")
         thr_fast = float(np.nanpercentile(fast_arr, 5)) if np.any(~np.isnan(fast_arr)) else float("nan")
 
-        if len(quiet_vals) > 0 and np.nanmedian(quiet_vals) > 0:
-            eps0 = float(np.nanmedian(quiet_vals))
-        else:
+        eps0 = float("nan")
+        if quiet_pow_pre is not None and bw > 0:
+            q = np.asarray(quiet_pow_pre[:, ri], dtype = float)
+            if np.any(~np.isnan(q)):
+                eps0 = float(np.nanmedian(q)) / bw
+
+        if not (np.isfinite(eps0) and eps0 > 0):
             pooled = np.concatenate([slow_arr, fast_arr])
             pooled = pooled[~np.isnan(pooled)]
-            eps0 = float(np.nanmedian(pooled)) * 1e-3 if pooled.size > 0 else _EPS0
+            eps0 = float(np.median(pooled)) * 1e-3 if pooled.size > 0 else _EPS0
         eps0 = max(eps0, _EPS0)
 
         stats[ri] = {"eps0": eps0, "thr_slow": thr_slow, "thr_fast": thr_fast}

@@ -1,6 +1,22 @@
 """
 source_core.py  –  Per-subject orchestration loop for sLORETA source analysis.
-V 3.0.0
+V 3.1.0
+
+V3.1.0 changes vs V3.0.0:
+    - Slow / fast / total alpha power now come from filter-Hilbert band-power
+      time courses computed once on the full epoch and averaged within each
+      window (src_alpha_features.src_compute_band_power_tcs). Fixes the
+      all-zero slow/fast metrics caused by 0.5 s Welch segments (~1.95 Hz
+      bins, one bin per 2 Hz sub-band).
+    - Grand average (GA) is now the mean of per-trial powers / PSDs rather
+      than the PSD of the trial-averaged (evoked) time course.
+    - Pre-stimulus window default widened to [-1.0, -0.1] s to match the
+      MATLAB channel pipeline; ending at -0.1 s keeps filter smearing of the
+      laser-evoked response out of the pre-stimulus estimate.
+    - ERD noise floor / p5 thresholds use the same band-power estimator.
+    - Carries the earlier bug fixes (phase import names, itc_ga_rows /
+      tc_ga naming, FOOOF tuple unpack, GA CSV file name, traceback on
+      ValueError).
 
 V3.0.0 changes vs V2.2.0 (whole/pre/post/delta metric generalization, to
 match spectral_core.m V2.2.0 -- see src_alpha_features.py, src_erd.py,
@@ -53,7 +69,8 @@ import pandas as pd
 from src_io       import src_open_log, src_logmsg, src_close_log, src_find_set, src_read_epochs
 from src_assets   import src_load_fsaverage_assets, src_load_labels, src_build_custom_rois
 from src_inverse  import src_make_inverse_operator, src_apply_inverse_epochs
-from src_alpha_features import src_compute_window_alpha_features, src_compute_ga_window_alpha_features
+from src_alpha_features import src_compute_band_power_tcs, src_compute_window_alpha_features
+from src_spectral import src_band_power_tc
 from src_add_prefix import src_add_prefix_rows
 from src_merge_rows import src_merge_rows
 from src_compute_metric_deltas import src_compute_metric_deltas
@@ -111,6 +128,10 @@ def source_core(cfg: dict, da_root: str, exp_out: str):
     alpha = tuple(src_cfg["spectral"]["alpha_band"])
     slow  = tuple(src_cfg["spectral"]["slow_alpha_band"])
     fast  = tuple(src_cfg["spectral"]["fast_alpha_band"])
+    trans_bw       = float(src_cfg["spectral"].get("filter_trans_bw_hz", 1.5))
+    psd_window_sec = float(src_cfg["spectral"].get("psd_window_sec", 2.0))
+    psd_df_target  = float(src_cfg["spectral"].get("psd_df_target_hz", 0.25))
+    quiet_band     = tuple(src_cfg["spectral"].get("quiet_band", [45.0, 55.0]))
 
     pre_tmin   = float(src_cfg["prestim"]["tmin"])
     pre_tmax   = float(src_cfg["prestim"]["tmax"])
@@ -208,29 +229,28 @@ def source_core(cfg: dict, da_root: str, exp_out: str):
             src_logmsg(logf, "[POST] %.3f – %.3f s  (%d samples)",
                        times_post[0], times_post[-1], len(times_post))
 
-            # 5. Whole / pre / post alpha features ──────────────────────────────
+            # 5. Band-power time courses (full epoch) + whole / pre / post
+            #    alpha features ─────────────────────────────────────────────
+            src_logmsg(logf, "[BANDPOW] Filter-Hilbert power: slow %s, fast %s, alpha %s Hz (trans_bw = %.2f Hz)...",
+                       str(slow), str(fast), str(alpha), trans_bw)
+            power_tcs = src_compute_band_power_tcs(tc, sfreq, alpha, slow, fast, trans_bw)
+
+            win_kw = dict(sfreq = sfreq, alpha = alpha, fmin = fmin, fmax = fmax,
+                          psd_window_sec = psd_window_sec, df_target = psd_df_target)
+
             src_logmsg(logf, "[FEAT] Whole-epoch alpha features...")
-            whole_rows = src_compute_window_alpha_features(
-                tc, sfreq, alpha, slow, fast, fmin, fmax,
-            )
-            ga_whole_rows, psd_by_roi_whole = src_compute_ga_window_alpha_features(
-                tc, sfreq, alpha, slow, fast, fmin, fmax,
+            whole_rows, ga_whole_rows, psd_by_roi_whole = src_compute_window_alpha_features(
+                power_tcs, tc, times, float(times[0]), float(times[-1]), **win_kw,
             )
 
             src_logmsg(logf, "[FEAT] Pre-stimulus alpha features...")
-            pre_rows = src_compute_window_alpha_features(
-                tc_pre, sfreq, alpha, slow, fast, fmin, fmax,
-            )
-            ga_pre_rows, _ = src_compute_ga_window_alpha_features(
-                tc_pre, sfreq, alpha, slow, fast, fmin, fmax,
+            pre_rows, ga_pre_rows, _ = src_compute_window_alpha_features(
+                power_tcs, tc, times, pre_tmin, pre_tmax, **win_kw,
             )
 
             src_logmsg(logf, "[FEAT] Post-stimulus alpha features...")
-            post_rows = src_compute_window_alpha_features(
-                tc_post, sfreq, alpha, slow, fast, fmin, fmax,
-            )
-            ga_post_rows, _ = src_compute_ga_window_alpha_features(
-                tc_post, sfreq, alpha, slow, fast, fmin, fmax,
+            post_rows, ga_post_rows, _ = src_compute_window_alpha_features(
+                power_tcs, tc, times, post_tmin, post_tmax, **win_kw,
             )
 
             # Generic delta_<name> = post - pre
@@ -239,7 +259,13 @@ def source_core(cfg: dict, da_root: str, exp_out: str):
 
             # ERD family (fractional change, power metrics only) + p5_flag.
             src_logmsg(logf, "[ERD] Computing ERD family (erd_slow, erd_fast, erd_pow_alpha_total, delta_erd) + p5_flag...")
-            noise_stats = src_compute_noise_stats(tc_pre, sfreq, slow, fast, fmin, fmax)
+            quiet_pow_pre = None
+            if quiet_band[1] + trans_bw < sfreq / 2.0:
+                pre_mask = (times >= pre_tmin) & (times <= pre_tmax)
+                quiet_pow_pre = src_band_power_tc(
+                    tc, sfreq, quiet_band[0], quiet_band[1], trans_bw,
+                )[:, :, pre_mask].mean(axis = -1)
+            noise_stats = src_compute_noise_stats(pre_rows, quiet_pow_pre, quiet_band)
             erd_rows = src_compute_erd_metrics(
                 pre_rows, post_rows, noise_stats, key_cols = ("trial", "roi_idx"), use_p5_flag = True,
             )
@@ -285,7 +311,8 @@ def source_core(cfg: dict, da_root: str, exp_out: str):
             ga_lep_rows = src_compute_lep_ga(tc_post, times_post, n2_window, p2_window)
 
             # 10. FOOOF -----------------------------------------------------------
-            # NOTE: Now fits the whole-epoch GA PSD, not the pre-stim GA PSD
+            #   Fits the whole-epoch GA PSD = mean of per-trial PSDs
+            #   (2 s Welch segments), not the PSD of the trial-averaged signal.
             fooof_rows: list = []
             if do_fooof:
                 if not fooof_available():
@@ -354,7 +381,8 @@ def source_core(cfg: dict, da_root: str, exp_out: str):
         except FileNotFoundError as e:
             src_logmsg(logf, "[SKIP] %s - File not found: %s", sub_str, str(e))
         except ValueError as e:
-            src_logmsg(logf, "[SKIP] %s - config/data issue: %s", sub_str, str(e))
+            src_logmsg(logf, "[SKIP] %s - config/data issue: %s\n%s",
+                       sub_str, str(e), traceback.format_exc())
         except Exception:
             src_logmsg(logf, "[ERROR] %s - unexpected error:\n%s", sub_str, traceback.format_exc())
         finally:
