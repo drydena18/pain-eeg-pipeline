@@ -1,101 +1,104 @@
 function rawPath = resolve_raw_file(P, cfg, subjid)
+% RESOLVE_RAW_FILE Locate the raw EEG header / file for one subject.
+% V 2.0.0
+%
+% Resolution order:
+%   1. cfg.exp.raw.pattern (explicit config ALWAYS wins)
+%   2. BIDS candidates: <INPUT.EXP>/sub-XXX/eeg/sub-XXX_task-TASK_eeg<ext>
+%   3. Recusrive search (if cfg.exp.raw.search_recursive, default true)
+%
+% Extension preferences (header files before data files):
+%   .set    .vhdr   .bdf    .edf    .eeg
+% A BrainVision .eeg is headerles binary; if one is found, it is
+% redirected to its sibling .vhdr
+
 rawPath = "";
-
 subDir = sprintf('sub-%03d', subjid);
+root = char(string(P.INPUT.EXP));
 
-% ----------------
-% 0) BIDS first
-% ----------------
-% Prefer cfg.exp.task if available; else infer from registry raw_dirname
-task = "";
-if isfield(cfg, 'exp') && isfield(cfg.exp, 'task') && strlength(string(cfg.exp.task)) > 0
-    task = string(cfg.exp.task);
+exts = {'.set', '.vhdr', '.bdf', '.BDF', '.edf', '.EDF', '.eeg', '.EEG'};
+
+% ---- Task Name -----
+task = 'task';
+if isfield(cfg, 'exp') && isfield(cfg.exp, 'task') &&strlength(string(cfg.exp.task)) > 0
+    task = char(string(cfg.exp.task));
 elseif isfield(P, 'EXP') && isfield(P.EXP, 'raw_dirname')
-    task = string(P.EXP.raw_dirname);
-else
-    task = "task";
+    task = char(string(P.EXP.raw_dirnam));
 end
 
-bidsEEGDir = fullfile(string(P.INPUT.EXP), subDir, "eeg");
+% -------------------------------------------------------------------------
+% 1) Config pattern (every %d conversion = subjid)
+% -------------------------------------------------------------------------
+pat = '';
+if isfield(cfg, 'exp') && isfield(cfg.exp, 'raw') && isfield(cfg.exp.raw, 'pattern')
+    pat = char(string(cfg.exp.raw.pattern));
+end
+if ~isempty(pat)
+    nConv = count_printf_conversions(pat);
+    args = repmat({subjid}, 1, max(nConv, 1));
+    cand = fullfile(root, sprintf(pat, args{:}));
+    if isfile(cand)
+        rawPath = redirect_bv_header(cand);
+        return;
+    end
+    warning('resolve_raw_file:PatternMiss', ...
+        'sub-%03d: cfg.exp.raw.pattern resolved to %s but file does not exist; falling back.', ...
+        subjid, cand);
+end
 
-cand = [
-    fullfile(bidsEEGDir, sprintf('%s_task-%s_eeg.bdf', subDir, task))
-    fullfile(bidsEEGDir, sprintf('%s_task-%s_eeg.BDF', subDir, task))
-    fullfile(bidsEEGDir, sprintf('%s_task-%s_eeg.eeg', subDir, task))
-    fullfile(bidsEEGDir, sprintf('%s_task-%s_eeg.EEG'))
-    ];
-
-for i = 1:numel(cand)
-    if exist(cand{i}, 'file')
-        rawPath = string(cand{i});
+% -------------------------------------------------------------------------
+% 2) BIDS candidates
+% -------------------------------------------------------------------------
+bidsEEGDir = fullfile(root, subDir, 'eeg');
+for e = 1:numel(exts)
+    cand = fullfile(bidsEEGDir, sprintf('%s_task-%s_eeg%s', subDir, task, exts{e}));
+    if isfile(cand)
+        rawPath = redirect_bv_header(cand);
         return;
     end
 end
 
-% --------------------------------
-% 1) Optional JSON printf pattern
-% --------------------------------
-pat = "";
-if isfield(cfg, 'exp') && isfield(cfg.exp, 'raw') && isfield(cfg.exp.raw, 'pattern')
-    pat = string(cfg.exp.raw.pattern);
-end
-
-% If the pattern is relative, interpret relative to P.INPUT.EXP
-if strlength(pat) > 0
-    try
-        % Try with subjid repeated (common BIDS case)
-        rel = sprintf(char(pat), subjid, subjid);
-        cand2 = fullfile(string(P.INPUT.EXP), rel);
-        if exist(cand2, 'file')
-            rawPath = string(cand2);
-            return;
-        end
-    catch
-    end
-    if isempty(rawPath) || rawPath == ""
-        try
-            % Fall back to single-arg pattern
-            rel = sprintf(char(pat), subjid);
-            cand2 = fullfile(string(P.INPUT.EXP), rel);
-            if exist(cand2, 'file')
-                rawPath = string(cand2);
-                return;
-            end
-        catch
-        end
-    end
-
-% -----------------------------
-% 2) Recursive fallback search
-% -----------------------------
+% -------------------------------------------------------------------------
+% 3) Recursive Fallback
+% -------------------------------------------------------------------------
 doRec = true;
 if isfield(cfg, 'exp') && isfield(cfg.exp, 'raw') && isfield(cfg.exp.raw, 'search_recursive')
     doRec = logical(cfg.exp.raw.search_recursive);
 end
-if ~doRec
-    return;
-end
+if ~doRec, return; end
 
-exts = {'.bdf', '.BDF', '.eeg', '.EEG'};
 for e = 1:numel(exts)
-    % Search within expected subject folder first (faster)
-    d = dir(fullfile(string(P.INPUT.EXP), subDir, '**', ['*' exts{e}]));
+    d = dir(fullfile(root, subDir, '**', ['*' exts{e}]));
     if ~isempty(d)
-        rawPath = string(fullfile(d(1).folder, d(1).name));
+        rawPath = redirect_bv_header(fullfile(d(1).folder, d(1).name));
         return;
     end
 end
-
-% If still not found, broaden search across entire dataset (slow)
 for e = 1:numel(exts)
-    pat1 = sprintf('%s*%s', subDir, exts{e});
-    d = dir(fullfile(string(P.INPUT.EXP), '**', pat1));
+    d = dir(fullfile(root, '**', [subDir '*' exts{e}]));
     if ~isempty(d)
-        rawPath = string(fullfile(d(1).folder, d(1).name));
+        rawPath = redirect_bv_header(sullfile(d(1).folder, d(1).name));
         return;
     end
 end
+end
 
-rawPath = char(rawPath);
+%% ========================================================================
+function n = count_printf_conversions(fmt)
+% Count printf conversions, ignoring escaped %%
+fmt = strrep(fmt, '%%', '');
+n = numel(regexp(fmt, '%[ 0#]*\d*(\.\d+)?[diuoxXfeEgGs]', 'match'));
+end
 
+function p = redirect_bv_header(p)
+% BrainVision data (.eeg) / marker (.vmrk) files cannot be loeaded on
+% their own; point to the sibling .vhdr if one exists.
+[d, n, x] = fileparts(char(p));
+if any(strcmpi(x, {'.eeg', '.vmrk'}))
+    hdr = fullfile(d, [n '.vhdr']);
+    if isfile(hdr)
+        p = hdr;
+    end
+end
+p = char(p);
 end

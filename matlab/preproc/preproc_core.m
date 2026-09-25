@@ -128,13 +128,8 @@ for i = 1:numel(subs)
             for s = 1:nSess
                 logmsg(logf, '[CONCAT] Loading session %d: %s', s, sessPaths{s});
 
-                % Use pop_loadset for .set files, pop_biosig for .bdf/.eeg
-                [~, ~, rawExt] = fileparts(sessPaths{s});
-                if strcmpi(rawExt, '.set')
-                    Etmp = pop_loadset('filename', sessPaths{s});
-                else
-                    Etmp = pop_biosig(sessPaths{s});
-                end
+                % Format aware load
+                Etmp = load_raw_eeg(sessPaths{s}, logf);
                 Etmp = eeg_checkset(Etmp);
                 Etmp = normalize_chan_labels(Etmp);
 
@@ -217,7 +212,7 @@ for i = 1:numel(subs)
 
         logmsg(logf, 'RawPath class = %s | isstring = %d', class(rawPath), isstring(rawPath));
 
-        EEG = pop_biosig(rawPath);
+        EEG = load_raw_eeg(rawPath);
         EEG = eeg_checkset(EEG);
         EEG = normalize_chan_labels(EEG);
 
@@ -455,7 +450,13 @@ for i = 1:numel(subs)
             EEG.icasphere = EEGtrain.icasphere;
             EEG.icawinv = EEGtrain.icawinv;
             EEG.icachansind = EEGtrain.icachansind;
+            
+            savedChanlocs = EEG.chanlocs;
             EEG = eeg_checkset(EEG, 'ica');
+            if isempty(EEG.chanlocs) && ~isempty(savedChanlocs)
+                logmsg(logf, '[WARN] eeg_checkset cleared EEG.chanlocs during ICA consistency check; restoring saved copy.');
+                EEG.chanlocs = savedChanlocs;
+            end
 
             trainedOn = 'FULL';
             if isfield(segInfo, 'removed') && logical(segInfo.removed)

@@ -45,9 +45,7 @@ def src_compute_alpha_features(
     den = (pow_alpha_total if not np.isnan(pow_alpha_total) else 0.0) + _EPS0
     paf_cog_hz = nums / den
 
-    ps = pow_slow_alpha if not np.isnan(pow_slow_alpha) else 0.0
-    pf = pow_fast_alpha if not np.isnan(pow_fast_alpha) else 0.0
-    pa = pow_alpha_total if not np.isnan(pow_alpha_total) else 0.0
+    ps, pf, pa = pow_slow_alpha, pow_fast_alpha, pow_alpha_total
 
     sf_ratio = ps / (pf + _EPS0)
     sf_logratio = float(np.log(ps + _EPS0) - np.log(pf + _EPS0))

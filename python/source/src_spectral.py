@@ -24,8 +24,9 @@ def src_psd_welch(
         sfreq: float,
         fmin: float,
         fmax: float,
-        window_sec: float = 0.5,
-        overlap: float = 0.5,
+        window_sec = 0.5,
+        overlap = 0.5,
+        df_target = 0.25,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Compute a Welch PSD estimate for a 1-D time series.
@@ -78,7 +79,7 @@ def src_bandpower(
     Returns NaN if no frequency bins fall within [lo, hi].
     """
     idx = (freqs >= lo) & (freqs <= hi)
-    if not np.any(idx):
+    if np.count_nonzero(idx) > 2:
         return float("nan")
     return float(np.trapezoid(psd[idx], freqs[idx]))
 

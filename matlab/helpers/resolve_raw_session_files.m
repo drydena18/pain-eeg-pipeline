@@ -1,6 +1,6 @@
 function [sessPaths, sessSidecars] = resolve_raw_session_files(P, cfg, subjid, nSessions, logf)
 % RESOLVE_RAW_SESSION_FILES  Locate raw EEG files and BIDS sidecars for every session
-% V 1.1.0
+% V 1.2.0
 %
 % Tries three strategies in order for each session index (1..nSessions):
 %
@@ -65,7 +65,7 @@ end
 
 % Raw extensions to try (ordered by preference)
 % .set first: EEGLAB native format (also handles .fdt automatically)
-exts = {'.set', '.bdf', '.BDF', '.eeg', '.EEG'};
+exts = {'.set', '.vhdr', '.bdf', '.BDF', '.edf', '.EDF', '.eeg', '.EEG'};
 
 % ----------------------------------------------------------------
 % Fallback 3 pre-computation: collect all raw files for this subject.
@@ -153,6 +153,12 @@ for s = 1:nSessions
         error('resolve_raw_session_files:NotFound', ...
             'sub-%03d session %d: no raw file found. Add cfg.preproc.concat.session_pattern or use BIDS layout.', ...
             subjid, s);
+    end
+
+    % BrainVision: never hand the headerless .eeg to the loader
+    [fd, fn, fx] = fileparts(found);
+    if any(strcmpi(fn, {'.eeg', '.vmrk'})) && isfile(fullfile(fd, [fn '.vhdr']))
+        found = fullfile(fd, [fn '.vhdr']);
     end
 
     logmsg(logf, '[CONCAT] sub-%03d sess %d -> %s', subjid, s, found);

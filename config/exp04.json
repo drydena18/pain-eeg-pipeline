@@ -1,27 +1,27 @@
 {
   "meta": {
     "schema": "v1",
-    "config": "exp01_v2.3.0"
+    "config": "exp04_v2.3.0"
   },
   "paths": {
-    "raw_root": "/cifs/seminowicz/eegPainDatasets/CNED/26ByBiosemi",
-    "proj_root": "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/26ByBiosemi",
+    "raw_root": "/cifs/seminowicz/eegPainDatasets/CNED/30ByANT",
+    "proj_root": "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/30ByANT",
     "da_root": "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis"
   },
   "exp": {
-    "id": "exp01",
-    "task": "26ByBiosemi",
-    "out_dirname": "26ByBiosemi",
-    "out_prefix": "26BB_62_",
+    "id": "exp04",
+    "task": "30ByANT",
+    "out_dirname": "30ByANT",
+    "out_prefix": "30ANT_32_",
     "raw": {
-      "pattern": "sub-%03d/eeg/sub-%03d_task-26ByBiosemi_eeg.bdf",
-      "search_recursive": true
+      "pattern": "sub-%03d/eeg/sub-%03d_task-30ByANT_eeg.vhdr",
+      "search_recursive": false
     },
     "montage": {
-      "enabled": true,
-      "csv": "/home/UWO/darsenea/Documents/GitHub/pain-alpha-dynamics/montage_biosemi64_AB_to_1020_v1.csv",
-      "select_ab_only": true,
-      "do_lookup": true
+      "enabled": false,
+      "csv": "",
+      "select_ab_only": false,
+      "do_lookup": false
     },
     "subjects": [
       1,
@@ -49,7 +49,11 @@
       23,
       24,
       25,
-      26
+      26,
+      27,
+      28,
+      29,
+      30
     ],
     "channel_locs": {
       "use_elp": true,
@@ -90,7 +94,8 @@
       "enabled": true,
       "tag": "initrej",
       "scroll": {
-        "enabled": true
+        "enabled": true,
+        "spacing-uv": 50
       },
       "badchan": {
         "enabled": false,
@@ -110,10 +115,10 @@
       "runica": {
         "extended": 1
       },
-      "train_scroll": { "enabled": true },
-      "scroll": { "enabled": true },
-      "confirm_scroll": { "enabled": true },
-      "grid": { "enabled": true, "n_ics:": 20 },
+      "train_scroll": { "enabled": true, "spacing_uv": 50 },
+      "scroll": { "enabled": true, "spacing_uv": 50 },
+      "confirm_scroll": { "enabled": true, "spacing_uv": 50 },
+      "grid": { "enabled": true, "n_ics": 20 },
       "tag": "ica",
       "iclabel": {
         "enabled": true,
@@ -134,9 +139,9 @@
       "enabled": true,
       "events": [
         {
-          "code": "54",
+          "code": "s22",
           "condition": "pain",
-          "intensity": "single"
+          "intensity": ""
         }
       ],
       "tmin_sec": -1.0,
@@ -296,7 +301,7 @@
           "lh-caudalanteriorcingulate",
           "rh-caudalanteriorcingulate",
           "lh-rostralanteriorcingulate",
-          "rh-rostralanteriorcingulate"
+          "rh-resotralanteriorcingulate"
         ],
         "Insula": [
           "lh-insula",

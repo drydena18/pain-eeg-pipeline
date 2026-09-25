@@ -81,6 +81,8 @@ def src_write_trial_csv(
         logf        : Open file handle for logging
     """
     df = pd.DataFrame(_add_roi_name(trial_rows, roi_names))
+    if "subject" in df.columns:
+        del df["subject"]
     df.insert(0, "subject", sub)
     df.to_csv(path, index=False)
     src_logmsg(logf, "[CSV] %s (%d rows x %d cols)", path, len(df), len(df.columns))
@@ -110,6 +112,8 @@ def src_write_ga_csv(
         logf      : Log file handle.
     """
     df = pd.DataFrame(_add_roi_name(ga_rows, roi_names))
+    if "subject" in df.columns:
+        del df["subject"]
     df.insert(0, "subject", sub)
     df.to_csv(path, index=False)
     src_logmsg(logf, "[CSV] %s (%d rows x %d cols)", path, len(df), len(df.columns))

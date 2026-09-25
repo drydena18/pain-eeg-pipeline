@@ -68,13 +68,13 @@ def src_compute_noise_stats(
             if np.any(idxQ):
                 quiet_vals.append(float(np.nanmedian(psd[idxQ])))
 
-        slow_arr = np.asaray(slow_vals, dtype = float)
+        slow_arr = np.asarray(slow_vals, dtype = float)
         fast_arr = np.asarray(fast_vals, dtype = float)
 
         thr_slow = float(np.nanpercentile(slow_arr, 5)) if np.any(~np.isnan(slow_arr)) else float("nan")
         thr_fast = float(np.nanpercentile(fast_arr, 5)) if np.any(~np.isnan(fast_arr)) else float("nan")
 
-        if len(quiet_vals) > 0 and np.nanmedian(queit_vals) > 0:
+        if len(quiet_vals) > 0 and np.nanmedian(quiet_vals) > 0:
             eps0 = float(np.nanmedian(quiet_vals))
         else:
             pooled = np.concatenate([slow_arr, fast_arr])

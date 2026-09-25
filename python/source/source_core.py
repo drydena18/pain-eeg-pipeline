@@ -58,8 +58,8 @@ from src_add_prefix import src_add_prefix_rows
 from src_merge_rows import src_merge_rows
 from src_compute_metric_deltas import src_compute_metric_deltas
 from src_erd import src_compute_noise_stats, src_compute_erd_metrics
-from src_prestim  import (src_compute_prestim_metrics, src_compute_ga_prestim_metrics, src_compute_tvi_alpha)
-from src_poststim import (src_compute_poststim_metrics, src_compute_ga_poststim_metrics, src_compute_itc)
+from src_prestim  import (src_compute_prestim_phase, src_compute_ga_prestim_phase, src_compute_tvi_alpha)
+from src_poststim import (src_compute_poststim_phase, src_compute_ga_poststim_phase, src_compute_itc)
 from src_lep      import src_compute_lep_trial, src_compute_lep_ga
 from src_fooof    import fooof_available, fooof_package_name, src_compute_fooof_ga
 from src_write    import src_write_trial_csv, src_write_ga_csv, src_write_fooof_csv
@@ -262,10 +262,10 @@ def source_core(cfg: dict, da_root: str, exp_out: str):
                 bi_seq = pre_df.loc[pre_df["roi_idx"] == ri, "sf_balance"].values
                 tvi_by_roi[ri] = src_compute_tvi_alpha(bi_seq)
 
-            # 8. ITC (unchanged) + GA time courses / phase -------------------------
-            itc_rows = src_compute_itc(tc, times, sfreq, slow, post_tmin, post_tmax)
+            # 8. ITC + GA time courses / phase -------------------------
+            itc_ga_rows = src_compute_itc(tc, times, sfreq, slow, post_tmin, post_tmax)
 
-            itc_ga = np.mean(tc, axis = 0, keepdims = True)
+            tc_ga = np.mean(tc, axis = 0, keepdims = True)
 
             phase_pre_ga_rows = src_compute_ga_prestim_phase(tc_ga, times, sfreq, slow)
             phase_post_ga_rows = src_compute_ga_poststim_phase(tc_ga, times, sfreq, slow, post_ref_t)
@@ -293,7 +293,7 @@ def source_core(cfg: dict, da_root: str, exp_out: str):
                                "[WARN] FOOOF enabled but neither 'specparam' nor 'fooof' is installed, skipping.")
                 else:
                     src_logmsg(logf, "[FOOOF] Fitting GA PSDs (%s)...", fooof_package_name())
-                    fooof_rows = src_compute_fooof_ga(
+                    fooof_rows, _ = src_compute_fooof_ga(
                         psd_by_roi_whole, len(roi_names), sub, fooof_cfg,
                     )
 
@@ -332,7 +332,7 @@ def source_core(cfg: dict, da_root: str, exp_out: str):
                 sub, roi_names, trial_rows_merged, logf,
             )
             src_write_ga_csv(
-                os.path.join(csv_dir, f"{sub_str}_source_ga_fooof.csv"),
+                os.path.join(csv_dir, f"{sub_str}_source_ga.csv"),
                 sub, roi_names, ga_rows_merged, logf,
             )
             if fooof_rows:

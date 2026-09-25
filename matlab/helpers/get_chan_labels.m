@@ -32,7 +32,7 @@ if numel(cl) ~= EEG.nbchan
         ctx, numel(cl), EEG.nbchan);
 end
 
-labels = cellfun(@(x) char(string(x)), {cl.labels}, 'UniformedOutput', false);
+labels = cellfun(@(x) char(string(x)), {cl.labels}, 'UniformOutput', false);
 
 if any(cellfun(@isempty, labels))
     error('get_chan_labels:emptyLabel', ...
