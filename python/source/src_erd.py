@@ -1,33 +1,34 @@
 """
 src_erd.py - ERD family (fractional pre -> post change) + p5_flag QC gate.
-V2.0.0
+V 2.0.0
 
 Python counterpart to spec_compute_interaction_metrics.m V2.1.0. This
 module now owns ONLY the fractional (ERD-style) pre -> post change, which is
 NOT produced generically by src_compute_metric_deltas.py because it is not
 meaningful for bounded/ratio metrics (sf_balance, sf_logratio, psi_cog...).
 
-Behaviour matches MATLAB exactly; always computes a numeric ERD value using
+Behaviour matches MATLAB; always computes a numeric ERD value using
 an epsilon floor on the denominator (never NaN due to low pre-stim power),
 and flags low-power trials separately via p5_flag rather than dropping the
 value.
 
-V2.0.0 changes vs V1.0.0:
+V2.0.0 changes vs V1.x:
     - src_compute_noise_stats no longer computes its own Welch PSDs. The
-        5th-percentile thresholds now come from the pre-stim slow/fast
-        powers already in pre_rows (filter-Hilbert, see src_alpha_features.py),
-        so the p5_flag threshold and the value it is compared against use the
-        same estimator.
+      5th-percentile thresholds now come from the pre-stimulus slow/fast
+      powers already in pre_rows (filter-Hilbert, see src_alpha_features.py),
+      so the p5_flag threshold and the value it is compared against use the
+      same estimator.
     - The 45-55 Hz "quiet band" noise floor is now a filter-Hilbert power
-        passed in by the caller, divided by the bandwidth so it is a
-        density (per Hz).
+      passed in by the caller, divided by the band width so it is a
+      density (per Hz) like MATLAB's compute_noise_floor. V1.x read it from
+      a PSD cropped at fmax = 40 Hz, so the quiet band was never present and
+      the fallback was always used.
+    - Fixed np.asaray / queit_vals typos.
 """
 
 from __future__ import annotations
 
 import numpy as np
-
-from src_spectral import src_psd_welch, src_bandpower
 
 _EPS0 = 1e-12
 
@@ -42,17 +43,19 @@ def src_compute_noise_stats(
     """
     Per-ROI noise floor (eps0) and 5th-percentile pre-stim power thresholds
     for the ERD denominator guard / p5_flag, pooled across trials within
-    each ROI (see module dosctring).
+    each ROI.
 
     To match MATLAB's literal pooling-across-channels convention instead,
-    concatenate slow_vals/fast_vals/quiet_vals across ALL ROIs before
-    taking percentiles/median, and use the same eps0/thresholds for every
-    ROI.
+    pool slow/fast/quiet values across ALL ROIs before taking
+    percentiles/median, and use the same eps0/thresholds for every ROI.
 
     Args:
-        pre_rows: List of dictionaries containing pre-stimulus data
-        quiet_pow_pre: Array of quiet band power values or None
-        quiet_band: Tuple of (lo, hi) bounds for the quiet band in Hz
+        pre_rows      : unprefixed pre-window rows from
+                        src_compute_window_alpha_features (need roi_idx,
+                        pow_slow_alpha, pow_fast_alpha)
+        quiet_pow_pre : (n_epochs, n_rois) mean filter-Hilbert power in the
+                        quiet band over the pre window, or None to skip
+        quiet_band    : (lo, hi) of the quiet band in Hz (for the density)
 
     Returns:
         Dict roi_idx -> {"eps0": float, "thr_slow": float, "thr_fast": float}

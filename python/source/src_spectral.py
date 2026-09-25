@@ -1,31 +1,32 @@
 """
 src_spectral.py - Shared spectral computation primitives.
-V2.0.0
+V 2.0.0
 
-These are low-level building blocks used by src_prestim.py, src_poststim.py,
-and src_fooof.py. No domain-specific metric logic lives here.
+These are low-level building blocks used by src_alpha_features.py,
+src_erd.py, src_prestim.py, src_poststim.py and src_fooof.py. No
+domain-specific metric logic lives here.
 
-V2.0.0 changes vs V1.0.0:
+V2.0.0 changes vs V1.x:
     - NEW src_band_power_tc: filter-Hilbert band-power time courses. Slow,
-        fast, and total alpha power are now estimated by bandpass-filtering the
-        FULL epoch, taking |analytic signal|^2, and averaging that power inside
-        each analysis window. The frequency selectivity is set by the filer,
-        which is identical for every window, instead of by the Welch segment
-        length, which differed between the whole / pre / post windows and was
-        too short (0.5s -> 1.95 Hz bins) to put more than one bin inside a
-        2 Hz sub-band.
+      fast and total alpha power are now estimated by bandpass-filtering the
+      FULL epoch, taking |analytic signal|^2, and averaging that power inside
+      each analysis window. The frequency selectivity is set by the filter,
+      which is identical for every window, instead of by the Welch segment
+      length, which differed between the whole / pre / post windows and was
+      too short (0.5 s -> ~1.95 Hz bins) to put more than one bin inside a
+      2 Hz sub-band.
     - src_bandpower now returns NaN when fewer than 2 bins fall in the band.
-        The trapezoidal rule over a single point has zero width and previously
-        returned exactly 0.0, which silently zeroed every slow/fast metric.
+      The trapezoidal rule over a single point has zero width and previously
+      returned exactly 0.0, which silently zeroed every slow/fast metric.
     - src_psd_welch zero-pads to a target bin spacing (df_target, default
-    0.25 Hz). This only interpolates the spectram (true resolution is still
-    ~1 / segment length) but gives the centre-of-gravity and FOOOF fits
-    enough bins to work with.
+      0.25 Hz). This only interpolates the spectrum (true resolution is still
+      ~1 / segment length) but gives the centre-of-gravity and FOOOF fits
+      enough bins to work with. Still used for paf_cog_hz and FOOOF.
 
 Covers:
     - Welch PSD estimation on a 1-D time course
-    - Band-power integation (trapezoidal rule)
-    - Spectral CoG - used as PAF proxy
+    - Band-power integration (trapezoidal rule) on a PSD
+    - Filter-Hilbert band-power time courses on (..., n_times) arrays
     - Bandpass filtering (zero-phase FIR) for Hilbert-based phase extraction
 """
 
@@ -43,15 +44,15 @@ def src_psd_welch(
         sfreq: float,
         fmin: float,
         fmax: float,
-        window_sec: 2.0,
-        overlap: 0.5,
+        window_sec: float = 2.0,
+        overlap: float = 0.5,
         df_target: float = 0.25,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
-    Compute a Welch PSD estimate for a 1-D time series.
+    Compute a Welch PSD (power spectral density) estimate for a 1-D signal.
 
     The Welch segment length is min(window_sec, signal duration), so short
-    windows (e.g., a 0.9s pre-stim window) become a single Hann-tapered
+    windows (e.g. a 0.9 s pre-stimulus window) become a single Hann-tapered
     segment rather than crashing. n_fft is zero-padded so the frequency grid
     spacing is at most df_target Hz.
 
@@ -59,7 +60,8 @@ def src_psd_welch(
         x           : 1-D signal array, shape (n_times,)
         sfreq       : Sampling frequency in Hz
         fmin, fmax  : Frequency range to return
-        window_sec  : Desired Welch segment length in secods (default 0.5 s)
+        window_sec  : Desired Welch segment length in seconds (default 2.0 s,
+                      matching the MATLAB channel pipeline)
         overlap     : Segment overlap fraction in [0, 1] (default 0.5)
         df_target   : Maximum frequency-grid spacing in Hz after zero-padding
 
@@ -69,7 +71,7 @@ def src_psd_welch(
     """
     n_times = len(x)
     n_win = min(int(window_sec * sfreq), n_times)
-    n_win = max(n_win, 8) # minimum sanity bound
+    n_win = max(n_win, 8)  # minimum sanity bound
     n_step = max(1, int(n_win * (1.0 - overlap)))
     n_fft = max(int(2 ** np.ceil(np.log2(n_win))), int(np.ceil(sfreq / df_target)))
 
@@ -98,7 +100,8 @@ def src_bandpower(
     """
     Integrate PSD over the band [lo, hi] Hz using the trapezoidal rule.
 
-    Returns NaN if no frequency bins fall within [lo, hi].
+    Returns NaN if fewer than 2 frequency bins fall within [lo, hi]; the
+    trapezoid over a single point has zero width and would return 0.0.
     """
     idx = (freqs >= lo) & (freqs <= hi)
     if np.count_nonzero(idx) < 2:
@@ -119,18 +122,18 @@ def src_band_power_tc(
     Instantaneous band power |analytic signal|^2 of x in [lo, hi] Hz.
 
     The signal is bandpass filtered along the LAST axis with a zero-phase,
-    Hamming-windowed FIT (firwin design) with explicit transition bandwidths,
+    Hamming-windowed FIR (firwin design) with explicit transition bandwidths,
     then Hilbert transformed. Filter the FULL epoch and crop afterwards:
-    filtering a cropped window would put the filter's edge transitents inside
+    filtering a cropped window would put the filter's edge transients inside
     the window you are measuring.
 
     Choice of trans_bw (Hz) trades frequency selectivity against temporal
     smearing. Filter length ~ 3.3 / trans_bw seconds:
-        1.0 Hz -> 3.3 s (longer than a 3s epoch; relies heavily on padding)
+        1.0 Hz -> 3.3 s (longer than a 3 s epoch; relies heavily on padding)
         1.5 Hz -> 2.2 s (default; sharpest filter that fits inside the epoch)
         2.0 Hz -> 1.65 s
     With 8-10 / 10-12 Hz bands and trans_bw = 1.5, a pure 9 Hz sinusoid is
-    ~95 % slow ad a pure 11 Hz sinusoid is ~95 % fast; power at exactly 10 Hz
+    ~95 % slow and a pure 11 Hz sinusoid ~95 % fast; power at exactly 10 Hz
     is split 50/50 by construction (it sits on the shared band edge).
 
     By Parseval, the time-average of |analytic|^2 over a window approximates
@@ -138,10 +141,10 @@ def src_band_power_tc(
     src_bandpower() on a PSD.
 
     Args:
-        x           : array, shape (..., n_times)
-        sfreq       : Sampling frequency in Hz
-        lo, hi      : Passband edges in Hz
-        trans_bw    : Transition bandwidth in Hz, applied to both edges
+        x        : array, shape (..., n_times), e.g. (n_epochs, n_rois, n_times)
+        sfreq    : Sampling frequency in Hz
+        lo, hi   : Passband edges in Hz
+        trans_bw : Transition bandwidth in Hz, applied to both edges
 
     Returns:
         power : array, same shape as x
@@ -175,12 +178,14 @@ def src_bandpass_filter(
         hi: float,
 ) -> np.ndarray:
     """
-    Apply a zero-phase FIR (finite impulse response) bandpass filter to a 1;D
+    Apply a zero-phase FIR (finite impulse response) bandpass filter to a 1-D
     signal, suitable for subsequent Hilbert transform phase extraction.
 
     MNE's filter_data uses a Hamming-windowed FIR with automatic order
     selection to achieve the specified transition bandwidth, which avoids
-    phase distortion problems that affect IIR (infinite impulse repsonse) designs.
+    phase distortion problems that affect IIR (infinite impulse response) designs.
+
+    Unchanged from V1.x (phase and ITC outputs are unaffected by V2.0.0).
 
     Args:
         x       : 1-D signal array, shape (n_times,)

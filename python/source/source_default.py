@@ -137,8 +137,11 @@ def source_default(exp_id: str, cfg_in: dict, subjects_override=None):
 
     # Pre-stimulus window
     _d(src, "prestim", {})
+    # Matches the MATLAB channel pipeline (spectral.windows.pre_sec). Ending at
+    # -0.1 s keeps zero-phase filter smearing of the laser-evoked response
+    # out of the pre-stimulus band-power estimate.
     _d(src["prestim"], "tmin", -1.0)
-    _d(src["prestim"], "tmax",  -0.1)
+    _d(src["prestim"], "tmax", -0.1)
 
     # Post-stimulus window
     _d(src, "poststim", {})
@@ -187,14 +190,14 @@ def source_default(exp_id: str, cfg_in: dict, subjects_override=None):
     _d(src["spectral"], "fast_alpha_band", [10.0, 12.0])
     # Band power (slow / fast / total alpha) = filter-Hilbert power on the full
     # epoch, averaged within each window. FIR transition bandwidth in Hz;
-    # filter length ~ 3.3 / trans_bw s (1.5 Hz -> 2.2s, fits a 3s epoch).
+    # filter length ~ 3.3 / trans_bw s (1.5 Hz -> 2.2 s, fits a 3 s epoch).
     _d(src["spectral"], "filter_trans_bw_hz", 1.5)
-    # Welch PSD (used only for paf_cog_hz and FOOOF); segment length (clipped
+    # Welch PSD (used only for paf_cog_hz and FOOOF): segment length (clipped
     # to each window) and zero-padded frequency-grid spacing.
-    _d(src["spectral"], "psd_window_sec", 2.0)
-    _d(src["spectral"], "psd_df_target", 0.25)
+    _d(src["spectral"], "psd_window_sec",   2.0)
+    _d(src["spectral"], "psd_df_target_hz", 0.25)
     # Quiet band for the ERD noise floor (eps0), as in compute_noise_floor.m
-    _d(src["spectral"], "quiet_band", [45.0, 55.0])
+    _d(src["spectral"], "quiet_band",      [45.0, 55.0])
 
     # FOOOF (Fitting Oscillations & One Over F / specparam)
     _d(src, "fooof", {})
@@ -229,6 +232,8 @@ def source_default(exp_id: str, cfg_in: dict, subjects_override=None):
     print(f"  Pre-stim       : {src['prestim']['tmin']:.3f} – {src['prestim']['tmax']:.3f} s")
     print(f"  Post-stim      : {src['poststim']['tmin']:.3f} – {src['poststim']['tmax']:.3f} s "
           f"  (phase ref @ {src['poststim']['phase_ref_t']:.3f} s)")
+    print(f"  Band power     : filter-Hilbert, slow {src['spectral']['slow_alpha_band']} / "
+          f"fast {src['spectral']['fast_alpha_band']} Hz, trans_bw {src['spectral']['filter_trans_bw_hz']} Hz")
     print(f"  Noise cov      : {src['noise_cov']['tmin']:.3f} – {src['noise_cov']['tmax']:.3f} s")
     print(f"  LEP N2 window  : {src['lep']['n2_window']}")
     print(f"  LEP P2 window  : {src['lep']['p2_window']}")
