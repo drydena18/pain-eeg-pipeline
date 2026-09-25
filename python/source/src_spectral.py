@@ -43,9 +43,9 @@ def src_psd_welch(
         sfreq: float,
         fmin: float,
         fmax: float,
-        window_sec = 2.0,
-        overlap = 0.5,
-        df_target = float = 0.25,
+        window_sec: 2.0,
+        overlap: 0.5,
+        df_target: float = 0.25,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Compute a Welch PSD estimate for a 1-D time series.

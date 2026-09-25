@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from src_spectral import src_psd_welch, src_bandpower
+from src_spectral import src_psd_welch, src_band_power_tc
 
 _EPS0 = 1e-12
 
@@ -74,7 +74,7 @@ def _metrics_from_powers(ps, pf, pa, cog) -> dict:
     The 10 alpha metrics + psi_cog from slow / fast / total power and CoG
     NaN inputs propagate to NaN outputs.
     """
-    pa, pf, ps, cog = (np.ndarray(v, dtype = float) for v in (ps, pf, pa, cog))
+    ps, pf, pa, cog = (np.asarray(v, dtype = float) for v in (ps, pf, pa, cog))
 
     sf_ratio        = ps / (pf + _EPS0)
     sf_logratio     = np.log(ps + _EPS0) - np.log(pf + _EPS0)
@@ -174,7 +174,7 @@ def src_compute_window_alpha_features(
         psds = []
         freqs = None
         for ei in range(n_epochs):
-            freqs, psd = src_psd_welch(tc_win[ei, ri, :], sfreq, fmin, fmax, psd_window_sec, df_target = df_target)
+            freqs, psd = src_psd_welch(tc_win[ei, ri, :], sfreq, fmin, fmax, psd_window_sec, overlap = 0.5, df_target = df_target)
             psds.append(psd)
             cog[ei, ri] = _cog_from_psd(freqs, psd, alpha)
         ga_psd_by_roi[ri] = (freqs, np.mean(np.vstack(psds), axis = 0))
