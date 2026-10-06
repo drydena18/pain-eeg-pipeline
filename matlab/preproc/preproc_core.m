@@ -1,6 +1,10 @@
 function preproc_core(P, cfg)
 % PREPROC_CORE Execute preprocessing according to cfg (from JSON)
-% V 2.2.0
+% V 2.2.1
+%
+% V2.2.1: ICA stage resume fixed. The stage file is saved with the ICLabel
+%   tag (..._ica_iclabel.set) but the resume check looked for ..._ica.set, so
+%   ICA (and its manual prompts) re-ran on every rerun.
 %
 % V2.2.0 (bug fixes only; processing steps and parameters unchanged):
 %   - Epoch metadata: the event-map lookup was inverted (matched epochs got
@@ -445,7 +449,29 @@ for i = 1:numel(subs)
     % ----------------
     if cfg.preproc.ica.enabled
         nextTag = char(string(cfg.preproc.ica.tag));
-        [EEG, tags, didLoad] = maybe_load_stage(ST.ICA, P, subjid, tags, nextTag, logf, EEG);
+
+        % Resume: when ICLabel ran, the stage file carries BOTH tags
+        % (..._ica_iclabel.set), so look for that name first. Looking only
+        % for ..._ica.set (V2.1.0 and earlier) never matched, and ICA was
+        % recomputed on every rerun.
+        didLoad = false;
+        iclTag = '';
+        if isfield(cfg.preproc.ica, 'iclabel') && isfield(cfg.preproc.ica.iclabel, 'enabled') && ...
+                cfg.preproc.ica.iclabel.enabled && isfield(cfg.preproc.ica.iclabel, 'tag') && ...
+                ~isempty(cfg.preproc.ica.iclabel.tag)
+            iclTag = char(string(cfg.preproc.ica.iclabel.tag));
+        end
+        if ~isempty(iclTag)
+            [EEGtmp, tagsTmp, didLoad] = maybe_load_stage(ST.ICA, P, subjid, [tags, {nextTag}], iclTag, logf, EEG);
+            if didLoad
+                EEG = EEGtmp;
+                tags = tagsTmp;
+            end
+        end
+        if ~didLoad
+            [EEG, tags, didLoad] = maybe_load_stage(ST.ICA, P, subjid, tags, nextTag, logf, EEG);
+        end
+
         if ~didLoad
             logmsg(logf, '[ICA] method = %s', char(string(cfg.preproc.ica.method)));
 
