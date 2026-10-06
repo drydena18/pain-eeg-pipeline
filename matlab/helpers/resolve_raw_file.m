@@ -1,6 +1,9 @@
 function rawPath = resolve_raw_file(P, cfg, subjid)
 % RESOLVE_RAW_FILE Locate the raw EEG header / file for one subject.
-% V 2.0.0
+% V 2.0.1
+%
+% V2.0.1: fixed P.EXP.raw_dirnam -> raw_dirname (task fallback) and
+% sullfile -> fullfile (dataset-wide recursive fallback crashed).
 %
 % Resolution order:
 %   1. cfg.exp.raw.pattern (explicit config ALWAYS wins)
@@ -20,10 +23,10 @@ exts = {'.set', '.vhdr', '.bdf', '.BDF', '.edf', '.EDF', '.eeg', '.EEG'};
 
 % ---- Task Name -----
 task = 'task';
-if isfield(cfg, 'exp') && isfield(cfg.exp, 'task') &&strlength(string(cfg.exp.task)) > 0
+if isfield(cfg, 'exp') && isfield(cfg.exp, 'task') && strlength(string(cfg.exp.task)) > 0
     task = char(string(cfg.exp.task));
 elseif isfield(P, 'EXP') && isfield(P.EXP, 'raw_dirname')
-    task = char(string(P.EXP.raw_dirnam));
+    task = char(string(P.EXP.raw_dirname));
 end
 
 % -------------------------------------------------------------------------
@@ -77,7 +80,7 @@ end
 for e = 1:numel(exts)
     d = dir(fullfile(root, '**', [subDir '*' exts{e}]));
     if ~isempty(d)
-        rawPath = redirect_bv_header(sullfile(d(1).folder, d(1).name));
+        rawPath = redirect_bv_header(fullfile(d(1).folder, d(1).name));
         return;
     end
 end

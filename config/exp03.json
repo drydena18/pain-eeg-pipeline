@@ -1,7 +1,7 @@
 {
   "meta": {
     "schema": "v1",
-    "config": "exp03_v2.3.0"
+    "config": "exp03_v3.1.0"
   },
   "paths": {
     "raw_root": "/cifs/seminowicz/eegPainDatasets/CNED/39ByBP",
@@ -72,7 +72,7 @@
   "preproc": {
     "concat": {
       "enabled": false,
-      "n-sessions": 5,
+      "n_sessions": 1,
       "session_pattern": ""
     },
     "filter": {
@@ -104,7 +104,7 @@
       "tag": "initrej",
       "scroll": {
         "enabled": true,
-        "spacing-uv": 50
+        "spacing_uv": 50
       },
       "badchan": {
         "enabled": false,
@@ -124,10 +124,22 @@
       "runica": {
         "extended": 1
       },
-      "train_scroll": { "enabled": true, "spacing_uv": 50 },
-      "scroll": { "enabled": true, "spacing_uv": 50 },
-      "confirm_scroll": { "enabled": true, "spacing_uv": 50 },
-      "grid": { "enabled": true, "n_ics": 20 },
+      "train_scroll": {
+        "enabled": true,
+        "spacing_uv": 50
+      },
+      "scroll": {
+        "enabled": true,
+        "spacing_uv": 50
+      },
+      "confirm_scroll": {
+        "enabled": true,
+        "spacing_uv": 50
+      },
+      "grid": {
+        "enabled": true,
+        "n_ics": 20
+      },
       "tag": "ica",
       "iclabel": {
         "enabled": true,
@@ -153,9 +165,10 @@
           "intensity": ""
         }
       ],
-      "tmin_sec": -1.0,
+      "tmin_sec": -2.2,
       "tmax_sec": 2.0,
-      "tag": "epoch"
+      "tag": "epoch",
+      "_comment": "-2.2 s start keeps the 2.2 s band-power filter edge zone (1.1 s) outside the pre window (-1.0 to -0.1 s)."
     },
     "baseline": {
       "enabled": true,
@@ -171,19 +184,17 @@
         8,
         10
       ],
-      "tag": "hilbert"
+      "tag": "hilbert",
+      "_comment": "Stage 09 (preprocessing). Not read by spectral_core V3, which computes phase with the shared FIR."
     }
   },
-  "spectral": {
-    "input_stage": "08_base",
-    "psd": {
-      "fmin_hz": 1,
-      "fmax_hz": 80,
-      "window_sec": 2.0,
-      "overlap_frac": 0.5,
-      "nfft": 0
-    },
+  "features": {
+    "_comment": "Single source of truth for feature extraction, read by BOTH matlab/spectral/spectral_default.m and python/source/source_default.py. Validated against the preproc block (epoch limits, pass band) at startup.",
     "windows": {
+      "whole_sec": [
+        -1.0,
+        2.0
+      ],
       "pre_sec": [
         -1.0,
         -0.1
@@ -193,7 +204,7 @@
         0.8
       ]
     },
-    "alpha": {
+    "bands": {
       "alpha_hz": [
         8,
         12
@@ -207,25 +218,55 @@
         12
       ]
     },
+    "band_power": {
+      "method": "filter_hilbert",
+      "trans_bw_hz": 1.5
+    },
+    "psd": {
+      "fmin_hz": 1,
+      "fmax_hz": 40,
+      "window_sec": 2.0,
+      "overlap_frac": 0.5,
+      "df_target_hz": 0.25
+    },
+    "erd": {
+      "eps0_frac": 0.001,
+      "p5_percentile": 5
+    },
+    "lep": {
+      "n2_window_sec": [
+        0.15,
+        0.35
+      ],
+      "p2_window_sec": [
+        0.25,
+        0.5
+      ]
+    },
+    "phase": {
+      "post_ref_sec": 0.2
+    },
     "fooof": {
       "enabled": true,
-      "python_exe": "/home/UWO/darsenea/envs/thesis/bin/python",
-      "script_path": "/home/UWO/darsenea/Documents/GitHub/pain-alpha-dynamics/python/spectral/fooof_bridge.py",
-      "fmin_hz": 2,
-      "fmax_hz": 40,
       "aperiodic_mode": "fixed",
       "peak_width_limits": [
-        0.5,
-        12
+        1.0,
+        12.0
       ],
-      "max_n_peaks": 10,
-      "min_peak_height": 0.0,
-      "peak_threshold": 0.5,
-      "alpha_band_hz": [
-        8,
-        12
-      ],
-      "verbose": false
+      "max_n_peaks": 6,
+      "min_peak_height": 0.1,
+      "peak_threshold": 2.0,
+      "freq_range": [
+        1.0,
+        40.0
+      ]
+    }
+  },
+  "spectral": {
+    "input_stage": "08_base",
+    "fooof": {
+      "python_exe": "/home/UWO/darsenea/envs/thesis/bin/python",
+      "script_path": "/home/UWO/darsenea/Documents/GitHub/pain-alpha-dynamics/python/spectral/fooof_bridge.py"
     },
     "qc": {
       "plot_mode": "summary",
@@ -256,14 +297,7 @@
         -0.1,
         1.0
       ],
-      "n2_window_sec": [
-        0.1,
-        0.3
-      ],
-      "p2_window_sec": [
-        0.25,
-        0.45
-      ]
+      "_comment": "window_sec = stored waveform span only; N2/P2 search windows are in features.lep"
     },
     "phase": {
       "enabled": true,
@@ -280,7 +314,6 @@
       "subjects_dir": "/home/UWO/darsenea/mne_data/"
     },
     "forward": {
-      "spacing": "oct6",
       "bem": "fsaverage",
       "mindist_mm": 5.0
     },
@@ -293,9 +326,10 @@
       "parcellation": "aparc",
       "mode": "mean_flip",
       "use_custom_rois": true,
+      "hemisphere_split": true,
       "custom_rois": {
-        "_note": "Disabled (use_custom_rois=false). Set use_custom_rois=true to activate. Keys are ROI names; values are lists of aparc label strings (lh-* / rh-*).",
-        "_comment": "S2 is a proxy, supramarginal is the closest cortical surface label but isn't perfectly S2 anatomically. M1 is included as it frequently appears in pain neuromatrix discussions.",
+        "_note": "Active when use_custom_rois = true. Keys are ROI names; values are aparc label names (lh-X / rh-X or X-lh / X-rh). hemisphere_split = true adds <ROI>_lh and <ROI>_rh next to every bilateral ROI.",
+        "_comment": "S2 is a proxy: supramarginal is the closest cortical surface label but isn't perfectly S2 anatomically. M1 is included as it frequently appears in pain neuromatrix discussions.",
         "S1": [
           "lh-postcentral",
           "rh-postcentral",
@@ -310,7 +344,7 @@
           "lh-caudalanteriorcingulate",
           "rh-caudalanteriorcingulate",
           "lh-rostralanteriorcingulate",
-          "rh-resotralanteriorcingulate"
+          "rh-rostralanteriorcingulate"
         ],
         "Insula": [
           "lh-insula",
@@ -327,37 +361,6 @@
           "rh-precentral"
         ]
       }
-    },
-    "spectral": {
-      "fmin": 1.0,
-      "fmax": 40.0,
-      "alpha_band": [
-        8.0,
-        12.0
-      ],
-      "slow_alpha_band": [
-        8.0,
-        10.0
-      ],
-      "fast_alpha_band": [
-        10.0,
-        12.0
-      ]
-    },
-    "fooof": {
-      "enabled": true,
-      "aperiodic_mode": "fixed",
-      "peak_width_limits": [
-        1.0,
-        12.0
-      ],
-      "max_n_peaks": 6,
-      "min_peak_height": 0.1,
-      "peak_threshold": 2.0,
-      "freq_range": [
-        1.0,
-        40.0
-      ]
     },
     "noise_cov": {
       "tmin": -0.2,

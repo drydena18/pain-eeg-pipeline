@@ -1,5 +1,7 @@
 function prompt_scroll_eeg(EEG, block, logf, mode, titleStr)
 % PROMPT_SCROLL_EEG Open an EEGLAB scroll browser for manual visual QC.
+% V 1.0.1  (V1.0.1: sptrinf -> sprintf in the default title)
+%
 %   block       : the specific scroll config struct for this call site, e.g.,
 %                 cfg.preproc.initrej.scroll, cfg.preproc.ica.train_scroll,
 %                 cfg.preproc.ica.scroll, cfg.preproc.ica.confirm.scroll.
@@ -14,7 +16,7 @@ function prompt_scroll_eeg(EEG, block, logf, mode, titleStr)
 % is safe to call unconditionally from preproc_core.m
 
 if nargin < 5 || isempty(titleStr)
-    titleStr = sptrinf('%s scroll', mode);
+    titleStr = sprintf('%s scroll', mode);
 end
 
 if isempty(block) || ~isfield(block, 'enabled') || ~logical(block.enabled)

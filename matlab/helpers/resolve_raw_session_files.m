@@ -1,6 +1,9 @@
 function [sessPaths, sessSidecars] = resolve_raw_session_files(P, cfg, subjid, nSessions, logf)
 % RESOLVE_RAW_SESSION_FILES  Locate raw EEG files and BIDS sidecars for every session
-% V 1.2.0
+% V 1.2.1
+%
+% V1.2.1: the BrainVision .eeg/.vmrk -> .vhdr redirect compared the file NAME
+% instead of the extension, so it never fired.
 %
 % Tries three strategies in order for each session index (1..nSessions):
 %
@@ -11,7 +14,8 @@ function [sessPaths, sessSidecars] = resolve_raw_session_files(P, cfg, subjid, n
 %      arguments are (subjid, session_index), e.g.:
 %        "sub%03d/ses%02d/sub%03d_ses%02d_eeg.set"   -> (subjid, sess, subjid, sess)
 %        "sub%03d_ses%02d.set"                        -> (subjid, sess)
-%      The pattern is interpreted relative to P.INPUT.EXP.
+%      The pattern is interpreted relative to P.INPUT.EXP and must name a
+%      FILE (a directory such as "ses-%01d" never matches).
 %      The function tries formatting with 2 or 4 arguments automatically.
 %
 %   3. Recursive dir() fallback — finds all raw files for this subject
@@ -157,7 +161,7 @@ for s = 1:nSessions
 
     % BrainVision: never hand the headerless .eeg to the loader
     [fd, fn, fx] = fileparts(found);
-    if any(strcmpi(fn, {'.eeg', '.vmrk'})) && isfile(fullfile(fd, [fn '.vhdr']))
+    if any(strcmpi(fx, {'.eeg', '.vmrk'})) && isfile(fullfile(fd, [fn '.vhdr']))
         found = fullfile(fd, [fn '.vhdr']);
     end
 

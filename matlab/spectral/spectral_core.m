@@ -1,83 +1,62 @@
 function spectral_core(P, cfg)
-% SPECTRAL_CORE  Trial-wise spectral features + interaction metrics + LEP + phase
-% V 2.2.0
+% SPECTRAL_CORE  Channel-space alpha features, computed exactly as in source space
+% V 3.1.0
 %
-% V 2.2.0 changes vs V 2.1.0:
-%   - Every alpha feature (all 10 from spec_compute_alpha_features_from_psd, plus
-%     psi_cog) is now computed for THREE windows and prefixed accordingly:
-%     whole_<name> (full epoch), pre_<name> (pre-stim), post_<name> (post-stim)
-%   - Every metric additionally gets a generic delta_<name> = post - pre
-%     (spec_compute_metric_deltas.m), on top of the existing ERD-specific
-%     fractional change (erd_slow, erd_fast, and the new erd_pow_alpha_total)
-%     for the 3 power metrics only.
-%   - bi_pre / lr_pre / cog_pre / psi_cog (pre-stim only, V2.1.0) are retired
-%     in favour of pre_sf_balance / pre_sf_logratio / pre_paf_cog_hz / pre_psi_cog,
-%     which are numerically identical but unify with the new whole_/pre_/post_/delta_ family
-%   - See spec_compute_interaction_metrics.m V2.0.0 for changelog for the corresponding
-%     ERD-side changes.
-%   - TVI_alpha remains pre-stim only (out of scope for this update); its input field
-%     is renamed featGA.bi_pre -> featGA.pre_sf_balance only.
+% V3.1.0: whole window = features.windows.whole_sec; slow_alpha_frac dropped;
+% delta_erd -> erd_asym (see helpers).
 %
-% V 2.1.0 changes vs V 2.0.1:
-%   - Pain ratings are loaded from P.CORE.CSV_SINGLETRIAL (experiment-level
-%     participants_singletrial CSV) via spec_load_singletrial_ratings,
-%     instead of relying on EEG.epoch.pain_rating (which is typically absent)
-%   - Ratings are passed explicitly to spec_compute_phase_metric (inline
-%     Hilbert path) and to spec_compute_rcl_from_phase (09_hilbert phase)
-%   - r_cl computation is now handled by the dedicated helper
-%     spec_compute_rcl_from_phase for both phase loading paths
+% V3.0.0 changes vs V2.2.0 (channel/source parity; Python twin is
+% python/source/source_core.py V4.0.0):
+%   - Band power: filter-Hilbert (spec_band_power_tcs) with the shared FIR,
+%     replacing Welch-trapezoid band power on 0.70 s segments, whose ~1 Hz
+%     bins left part of 8-12 Hz outside both sub-bands.
+%   - CoG / FOOOF PSD: shared Welch (spec_welch_psd), periodic Hamming,
+%     zero-padded to 0.25 Hz, each window segmented on its own.
+%   - All feature parameters from cfg.spectral.feat (= cfg.features).
+%   - Spatial GA per trial is now consistent across windows (ratio of mean
+%     powers everywhere; V2.2.0 used mean-of-ratios for pre/post) and its
+%     p5_flag comes from the GA unit's own powers (V2.2.0 OR-ed ~64 channels,
+%     flagging nearly every trial).
+%   - ERD guard eps0 / p5 thresholds per channel, data-relative (no 45-55 Hz
+%     quiet band, which the 40 Hz low-pass removes).
+%   - Phase: inline with the shared FIR at t = 0 and at features.phase.post_ref_sec,
+%     columns slow_phase / sin_phase / cos_phase (+ _post). The 09_hilbert
+%     stage output is no longer read (its pop_eegfiltnew filter differs from
+%     source space). r_cl against ratings is unchanged.
+%   - LEP features (shared windows, source names) are added to the
+%     trial x channel CSV.
+%   - NEW sub-XXX_spectral_chan_summary.csv: subject x channel, the
+%     channel-space counterpart of sub-XXX_source_ga.csv (TVI per channel,
+%     ITC, FOOOF on the trial-mean PSD).
+%   - FOOOF fits per channel on the trial-mean whole-epoch PSD via the shared
+%     Python implementation; per-trial channel-GA fits are dropped.
 %
-% New in V2 vs V1:
-%   - Windowed pre/post-stim PSDs  (spec_compute_windowed_psds)
-%   - Interaction metrics: BI_pre, LR_pre, CoG_pre, psi_cog, ΔERD
-%     (spec_compute_interaction_metrics)
-%   - Slow-alpha Hilbert phase per channel x trial:
-%       1st: loads from pre-computed 09_hilbert stage if present
-%       2nd: computes inline via spec_compute_phase_metric
-%   - LEP per trial + GA waveforms + N2/P2 peak CSV  (spec_compute_lep)
-%   - Subject-level summary CSV with TVI_alpha  (spec_write_subject_summary_csv)
-%
-% V2.0.1 change:
-%   Section 7 now calls spec_compute_tvi_alpha and spec_compute_ga_rcl
-%   before writing, keeping spec_write_subject_summary_csv a pure writer.
-%
-% Output structure per subject:
-%   SPECTRAL/csv/   sub-XXX_spectral_chan_by_trial.csv
-%                   sub-XXX_spectral_ga_by_trial.csv
-%                   sub-XXX_subject_summary.csv
-%   SPECTRAL/lep/   sub-XXX_lep_trials.mat
-%                   sub-XXX_lep_ga.mat
-%                   sub-XXX_lep_peaks.csv
-%   SPECTRAL/figures/
-%   SPECTRAL/tmp/
-%   SPECTRAL/logs/
+% Output structure per subject (P.SPEC_ROOT/sub-XXX/):
+%   csv/  sub-XXX_spectral_chan_by_trial.csv   trial x channel  (read by R merge)
+%         sub-XXX_spectral_ga_by_trial.csv     trial x channel-mean
+%         sub-XXX_spectral_chan_summary.csv    subject x channel
+%         sub-XXX_subject_summary.csv          TVI of channel-mean + r_cl
+%   lep/  sub-XXX_lep_trials.mat, sub-XXX_lep_ga.mat, sub-XXX_lep_peaks.csv
+%   figures/ tmp/ logs/
 
 subs = cfg.exp.subjects(:);
- 
+
 inStage = "08_base";
-if isfield(cfg, 'spectral') && isfield(cfg.spectral, 'input_stage') && strlength(string(cfg.spectral.input_stage)) > 0
+if isfield(cfg.spectral, 'input_stage') && strlength(string(cfg.spectral.input_stage)) > 0
     inStage = string(cfg.spectral.input_stage);
 end
- 
-plotMode = "summary";
-if isfield(cfg.spectral, 'qc') && isfield(cfg.spectral.qc, 'plot_mode')
-    plotMode = string(cfg.spectral.qc.plot_mode);
-end
- 
-psd     = cfg.spectral.psd;
-alpha   = cfg.spectral.alpha;
-windows = cfg.spectral.windows;
+
+plotMode = string(cfg.spectral.qc.plot_mode);
+F       = cfg.spectral.feat;
 lepCfg  = cfg.spectral.lep;
 phCfg   = cfg.spectral.phase;
- 
-foo     = cfg.spectral.fooof;
-doFooof = isfield(foo,    'enabled') && logical(foo.enabled);
-doLEP   = isfield(lepCfg, 'enabled') && logical(lepCfg.enabled);
-doPhase = isfield(phCfg,  'enabled') && logical(phCfg.enabled);
- 
+doFooof = logical(F.fooof.enabled);
+doLEP   = logical(lepCfg.enabled);
+doPhase = logical(phCfg.enabled);
+
 for i = 1:numel(subs)
     subjid = subs(i);
- 
+
     subRoot = fullfile(string(P.RUN_ROOT), sprintf('sub-%03d', subjid));
     outRoot = fullfile(string(P.SPEC_ROOT), sprintf('sub-%03d', subjid));
     outCSV  = fullfile(outRoot, 'csv');
@@ -85,308 +64,141 @@ for i = 1:numel(subs)
     outTmp  = fullfile(outRoot, 'tmp');
     outLog  = fullfile(outRoot, 'logs');
     outLEP  = fullfile(outRoot, 'lep');
- 
-    spec_ensure_dir(outRoot);
-    spec_ensure_dir(outCSV);
-    spec_ensure_dir(outFig);
-    spec_ensure_dir(outTmp);
-    spec_ensure_dir(outLog);
-    spec_ensure_dir(outLEP);
- 
+    cellfun(@spec_ensure_dir, {outRoot, outCSV, outFig, outTmp, outLog, outLEP});
+
     logf = spec_open_log(outLog, subjid, 'spectral');
-    cobj = onCleanup(@() spec_safe_close(logf));
- 
-    spec_logmsg(logf, '===== SPECTRAL V2 START sub-%03d =====', subjid);
+    cobj = onCleanup(@() spec_safe_close(logf)); %#ok<NASGU>
+
+    spec_logmsg(logf, '===== SPECTRAL V3 START sub-%03d =====', subjid);
     spec_logmsg(logf, 'Input stage: %s | Plot mode: %s', inStage, plotMode);
- 
+
     % ---------------------------------------------------------------
-    % Load 08_base
+    % Load epoched data
     % ---------------------------------------------------------------
     inDir = fullfile(subRoot, char(inStage));
     if ~exist(inDir, 'dir')
         spec_logmsg(logf, '[WARN] Missing input dir: %s (skipping)', inDir);
         continue;
     end
- 
     inSet = spec_find_latest_set(inDir, cfg.exp.out_prefix, subjid);
     if strlength(inSet) == 0
         spec_logmsg(logf, '[WARN] No .set found in %s (skipping)', inDir);
         continue;
     end
- 
     spec_logmsg(logf, '[LOAD] %s', inSet);
-    inSet = char(inSet);
-    [inFolder, inName, inExt] = fileparts(inSet);
+    [inFolder, inName, inExt] = fileparts(char(inSet));
     EEG = pop_loadset('filename', [inName inExt], 'filepath', inFolder);
     EEG = eeg_checkset(EEG);
- 
     if EEG.trials <= 1
         spec_logmsg(logf, '[WARN] EEG not epoched (trials=%d). Skipping.', EEG.trials);
         continue;
     end
- 
+
     chanLabels = spec_get_chanlabels(EEG);
-    nChan      = EEG.nbchan;
     nTr        = EEG.trials;
- 
-    % ---------------------------------------------------------------
-    % Load per-trial pain ratings from singletrial CSV
-    % P.CORE.CSV_SINGLETRIAL = .../resource/participants_singletrial_<exp>.csv
-    % These are passed to the phase computation for r_cl.
-    % ---------------------------------------------------------------
+    fs         = EEG.srate;
+    timesSec   = double(EEG.times(:))' / 1000;
+
     ratings = [];
     if isfield(P, 'CORE') && isfield(P.CORE, 'CSV_SINGLETRIAL')
         ratings = spec_load_singletrial_ratings(P.CORE.CSV_SINGLETRIAL, subjid, nTr, logf);
-    else
-        spec_logmsg(logf, '[RATINGS][WARN] P.CORE.CSV_SINGLETRIAL not defined; r_cl will be NaN.');
     end
- 
-    % ---------------------------------------------------------------
-    % 1. Full-epoch Welch PSD  ->  existing spectral features
-    % ---------------------------------------------------------------
-    spec_logmsg(logf, '[PSD] Full-epoch Welch PSD (nChan=%d nTrials=%d)', nChan, nTr);
-    [f, Pxx] = spec_compute_psd_trials(EEG, psd);  % [nChan x nFreq x nTr]
- 
-    spec_logmsg(logf, '[FEAT] Full-epoch alpha features...');
-    featChan_whole = spec_compute_alpha_features_from_psd(f, Pxx, alpha);
-    featChan_whole = spec_compute_psi_cog(featChan_whole);
- 
-    gaPxx = squeeze(mean(Pxx, 1, 'omitnan'));   % [nFreq x nTr]
-    if size(gaPxx, 1) ~= numel(f)
-        gaPxx = gaPxx';
-    end
-    featGA_whole = spec_compute_alpha_features_from_psd(f, reshape(gaPxx, [1 numel(f) nTr]), alpha);
-    featGA_whole = spec_squeeze_ga_features(featGA_whole);
-    featGA_whole = spec_compute_psi_cog(featGA_whole);
 
-    featChan = spec_add_prefix(featChan_whole, 'whole_');
-    featGA = spec_add_prefix(featGA_whole, 'whole_');
- 
     % ---------------------------------------------------------------
-    % 2. Pre/post-stim windowed PSDs  ->  interaction metrics
+    % 1. All features (shared estimators)
     % ---------------------------------------------------------------
-    spec_logmsg(logf, '[WIN_PSD] pre=[%.2f %.2f]s  post=[%.2f %.2f]s', ...
-        windows.pre_sec(1), windows.pre_sec(2), windows.post_sec(1), windows.post_sec(2));
- 
+    spec_logmsg(logf, '[FEAT] fs=%g Hz, %d chans x %d trials; filter-Hilbert trans_bw=%.2f Hz', ...
+        fs, EEG.nbchan, nTr, F.band_power.trans_bw_hz);
     try
-        [f2, prePxx, postPxx] = spec_compute_windowed_psds(EEG, psd, windows, logf);
+        [featChan, featGA, summ, aux] = spec_compute_subject_features(EEG.data, timesSec, fs, F);
     catch ME
-        spec_logmsg(logf, '[WARN] Windowed PSD failed: %s', ME.message);
-        f2 = []; prePxx = []; postPxx = [];
+        spec_logmsg(logf, '[ERROR] Feature computation failed: %s', getReport(ME, 'extended', 'hyperlinks', 'off'));
+        continue;
     end
- 
-    if ~isempty(f2)
-        spec_logmsg(logf, '[INTERACT] Computing BI_pre, LR_pre, CoG_pre, DELTA_ERD...');
-        try
-            featChan_pre = spec_compute_alpha_features_from_psd(f2, prePxx, alpha);
-            featChan_pre = spec_compute_psi_cog(featChan_pre);
-            featChan_post = spec_compute_alpha_features_from_psd(f2, postPxx, alpha);
-            featChan_post = spec_compute_psi_cog(featChan_post);
+    spec_logmsg(logf, '[FEAT] p5_flag: %d / %d trial x channel cells flagged', ...
+        sum(featChan.p5_flag(:)), numel(featChan.p5_flag));
 
-            % Generic delta_<name> = post - pre, all 11 metric families
-            featChan_delta = spec_compute_metric_deltas(featChan_pre, featChan_post);
-
-            % GA: channel-mean of the per-channel features
-            featGA_pre = spec_ga_mean_feat(featChan_pre);
-            featGA_post = spec_ga_mean_feat(featChan_post);
-            featGA_delta = spec_ga_mean_feat(featChan_delta);
-
-            featChan = spec_merge_structs(featChan, ...
-                spec_add_prefix(featChan_pre, 'pre_'), ...
-                spec_add_prefix(featChan_post, 'post_'), ...
-                featChan_delta);
-
-            featGA = spec_merge_structs(featGA, ...
-                spec_add_prefix(featGA_pre, 'pre_'), ...
-                spec_add_prefix(featGA_post, 'post_'), ...
-                featGA_delta);
-        catch ME
-            spec_logmsg(logf, '[WARN] Interaction metrics failed: %s', ME.message);
-        end
-
-        spec_logmsg(logf, '[INTERACT] Computing ERD family (erd_slow, erd_fast, erd_pow_alpha_total, delta_erd) + p5_flag...');
-        try
-            [intChan, intGA] = spec_compute_interaction_metrics(f2, prePxx, postPxx, alpha, logf);
-            featChan = spec_merge_structs(featChan, intChan);
-            featGA = spec_merge_structs(featGA, intGA);
-        catch ME
-            spec_logmsg(logf, '[WARN] Interaction metrics failed: %s', ME.message);
-        end
-    end
- 
     % ---------------------------------------------------------------
-    % 3. Slow-alpha Hilbert phase at t=0
-    %    3A: prefer pre-computed 09_hilbert stage
-    %    3B: compute inline via spec_compute_phase_metric
-    %
-    %    Pain ratings (loaded above from P.CORE.CSV_SINGLETRIAL) are
-    %    passed to both paths so that GA r_cl is always populated.
+    % 2. FOOOF: subject x channel trial-mean whole-epoch PSD
     % ---------------------------------------------------------------
-    phaseMat = [];
-    rclTable = table();
- 
-    if doPhase
-        hilbertDir = fullfile(subRoot, '09_hilbert');
-        if exist(hilbertDir, 'dir')
-            dH = dir(fullfile(hilbertDir, sprintf('*%03d*_hilbert_phase.mat', subjid)));
-            if ~isempty(dH)
-                [~, ix] = sort([dH.datenum], 'descend');
-                hMatPath = fullfile(dH(ix(1)).folder, dH(ix(1)).name);
-                try
-                    hData     = load(hMatPath, 'phase_slow', 'stimOnsetIdx');
-                    t0idx     = hData.stimOnsetIdx;
-                    phaseFull = double(hData.phase_slow);   % [nChan x nTime x nTr]
-                    phaseMat  = squeeze(phaseFull(:, t0idx, :));
-                    % Guard: squeeze collapses dims when nChan=1 or nTr=1
-                    if isvector(phaseMat)
-                        if nChan == 1
-                            phaseMat = reshape(phaseMat, 1, nTr);
-                        else
-                            phaseMat = reshape(phaseMat, nChan, 1);
-                        end
-                    end
-                    spec_logmsg(logf, '[PHASE] Loaded from 09_hilbert: %s', hMatPath);
- 
-                    % r_cl from pre-loaded phaseMat + CSV ratings
-                    if ~isempty(ratings)
-                        rclTable = spec_compute_rcl_from_phase( ...
-                            phaseMat, ratings, chanLabels, phCfg, logf, P, subjid);
-                    else
-                        spec_logmsg(logf, '[PHASE] No ratings available; r_cl skipped for 09_hilbert path.');
-                    end
- 
-                catch ME
-                    spec_logmsg(logf, '[PHASE][WARN] Load failed: %s', ME.message);
-                    phaseMat = [];
-                end
-            end
-        end
- 
-        if isempty(phaseMat)
-            spec_logmsg(logf, '[PHASE] 09_hilbert not found; computing inline...');
-            try
-                % ratings passed explicitly; spec_compute_phase_metric uses
-                % them instead of the EEG.epoch fallback.
-                [phaseMat, rclTable] = spec_compute_phase_metric(EEG, alpha, phCfg, logf, ratings);
-            catch ME
-                spec_logmsg(logf, '[PHASE][WARN] Inline computation failed: %s', ME.message);
-                phaseMat = [];
-            end
-        end
- 
-        if ~isempty(phaseMat) && isequal(size(phaseMat), [nChan nTr])
-            featChan.phase_slow_rad = phaseMat;
-            % Circular mean across channels for GA
-            featGA.phase_slow_rad = angle(mean(exp(1i * phaseMat), 1, 'omitnan'))';
-        else
-            if ~isempty(phaseMat)
-                spec_logmsg(logf, '[PHASE][WARN] phaseMat size %s != [%d %d]; discarding.', ...
-                    mat2str(size(phaseMat)), nChan, nTr);
-            end
-        end
-    end
- 
-    % ---------------------------------------------------------------
-    % 4. FOOOF on GA PSD
-    % ---------------------------------------------------------------
-    fooofOut = struct();
     if doFooof
         try
-            spec_logmsg(logf, '[FOOOF] Running Python FOOOF bridge...');
-            fooofOut = spec_run_fooof_python(f, gaPxx, foo, outTmp, subjid, logf);
-            if isfield(fooofOut, 'trials') && ~isempty(fooofOut.trials)
-                fooofOut = spec_fill_fooof_alpha(fooofOut, f, gaPxx, featGA, cfg.spectral.fooof.alpha_band_hz);
-            end
-            spec_logmsg(logf, '[FOOOF] Done. Trials fit: %d', numel(fooofOut.trials));
+            fo = spec_run_fooof_python(aux.f, aux.wholePsdTrialMean, F, cfg.spectral.fooof, outTmp, subjid, logf);
+            summ = spec_merge_structs(summ, fo);
         catch ME
             spec_logmsg(logf, '[WARN] FOOOF failed: %s', ME.message);
-            fooofOut = struct();
         end
-    else
-        spec_logmsg(logf, '[FOOOF] disabled.');
     end
- 
+
     % ---------------------------------------------------------------
-    % 5. LEP per trial + GA
+    % 3. r_cl (MATLAB-only extra): phase at t = 0 vs single-trial ratings
+    % ---------------------------------------------------------------
+    rclTable = table();
+    if doPhase && ~isempty(ratings)
+        try
+            rclTable = spec_compute_rcl_from_phase(aux.phaseT0, ratings, chanLabels, phCfg, logf, P, subjid);
+        catch ME
+            spec_logmsg(logf, '[PHASE][WARN] r_cl failed: %s', ME.message);
+        end
+    end
+
+    % ---------------------------------------------------------------
+    % 4. Write CSVs
+    % ---------------------------------------------------------------
+    spec_write_chan_trial_csv(fullfile(outCSV, sprintf('sub-%03d_spectral_chan_by_trial.csv', subjid)), ...
+        subjid, chanLabels, featChan);
+    spec_write_ga_trial_csv(fullfile(outCSV, sprintf('sub-%03d_spectral_ga_by_trial.csv', subjid)), ...
+        subjid, featGA, struct());
+    spec_write_chan_summary_csv(fullfile(outCSV, sprintf('sub-%03d_spectral_chan_summary.csv', subjid)), ...
+        subjid, chanLabels, summ);
+
+    try
+        tviOut   = spec_compute_tvi_alpha(aux.gaPreSfBalance, logf);
+        gaRclOut = spec_compute_ga_rcl(rclTable, logf);
+        spec_write_subject_summary_csv(fullfile(outCSV, sprintf('sub-%03d_subject_summary.csv', subjid)), ...
+            subjid, tviOut, gaRclOut, logf);
+    catch ME
+        spec_logmsg(logf, '[WARN] Subject summary CSV failed: %s', ME.message);
+    end
+
+    % ---------------------------------------------------------------
+    % 5. LEP waveforms + peak table
     % ---------------------------------------------------------------
     if doLEP
-        spec_logmsg(logf, '[LEP] Extracting Laser Evoked Potentials...');
         try
-            spec_compute_lep(EEG, lepCfg, outLEP, subjid, logf);
+            spec_compute_lep(EEG, timesSec, F, lepCfg, outLEP, subjid, logf);
         catch ME
-            spec_logmsg(logf, '[WARN] LEP computation failed: %s', ME.message);
+            spec_logmsg(logf, '[WARN] LEP save failed: %s', ME.message);
         end
     end
- 
+
     % ---------------------------------------------------------------
-    % 6. Write CSVs
+    % 6. QC figures (best effort; plotting helpers predate V3 names)
     % ---------------------------------------------------------------
-    spec_logmsg(logf, '[CSV] Writing channel-by-trial and GA-by-trial CSVs...');
-    outChanCSV = fullfile(outCSV, sprintf('sub-%03d_spectral_chan_by_trial.csv', subjid));
-    outGaCSV   = fullfile(outCSV, sprintf('sub-%03d_spectral_ga_by_trial.csv',  subjid));
- 
-    spec_write_chan_trial_csv(outChanCSV, subjid, chanLabels, featChan);
-    spec_write_ga_trial_csv(outGaCSV, subjid, featGA, fooofOut);
- 
-    % ---------------------------------------------------------------
-    % 7. Subject-level summary CSV  (TVI_alpha + GA r_cl)
-    %
-    % spec_compute_tvi_alpha  -> tviOut    struct
-    % spec_compute_ga_rcl     -> gaRclOut  struct
-    % ---------------------------------------------------------------
-    if isfield(featGA, 'pre_sf_balance')
-        outSumCSV = fullfile(outCSV, sprintf('sub-%03d_subject_summary.csv', subjid));
+    if isfield(cfg.spectral, 'trial_spectral') && logical(cfg.spectral.trial_spectral.enabled)
         try
-            tviOut   = spec_compute_tvi_alpha(featGA.pre_sf_balance, logf);
-            gaRclOut = spec_compute_ga_rcl(rclTable, logf);
-            spec_write_subject_summary_csv(outSumCSV, subjid, tviOut, gaRclOut, logf);
+            outTrialSpec = fullfile(outRoot, 'trial_spectral');
+            spec_ensure_dir(outTrialSpec);
+            spec_plot_trial_spectral_qc(outTrialSpec, EEG, cfg, subjid, logf);
         catch ME
-            spec_logmsg(logf, '[WARN] Subject summary CSV failed: %s', ME.message);
+            spec_logmsg(logf, '[WARN] Trial-spectral QC failed: %s', ME.message);
         end
     end
- 
-    % ---------------------------------------------------------------
-    % 8. Trial-spectral QC plots (optional)
-    % ---------------------------------------------------------------
-    if isfield(cfg.spectral, 'trial_spectral') && ...
-       isfield(cfg.spectral.trial_spectral, 'enabled') && ...
-       logical(cfg.spectral.trial_spectral.enabled)
- 
-        outTrialSpec = fullfile(outRoot, 'trial_spectral');
-        spec_ensure_dir(outTrialSpec);
-        spec_logmsg(logf, '[TRIALSPEC] Saving pre/post-stim spectral QC plots...');
-        spec_plot_trial_spectral_qc(outTrialSpec, EEG, cfg, subjid, logf);
-    end
- 
-    % ---------------------------------------------------------------
-    % 9. Summary + debug figures
-    % ---------------------------------------------------------------
     try
-        spec_logmsg(logf, '[FIG] Writing summary figures...');
-        outSummaryFig = fullfile(outFig, sprintf('sub-%03d_spectral_summary.png', subjid));
-        spec_plot_summary(outSummaryFig, f, gaPxx, featGA, fooofOut, alpha, cfg, subjid);
- 
-        if isfield(cfg.spectral.qc, 'save_heatmaps') && logical(cfg.spectral.qc.save_heatmaps)
-            % V2: one call produces three separate files:
-            %   sub-NNN_heatmap_prestim.png  (full-epoch + pre-stim metrics)
-            %   sub-NNN_heatmap_poststim.png (ERD metrics)
-            %   sub-NNN_heatmap_phase.png    (phase heatmap + rose)
+        spec_plot_summary(fullfile(outFig, sprintf('sub-%03d_spectral_summary.png', subjid)), ...
+            aux.f, aux.gaWholePsd, featGA, struct(), cfg.spectral.alpha, cfg, subjid);
+        if logical(cfg.spectral.qc.save_heatmaps)
             spec_plot_heatmap_panel(outFig, featChan, chanLabels, subjid);
         end
- 
-        if isfield(featGA, 'pre_sf_balance')
-            outInteractFig = fullfile(outFig, sprintf('sub-%03d_interaction_summary.png', subjid));
-            spec_plot_interaction_summary(outInteractFig, featChan, featGA, chanLabels, subjid, logf);
-        end
- 
+        spec_plot_interaction_summary(fullfile(outFig, sprintf('sub-%03d_interaction_summary.png', subjid)), ...
+            featChan, featGA, chanLabels, subjid, logf);
         if plotMode == "debug" || plotMode == "exhaustive"
-            spec_logmsg(logf, '[FIG] Debug mode: per-trial plots...');
-            spec_plot_debug_trials(outFig, f, Pxx, featChan, chanLabels, alpha, cfg, subjid, plotMode);
+            spec_plot_debug_trials(outFig, aux.f, aux.wholePsd, featChan, chanLabels, cfg.spectral.alpha, cfg, subjid, plotMode);
         end
     catch ME
-        spec_logmsg(logf, '[WARN] Plotting failed: %s', ME.message);
+        spec_logmsg(logf, '[WARN] Plotting failed (cosmetic): %s', ME.message);
     end
- 
-    spec_logmsg(logf, '===== SPECTRAL V2 DONE sub-%03d =====', subjid);
+
+    spec_logmsg(logf, '===== SPECTRAL V3 DONE sub-%03d =====', subjid);
 end
 end

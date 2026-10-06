@@ -1,6 +1,12 @@
 function [EEGtrain, segInfo] = make_ica_training_copy(EEG, cfg, logf)
+% MAKE_ICA_TRAINING_COPY  Optionally remove high-amplitude segments before ICA
+% V 1.0.1
+%
+% V1.0.1: segInfo field typo 'rempoved' -> 'removed' (the field is now
+% always present; preproc_core reads segInfo.removed).
+
 EEGtrain = EEG;
-segInfo = struct('rempoved', false, 'n_intervals', 0, 'pct_time', 0, 'intervals', []);
+segInfo = struct('removed', false, 'n_intervals', 0, 'pct_time', 0, 'intervals', []);
 
 if ~isfield(cfg, 'preproc') || ~isfield(cfg.preproc, 'initrej') || ~isfield(cfg.preproc.initrej, 'badseg') || ~cfg.preproc.initrej.badseg.enabled
     logmsg(logf, '[ICA-TRAIN] badseg disabled; using full data.');

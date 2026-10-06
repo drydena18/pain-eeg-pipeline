@@ -1,29 +1,30 @@
 """
 src_erd.py - ERD family (fractional pre -> post change) + p5_flag QC gate.
-V 2.0.0
+V 3.1.0
 
-Python counterpart to spec_compute_interaction_metrics.m V2.1.0. This
-module now owns ONLY the fractional (ERD-style) pre -> post change, which is
-NOT produced generically by src_compute_metric_deltas.py because it is not
-meaningful for bounded/ratio metrics (sf_balance, sf_logratio, psi_cog...).
+MATLAB twin: spec_noise_stats.m + spec_erd_metrics.m. This module owns ONLY
+the fractional (ERD-style) pre -> post change, which is not produced
+generically by src_compute_metric_deltas.py because it is not meaningful for
+bounded/ratio metrics (sf_balance, sf_logratio, psi_cog, ...).
 
-Behaviour matches MATLAB; always computes a numeric ERD value using
-an epsilon floor on the denominator (never NaN due to low pre-stim power),
-and flags low-power trials separately via p5_flag rather than dropping the
-value.
+ERD is always numeric: the denominator carries a floor eps0, and low-power
+trials are flagged via p5_flag rather than dropped.
 
-V2.0.0 changes vs V1.x:
-    - src_compute_noise_stats no longer computes its own Welch PSDs. The
-      5th-percentile thresholds now come from the pre-stimulus slow/fast
-      powers already in pre_rows (filter-Hilbert, see src_alpha_features.py),
-      so the p5_flag threshold and the value it is compared against use the
-      same estimator.
-    - The 45-55 Hz "quiet band" noise floor is now a filter-Hilbert power
-      passed in by the caller, divided by the band width so it is a
-      density (per Hz) like MATLAB's compute_noise_floor. V1.x read it from
-      a PSD cropped at fmax = 40 Hz, so the quiet band was never present and
-      the fallback was always used.
-    - Fixed np.asaray / queit_vals typos.
+Per-unit statistics (identical in both pipelines; unit = ROI here, channel
+in MATLAB), pooled across trials within the unit:
+    eps0     = eps0_frac * median(pre-stim slow and fast power), >= 1e-12
+    thr_slow = p-th percentile of pre-stim slow power  (numpy 'linear')
+    thr_fast = p-th percentile of pre-stim fast power
+    p5_flag  = pre slow < thr_slow  OR  pre fast < thr_fast
+
+V3.1.0: delta_erd renamed erd_asym (= erd_slow - erd_fast). The delta_
+prefix is reserved for post - pre change scores.
+
+V3.0.0 changes vs V2.0.0:
+    - REMOVED the 45-55 Hz quiet-band noise floor. The preprocessing
+      low-pass is 40 Hz, so that band only measured filter stopband residue.
+      eps0 is now a data-relative guard (eps0_frac x median pre-stim power).
+    - Percentile is configurable (p5_percentile, default 5).
 """
 
 from __future__ import annotations
@@ -32,55 +33,40 @@ import numpy as np
 
 _EPS0 = 1e-12
 
+
 # ==================================================================
-# NOISE-FLOOR / 5TH-PERCENTILE THRESHOLDS (per ROI, pooled across trials)
+# PER-UNIT NOISE FLOOR / PERCENTILE THRESHOLDS
 # ==================================================================
 def src_compute_noise_stats(
         pre_rows: list[dict],
-        quiet_pow_pre: np.ndarray | None,
-        quiet_band: tuple[float, float] = (45.0, 55.0),
+        eps0_frac: float = 1e-3,
+        p_pct: float = 5.0,
 ) -> dict:
     """
-    Per-ROI noise floor (eps0) and 5th-percentile pre-stim power thresholds
-    for the ERD denominator guard / p5_flag, pooled across trials within
-    each ROI.
-
-    To match MATLAB's literal pooling-across-channels convention instead,
-    pool slow/fast/quiet values across ALL ROIs before taking
-    percentiles/median, and use the same eps0/thresholds for every ROI.
+    Per-ROI eps0 and percentile thresholds from the pre-window trial rows.
 
     Args:
-        pre_rows      : unprefixed pre-window rows from
-                        src_compute_window_alpha_features (need roi_idx,
-                        pow_slow_alpha, pow_fast_alpha)
-        quiet_pow_pre : (n_epochs, n_rois) mean filter-Hilbert power in the
-                        quiet band over the pre window, or None to skip
-        quiet_band    : (lo, hi) of the quiet band in Hz (for the density)
+        pre_rows  : unprefixed pre-window rows (roi_idx, pow_slow_alpha,
+                    pow_fast_alpha)
+        eps0_frac : eps0 as a fraction of the median pre-stim power
+        p_pct     : percentile for the p5_flag thresholds
 
     Returns:
-        Dict roi_idx -> {"eps0": float, "thr_slow": float, "thr_fast": float}
+        Dict roi_idx -> {"eps0", "thr_slow", "thr_fast"}
     """
     roi_ids = sorted({r["roi_idx"] for r in pre_rows})
-    bw = float(quiet_band[1] - quiet_band[0])
     stats: dict = {}
 
     for ri in roi_ids:
         slow_arr = np.asarray([r["pow_slow_alpha"] for r in pre_rows if r["roi_idx"] == ri], dtype = float)
         fast_arr = np.asarray([r["pow_fast_alpha"] for r in pre_rows if r["roi_idx"] == ri], dtype = float)
 
-        thr_slow = float(np.nanpercentile(slow_arr, 5)) if np.any(~np.isnan(slow_arr)) else float("nan")
-        thr_fast = float(np.nanpercentile(fast_arr, 5)) if np.any(~np.isnan(fast_arr)) else float("nan")
+        thr_slow = float(np.nanpercentile(slow_arr, p_pct)) if np.any(~np.isnan(slow_arr)) else float("nan")
+        thr_fast = float(np.nanpercentile(fast_arr, p_pct)) if np.any(~np.isnan(fast_arr)) else float("nan")
 
-        eps0 = float("nan")
-        if quiet_pow_pre is not None and bw > 0:
-            q = np.asarray(quiet_pow_pre[:, ri], dtype = float)
-            if np.any(~np.isnan(q)):
-                eps0 = float(np.nanmedian(q)) / bw
-
-        if not (np.isfinite(eps0) and eps0 > 0):
-            pooled = np.concatenate([slow_arr, fast_arr])
-            pooled = pooled[~np.isnan(pooled)]
-            eps0 = float(np.median(pooled)) * 1e-3 if pooled.size > 0 else _EPS0
+        pooled = np.concatenate([slow_arr, fast_arr])
+        pooled = pooled[~np.isnan(pooled)]
+        eps0 = float(np.median(pooled)) * eps0_frac if pooled.size > 0 else _EPS0
         eps0 = max(eps0, _EPS0)
 
         stats[ri] = {"eps0": eps0, "thr_slow": thr_slow, "thr_fast": thr_fast}
@@ -89,7 +75,7 @@ def src_compute_noise_stats(
 
 
 # ==================================================================
-# PER-TRIAL ERD FAMILY
+# ERD FAMILY
 # ==================================================================
 def src_compute_erd_metrics(
         pre_rows: list[dict],
@@ -99,29 +85,20 @@ def src_compute_erd_metrics(
         use_p5_flag: bool = True,
 ) -> list[dict]:
     """
-    Compute erd_slow, erd_fast, erd_pow_alpha_total, delta_erd, and
-    (optionally) p5_flag from matched pre_/post_ rows.
-
-    Reuses pow_slow_alpha/pow_fast_alpha/pow_alpha_total already computed
-    by src_compute_window_alpha_features rather than recomputing PSDs a
-    third time.
+    erd_slow, erd_fast, erd_pow_alpha_total, erd_asym and (optionally)
+    p5_flag from matched unprefixed pre/post rows.
 
     Args:
-        pre_rows, post_rows : unprefixed rows from src_alpha_features.py
-                              (must contain pow_slow_alpha, pow_fast_alpha,
-                              pow_alpha_total, and key_cols)
-        noise_stats : from src_compute_noise_stats(), roi_idx -> stats
-        key_cols : fields to match rows on
-        use_p5_flag : if False, skips the percentile-threshold
-                      flag entirely (used for the GA path, where
-                      the percentile of a single value is
-                      degenerate - matches
-                      spec_compute_interaction_metrics.m's GA
-                      behaviour of using only an epsilon guard)
-    
+        pre_rows, post_rows : rows with pow_slow_alpha, pow_fast_alpha,
+                              pow_alpha_total and key_cols
+        noise_stats         : from src_compute_noise_stats()
+        key_cols            : fields to match rows on
+        use_p5_flag         : False for the subject-level (GA) rows, where a
+                              percentile of one value is degenerate
+
     Returns:
         List of dicts: key_cols + erd_slow, erd_fast, erd_pow_alpha_total,
-        delta_erd, p5_flag (p5_flag omitted if use_p5_flag = False)
+        erd_asym [, p5_flag]
     """
     pre_by_key = {tuple(r[k] for k in key_cols): r for r in pre_rows}
 
@@ -132,37 +109,31 @@ def src_compute_erd_metrics(
         if pre_row is None:
             continue
 
-        ri = post_row["roi_idx"]
-        st = noise_stats.get(ri, {"eps0": _EPS0, "thr_slow": float("nan"), "thr_fast": float("nan")})
+        st = noise_stats.get(post_row["roi_idx"],
+                             {"eps0": _EPS0, "thr_slow": float("nan"), "thr_fast": float("nan")})
         eps0 = st["eps0"]
 
-        pow_pre_slow = pre_row["pow_slow_alpha"]
-        pow_pre_fast = pre_row["pow_fast_alpha"]
-        pow_pre_alpha = pre_row["pow_alpha_total"]
-        pow_post_slow = post_row["pow_slow_alpha"]
-        pow_post_fast = post_row["pow_fast_alpha"]
-        pow_post_alpha = post_row["pow_alpha_total"]
+        ps0, pf0, pa0 = pre_row["pow_slow_alpha"], pre_row["pow_fast_alpha"], pre_row["pow_alpha_total"]
+        ps1, pf1, pa1 = post_row["pow_slow_alpha"], post_row["pow_fast_alpha"], post_row["pow_alpha_total"]
 
-        erd_slow = (pow_post_slow - pow_pre_slow) / (pow_pre_slow + eps0)
-        erd_fast = (pow_post_fast - pow_pre_fast) / (pow_pre_fast + eps0)
-        erd_pow_alpha_total = (pow_post_alpha - pow_pre_alpha) / (pow_pre_alpha + eps0)
-        delta_erd = erd_slow - erd_fast
+        erd_slow = (ps1 - ps0) / (ps0 + eps0)
+        erd_fast = (pf1 - pf0) / (pf0 + eps0)
+        erd_alpha = (pa1 - pa0) / (pa0 + eps0)
 
         row = {k: post_row[k] for k in key_cols}
         row.update({
             "erd_slow": float(erd_slow),
             "erd_fast": float(erd_fast),
-            "erd_pow_alpha_total": float(erd_pow_alpha_total),
-            "delta_erd": float(delta_erd),
+            "erd_pow_alpha_total": float(erd_alpha),
+            "erd_asym": float(erd_slow - erd_fast),
         })
 
         if use_p5_flag:
             thr_slow, thr_fast = st["thr_slow"], st["thr_fast"]
             flagged = (
-                (not np.isnan(pow_pre_slow) and not np.isnan(thr_slow) and pow_pre_slow < thr_slow)
-                or (not np.isnan(pow_pre_fast) and not np.isnan(thr_fast) and pow_pre_fast < thr_fast)
-                    )
-            
+                (not np.isnan(ps0) and not np.isnan(thr_slow) and ps0 < thr_slow)
+                or (not np.isnan(pf0) and not np.isnan(thr_fast) and pf0 < thr_fast)
+            )
             row["p5_flag"] = int(flagged)
 
         rows.append(row)

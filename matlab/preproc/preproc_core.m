@@ -1,6 +1,20 @@
 function preproc_core(P, cfg)
 % PREPROC_CORE Execute preprocessing according to cfg (from JSON)
-% V 2.1.0
+% V 2.2.0
+%
+% V2.2.0 (bug fixes only; processing steps and parameters unchanged):
+%   - Epoch metadata: the event-map lookup was inverted (matched epochs got
+%     condition/intensity = "unknown" and unmatched ones indexed an empty
+%     result). It now maps correctly, and uses the TIME-LOCKING event of
+%     each epoch (latency 0) instead of eventtype{1}, which can be an
+%     earlier event inside the epoch window.
+%   - Event map is stored at EEG.etc.epoch.event_map (was EEG.etc.event).
+%   - check_standard_chan_labels() after import/montage/lookup: stops with a
+%     clear message if raw BioSemi A1-B32 or EXG labels reach channel lookup
+%     (guards exp07, which runs with montage disabled).
+%   - Single-session load passes logf to load_raw_eeg.
+%   - Stage 09 warning used three format arguments for one specifier;
+%     'sud-' typo in the channel-label context string.
 %
 % V2.1.0 adds Stage 00 — multi-session EEG concatenation.
 %   When cfg.preproc.concat.enabled = true, all session raw files for the
@@ -66,7 +80,7 @@ for i = 1:numel(subs)
     ST.ICA      = fullfile(subRoot, '06_ica');
     ST.EPOCH    = fullfile(subRoot, '07_epoch');
     ST.BASE     = fullfile(subRoot, '08_base');
-    
+
     LOGS = fullfile(subRoot, 'LOGS');
     QC   = fullfile(subRoot, 'QC');
 
@@ -212,7 +226,7 @@ for i = 1:numel(subs)
 
         logmsg(logf, 'RawPath class = %s | isstring = %d', class(rawPath), isstring(rawPath));
 
-        EEG = load_raw_eeg(rawPath);
+        EEG = load_raw_eeg(rawPath, logf);
         EEG = eeg_checkset(EEG);
         EEG = normalize_chan_labels(EEG);
 
@@ -242,6 +256,14 @@ for i = 1:numel(subs)
                 logmsg(logf, '[WARN] ELP file missing: %s', elpPath);
             end
         end
+    end
+
+    % Guard: no raw BioSemi / auxiliary labels past this point
+    try
+        check_standard_chan_labels(EEG, logf, sprintf('sub-%03d:', subjid));
+    catch ME
+        logmsg(logf, '[ERROR] %s -- skipping subject.', ME.message);
+        continue;
     end
 
     % Deterministic seed per subject (reproducible ICA)
@@ -450,7 +472,7 @@ for i = 1:numel(subs)
             EEG.icasphere = EEGtrain.icasphere;
             EEG.icawinv = EEGtrain.icawinv;
             EEG.icachansind = EEGtrain.icachansind;
-            
+
             savedChanlocs = EEG.chanlocs;
             EEG = eeg_checkset(EEG, 'ica');
             if isempty(EEG.chanlocs) && ~isempty(savedChanlocs)
@@ -467,7 +489,7 @@ for i = 1:numel(subs)
             pctTime = NaN;
             if isfield(segInfo, 'n_intervals'); nIntervals = segInfo.n_intervals; end
             if isfield(segInfo, 'pct_time'); pctTime = segInfo.pct_time; end
-            
+
             logmsg(logf, '[ICA] Trained on %s. badseg_removed = %d intervals = %g pct = %.2f', trainedOn, logical(isfield(segInfo, 'removed') && segInfo.removed), nIntervals, pctTime);
 
             tags{end+1} = nextTag;
@@ -520,7 +542,7 @@ for i = 1:numel(subs)
                             s0 = ME.stack(1);
                             logmsg(logf, '[WARN] Top stack frame: %s (line %d) | func = %s', s0.file, s0.line, s0.name);
                         end
-                        
+
                     end
 
                     % Topomap grid of the first N ICs (config-gated)
@@ -569,7 +591,7 @@ for i = 1:numel(subs)
 
                     if ~isempty(ME.stack)
                         s0 = ME.stack(1);
-                        logmsg(logf, '[WARN] Top stack frame: %s (lind %d) | func = %s', s0.file, s0.line, s0.name);
+                        logmsg(logf, '[WARN] Top stack frame: %s (line %d) | func = %s', s0.file, s0.line, s0.name);
                     end
                 end
             else
@@ -657,12 +679,16 @@ for i = 1:numel(subs)
             end
 
             EEG.etc.epoch = struct();
-            EEG.etc.event.event_map = eventMap;
+            EEG.etc.epoch.event_map = eventMap;
             EEG.etc.epoch.tmin_sec = tmin;
             EEG.etc.epoch.tmax_sec = tmax;
 
             % ----------------------------------------------
             % Per epoch metadata extraction
+            %
+            % The epoch's label comes from its TIME-LOCKING event (latency
+            % 0 ms) among the requested codes; eventtype{1} can be an earlier
+            % event that merely falls inside the epoch window.
             % ----------------------------------------------
             nEp = EEG.trials;
             epoch_index = (1:nEp)';
@@ -673,21 +699,32 @@ for i = 1:numel(subs)
             for ep = 1:nEp
                 epochEventType = "";
 
-                % EEGLAB stores per-epoch event types in EEG.epoch(ep).eventtype
                 if isfield(EEG, 'epoch') && numel(EEG.epoch) >= ep && isfield(EEG.epoch(ep), 'eventtype')
                     et = EEG.epoch(ep).eventtype;
-
-                    if iscell(et)
-                        epochEventType = string(et{1});
-                    else
-                        epochEventType = string(et);
+                    if ~iscell(et), et = {et}; end
+                    etStr = strings(1, numel(et));
+                    for q = 1:numel(et)
+                        etStr(q) = string(et{q});
                     end
+
+                    pick = 1;
+                    if isfield(EEG.epoch(ep), 'eventlatency') && ~isempty(EEG.epoch(ep).eventlatency)
+                        lat = EEG.epoch(ep).eventlatency;
+                        if ~iscell(lat), lat = num2cell(lat); end
+                        latv = cellfun(@(v) double(v(1)), lat);
+                        cand = find(abs(latv) < 1e-6 & ismember(etStr, eventMap.code), 1);
+                        if isempty(cand)
+                            [~, cand] = min(abs(latv));
+                        end
+                        pick = cand;
+                    end
+                    epochEventType = etStr(pick);
                 end
 
                 event_code(ep) = epochEventType;
 
                 idx = find(eventMap.code == epochEventType, 1, 'first');
-                if ~isempty(idx)
+                if isempty(idx)
                     condition(ep) = "unknown";
                     intensity(ep) = "unknown";
                 else
@@ -698,6 +735,11 @@ for i = 1:numel(subs)
 
             epochMeta = table(epoch_index, event_code, condition, intensity);
             EEG.etc.epoch.epoch_metadata = epochMeta;
+
+            nUnknown = sum(condition == "unknown");
+            if nUnknown > 0
+                logmsg(logf, '[EPOCH][WARN] %d / %d epochs could not be mapped to a configured event code.', nUnknown, nEp);
+            end
 
             % ----------------------------------------------
             % Save sidecar CSV for downstream joins
@@ -737,18 +779,14 @@ for i = 1:numel(subs)
     % --------------------------------------------------
     % Gate: cfg.preproc.hilbert.enabled (default false; set in JSON)
     %
-    % Why here and not in a standalone script:
-    %   - cfg.exp.subjects is already resolved by preproc_default, so
-    %     subjects_override works automatically with no extra plumbing
-    %   - EEG is still in memory from stage 08_base, avoiding a reload
-    %   - Resume logic mirrors all other stages: if the .mat already
-    %     exists this block is skipped entirely on reruns
+    % Note (V2.2.0): spectral_core V3 no longer reads this output; it
+    % computes phase with the FIR shared with the source pipeline. Stage 09
+    % is kept unchanged as part of the preprocessing baseline.
     %
     % slow_hz resolution order:
-    %   1. cfg.spectral.alpha.slow_hz (preferred; keeps spectral config
-    %      as the single source of truth for alpha bands)
-    %   2. cfg.preproc.hilbert.slow_hz (fallback; useful when spectral
-    %      block is absent from the JSON, default [8 10])
+    %   1. cfg.features.bands.slow_hz (shared feature block)
+    %   2. cfg.spectral.alpha.slow_hz (legacy configs)
+    %   3. cfg.preproc.hilbert.slow_hz (fallback, default [8 10])
     if isfield(cfg.preproc, 'hilbert') && isfield(cfg.preproc.hilbert, 'enabled') && ...
         logical(cfg.preproc.hilbert.enabled)
 
@@ -764,16 +802,19 @@ for i = 1:numel(subs)
         else
             % Verify EEG is epoched; stage 09 requires trial dimension
             if EEG.trials <= 1
-                logmsg(logf, '[HILBERT][WARN] EEG is not epoched (trials = %d).', ...
-                    'Stage 09 requires epochs. Ensure epoch + baseline stages ran before Hilbert.', ...
+                logmsg(logf, ['[HILBERT][WARN] EEG is not epoched (trials = %d). ', ...
+                    'Stage 09 requires epochs. Ensure epoch + baseline stages ran before Hilbert.'], ...
                     EEG.trials);
             else
                 % Resolve slow_hz
                 slowHz = [8 10]; % ultimate fallback
-                if isfield(cfg, 'spectral') && isfield(cfg.spectral, 'alpha') && ...
+                if isfield(cfg, 'features') && isfield(cfg.features, 'bands') && ...
+                    isfield(cfg.features.bands, 'slow_hz')
+                    slowHz = double(cfg.features.bands.slow_hz(:)');
+                elseif isfield(cfg, 'spectral') && isfield(cfg.spectral, 'alpha') && ...
                     isfield(cfg.spectral.alpha, 'slow_hz')
                     slowHz = cfg.spectral.alpha.slow_hz;
-                elseif isfield(cfg.preproc.hilbert, 'slow_hz') && ... 
+                elseif isfield(cfg.preproc.hilbert, 'slow_hz') && ...
                     ~isempty(cfg.preproc.hilbert.slow_hz)
                     slowHz = cfg.preproc.hilbert.slow_hz;
                 end
@@ -797,7 +838,7 @@ for i = 1:numel(subs)
                    EEGfilt = eeg_checkset(EEGfilt);
                 catch ME
                     logmsg(logf, '[HILBERT][WARN] FIR bandpass failed: %s (skipping stage 09)', ME.message);
-                    EEGfilt = []; 
+                    EEGfilt = [];
                 end
 
                 if ~isempty(EEGfilt)
@@ -817,8 +858,7 @@ for i = 1:numel(subs)
                     phase_slow = phaseSlow;
                     t_ms = EEG.times;
                     stimOnsetIdx = t0idx;
-                    nChan = EEG.nbchan; nTr = EEG.trials; nTime = EEG.pnts;
-                    chan_labels = get_chan_labels(EEG, sprintf('sud-%03d stage09', subjid));
+                    chan_labels = get_chan_labels(EEG, sprintf('sub-%03d stage09', subjid));
                     slow_hz = slowHz;
                     subjid_save = subjid;
 

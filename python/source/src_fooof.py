@@ -1,29 +1,33 @@
 """
-src_fooof.py - FOOOF (Fitting Oscillations & One-Over-F) helpers
+src_fooof.py - FOOOF / specparam aperiodic decomposition.
+V 3.0.0
 
-Uses either the 'specparam' package (v2+, new name) or the legacy 'fooof'
-package transparently. An ImportError at module load is deferred rather than
-fatal: functions check FOOOF availability and raise clearly at call time.
+ONE implementation used by both pipelines:
+    - source:   src_compute_fooof_ga() on the subject x ROI trial-mean PSD
+    - spectral: python/spectral/fooof_bridge.py imports src_fit_fooof() and
+                fits the subject x channel trial-mean PSD sent from MATLAB
 
-specparam 2.0 API note
------------------------
-specparam 2.0 renamed the get_params component strings:
-    old (fooof / specparam 1.x)  -> new (specparam 2.x)
-    "aperiodic_params"           -> "aperiodic"
-    "peak_params"                -> "periodic"
+Works with specparam 2.x (SpectralModel), specparam 1.x and legacy fooof.
 
-Both are tried in order so the same code works with either package version.
+Outputs per fit
+---------------
+    fooof_offset, fooof_exponent, fooof_knee (NaN in 'fixed' mode)
+    fooof_r2, fooof_error
+    fooof_alpha_cf, fooof_alpha_pw, fooof_alpha_bw
+        strongest peak (by power) with CF inside alpha_band; NaN if none
 
-Covers:
-    - Single PSD fit with aperiodic parameter and alpha peak extraction
-    - Batch GA fit over all ROIs
+V3.0.0 changes vs V2.x:
+    - Alpha band is a parameter (was hard-coded 8-12 Hz).
+    - Adds fooof_r2 and fooof_error (needed for fit-quality filtering, and
+      present in the MATLAB outputs).
+    - src_fit_fooof_rows(): batch fit of an (n_rows, n_freqs) matrix, used by
+      the MATLAB bridge.
 """
 
 from __future__ import annotations
 
 import numpy as np
 
-# -- specparam / fooof compatibility shim ─────────────────────────────────────
 try:
     from specparam import SpectralModel as FOOOF
     _FOOOF_PKG = "specparam"
@@ -35,102 +39,82 @@ except ImportError:
         FOOOF = None
         _FOOOF_PKG = None
 
+FOOOF_NAMES = (
+    "fooof_offset", "fooof_exponent", "fooof_knee", "fooof_r2", "fooof_error",
+    "fooof_alpha_cf", "fooof_alpha_pw", "fooof_alpha_bw",
+)
+
+
 def fooof_available() -> bool:
-    """Return True if either specparam or fooof is importable."""
     return FOOOF is not None
 
+
 def fooof_package_name() -> str:
-    """Return the name of the installed package, or 'unavailable'."""
     return _FOOOF_PKG if _FOOOF_PKG is not None else "unavailable"
 
 
-# =============================================================================
-# API-VERSION-SAFE GET_PARAMS HELPERS
-# =============================================================================
+def _nan_metrics() -> dict:
+    return {k: float("nan") for k in FOOOF_NAMES}
 
-def _get_aperiodic(fm) -> np.ndarray:
-    """
-    Return the aperiodic parameter array from a fitted FOOOF/SpectralModel.
 
-    Tries specparam 2.x key ("aperiodic") first, then falls back to the
-    fooof / specparam 1.x key ("aperiodic_params").
-    """
-    for key in ("aperiodic", "aperiodic_params"):
+# =============================================================================
+# VERSION-SAFE ACCESSORS
+# =============================================================================
+def _get_params(fm, keys: tuple[str, ...]):
+    for key in keys:
         try:
             result = fm.get_params(key)
             if result is not None:
-                return np.atleast_1d(result)
-        except (AttributeError, TypeError, KeyError):
+                return result
+        except (AttributeError, TypeError, KeyError, IndexError, ValueError):
             continue
-    raise RuntimeError(
-        "Could not retrieve aperiodic parameters from the fitted model. "
-        "Neither 'aperiodic' nor 'aperiodic_params' succeeded."
-    )
+    return None
+
+
+def _get_aperiodic(fm) -> np.ndarray:
+    ap = _get_params(fm, ("aperiodic", "aperiodic_params"))
+    if ap is None:
+        raise RuntimeError("Could not retrieve aperiodic parameters from the fitted model.")
+    return np.atleast_1d(ap)
 
 
 def _get_peaks(fm) -> np.ndarray:
-    """
-    Return the peak parameter array from a fitted FOOOF/SpectralModel.
+    pk = _get_params(fm, ("periodic", "peak_params"))
+    if pk is None:
+        return np.empty((0, 3))
+    arr = np.atleast_2d(np.asarray(pk, dtype = float))
+    return arr if arr.ndim == 2 and arr.shape[1] == 3 and np.all(np.isfinite(arr)) else np.empty((0, 3))
 
-    Each row is [CF, PW, BW]. Returns an empty (0, 3) array if no peaks
-    were fitted or if retrieval fails.
 
-    Tries specparam 2.x key ("periodic") first, then the legacy key
-    ("peak_params").
-    """
-    for key in ("periodic", "peak_params"):
-        try:
-            result = fm.get_params(key)
-            if result is not None:
-                arr = np.atleast_2d(result)
-                if arr.shape[1] == 3:
-                    return arr
-        except (AttributeError, TypeError, KeyError, IndexError):
-            continue
-    return np.empty((0, 3))  # no peaks
+def _get_r2_error(fm) -> tuple[float, float]:
+    r2 = getattr(fm, "r_squared_", None)
+    err = getattr(fm, "error_", None)
+    if r2 is not None and err is not None:
+        return float(r2), float(err)
+    try:                                      # specparam 2.x
+        res = fm.results.metrics.results
+        r2 = next((v for k, v in res.items() if "rsquared" in k), np.nan)
+        err = next((v for k, v in res.items() if k.startswith("error")), np.nan)
+        return float(r2), float(err)
+    except Exception:
+        return float("nan"), float("nan")
 
 
 # =============================================================================
 # SINGLE PSD FIT
 # =============================================================================
-
-def src_fit_fooof(
-        freqs: np.ndarray,
-        psd: np.ndarray,
-        fooof_cfg: dict,
-) -> tuple[dict, object]:
+def src_fit_fooof(freqs: np.ndarray, psd: np.ndarray, fooof_cfg: dict,
+                  alpha_band: tuple[float, float] = (8.0, 12.0)) -> tuple[dict, object]:
     """
-    Fit a FOOOF/SpectralModel to a single PSD vector and extract aperiodic
-    parameters plus the dominant alpha-band peak.
+    Fit one PSD and return (metrics, fitted_model).
 
-    Args:
-        freqs     : Frequency axis, shape (n_freqs,).
-        psd       : Power spectral density values, shape (n_freqs,).
-        fooof_cfg : Dict with keys:
-                        aperiodic_mode     : "fixed" or "knee"
-                        peak_width_limits  : [min, max] in Hz
-                        max_n_peaks        : int
-                        min_peak_height    : float
-                        peak_threshold     : float
-                        freq_range         : [fmin, fmax] for fitting
-
-    Returns:
-        metrics : Dict with keys:
-                      fooof_offset, fooof_exponent, fooof_knee  (aperiodic)
-                      fooof_alpha_cf, fooof_alpha_pw, fooof_alpha_bw  (peak)
-        fm      : Fitted model object (for plotting).
-
-    Raises:
-        RuntimeError if neither specparam nor fooof is installed.
+    fooof_cfg keys: aperiodic_mode, peak_width_limits, max_n_peaks,
+                    min_peak_height, peak_threshold, freq_range
     """
     if FOOOF is None:
-        raise RuntimeError(
-            "FOOOF fitting requested but neither 'specparam' nor 'fooof' is installed.\n"
-            "Install with: pip install specparam"
-        )
+        raise RuntimeError("Neither 'specparam' nor 'fooof' is installed (pip install specparam).")
 
-    mode = fooof_cfg.get("aperiodic_mode", "fixed")
-
+    mode = str(fooof_cfg.get("aperiodic_mode", "fixed"))
     fm = FOOOF(
         aperiodic_mode    = mode,
         peak_width_limits = tuple(fooof_cfg.get("peak_width_limits", [1.0, 12.0])),
@@ -139,97 +123,65 @@ def src_fit_fooof(
         peak_threshold    = float(fooof_cfg.get("peak_threshold", 2.0)),
         verbose           = False,
     )
-    freq_range = fooof_cfg.get("freq_range", [1.0, 40.0])
-    fm.fit(freqs, psd, freq_range)
+    fm.fit(np.asarray(freqs, dtype = float), np.asarray(psd, dtype = float),
+           list(fooof_cfg.get("freq_range", [1.0, 40.0])))
 
-    # -- Aperiodic parameters ─────────────────────────────────────────────────
+    metrics = _nan_metrics()
     ap = _get_aperiodic(fm)
-    metrics: dict = {}
-
-    if mode == "fixed":
-        # ap = [offset, exponent]
-        metrics["fooof_offset"]   = float(ap[0])
-        metrics["fooof_exponent"] = float(ap[1])
-        metrics["fooof_knee"]     = float("nan")
-    else:
-        # ap = [offset, knee, exponent]
-        metrics["fooof_offset"]   = float(ap[0])
-        metrics["fooof_knee"]     = float(ap[1])
+    metrics["fooof_offset"] = float(ap[0])
+    if mode == "knee" and ap.size >= 3:
+        metrics["fooof_knee"] = float(ap[1])
         metrics["fooof_exponent"] = float(ap[2])
+    elif ap.size >= 2:
+        metrics["fooof_exponent"] = float(ap[1])
 
-    # -- Alpha peak extraction ─────────────────────────────────────────────────
-    # Pick the strongest peak whose centre frequency (CF) falls in [8, 12] Hz.
-    try:
-        peaks = _get_peaks(fm)
-        alpha_peaks = [
-            (cf, pw, bw) for cf, pw, bw in peaks
-            if 8.0 <= cf <= 12.0
-        ]
-        if alpha_peaks:
-            alpha_peaks.sort(key=lambda t: t[1], reverse=True)
-            cf, pw, bw = alpha_peaks[0]
-            metrics["fooof_alpha_cf"] = float(cf)
-            metrics["fooof_alpha_pw"] = float(pw)
-            metrics["fooof_alpha_bw"] = float(bw)
-        else:
-            metrics["fooof_alpha_cf"] = float("nan")
-            metrics["fooof_alpha_pw"] = float("nan")
-            metrics["fooof_alpha_bw"] = float("nan")
-    except Exception:
-        metrics["fooof_alpha_cf"] = float("nan")
-        metrics["fooof_alpha_pw"] = float("nan")
-        metrics["fooof_alpha_bw"] = float("nan")
+    metrics["fooof_r2"], metrics["fooof_error"] = _get_r2_error(fm)
+
+    peaks = _get_peaks(fm)
+    in_band = peaks[(peaks[:, 0] >= alpha_band[0]) & (peaks[:, 0] <= alpha_band[1])] if peaks.size else peaks
+    if in_band.size:
+        cf, pw, bw = in_band[int(np.argmax(in_band[:, 1]))]
+        metrics["fooof_alpha_cf"], metrics["fooof_alpha_pw"], metrics["fooof_alpha_bw"] = float(cf), float(pw), float(bw)
 
     return metrics, fm
 
 
-# =============================================================================
-# BATCH GA FIT OVER ALL ROIs
-# =============================================================================
+def src_fit_fooof_rows(freqs: np.ndarray, psd_rows: np.ndarray, fooof_cfg: dict,
+                       alpha_band: tuple[float, float] = (8.0, 12.0)) -> list[dict]:
+    """Fit every row of an (n_rows, n_freqs) matrix; failures -> NaN + fail_reason."""
+    out: list[dict] = []
+    for i, psd in enumerate(np.atleast_2d(psd_rows)):
+        try:
+            metrics, _ = src_fit_fooof(freqs, psd, fooof_cfg, alpha_band)
+        except Exception as e:
+            metrics = _nan_metrics()
+            metrics["fail_reason"] = str(e)
+        metrics["row"] = i + 1
+        out.append(metrics)
+    return out
 
-def src_compute_fooof_ga(
-        psd_by_roi_idx: dict,
-        n_rois: int,
-        sub: int,
-        fooof_cfg: dict,
-) -> tuple[list[dict], dict]:
+
+# =============================================================================
+# BATCH SUBJECT x ROI FIT (source pipeline)
+# =============================================================================
+def src_compute_fooof_ga(psd_by_roi_idx: dict, n_rois: int, sub: int, fooof_cfg: dict,
+                         alpha_band: tuple[float, float] = (8.0, 12.0)) -> tuple[list[dict], dict]:
     """
-    Run FOOOF/SpectralModel on the grand-average PSD for each ROI.
-
-    Individual ROI failures are caught and logged as NaN rows rather than
-    aborting the entire subject.
-
-    Args:
-        psd_by_roi_idx  : Dict mapping roi_idx (int) -> (freqs, psd).
-        n_rois          : Total number of ROIs (used to iterate in order).
-        sub             : Subject ID (written into output rows).
-        fooof_cfg       : FOOOF config dict (see src_fit_fooof).
+    Fit the subject x ROI trial-mean PSD for every ROI.
 
     Returns:
-        fooof_rows : List of dicts (one per ROI) for the FOOOF GA CSV.
-        fm_by_roi  : Dict mapping roi_idx -> fitted model (for plotting).
+        fooof_rows : one dict per ROI {roi_idx, <FOOOF_NAMES>}
+        fm_by_roi  : roi_idx -> fitted model (for plotting)
     """
-    _nan_metrics = {
-        "fooof_offset":   float("nan"),
-        "fooof_exponent": float("nan"),
-        "fooof_knee":     float("nan"),
-        "fooof_alpha_cf": float("nan"),
-        "fooof_alpha_pw": float("nan"),
-        "fooof_alpha_bw": float("nan"),
-    }
-
     fooof_rows: list[dict] = []
-    fm_by_roi:  dict = {}
-
+    fm_by_roi: dict = {}
     for ri in range(n_rois):
         freqs, psd = psd_by_roi_idx[ri]
         try:
-            metrics, fm = src_fit_fooof(freqs, psd, fooof_cfg)
+            metrics, fm = src_fit_fooof(freqs, psd, fooof_cfg, alpha_band)
             fm_by_roi[ri] = fm
         except Exception as e:
-            print(f"[WARN] FOOOF failed for ROI index {ri}: {e}")
-            metrics = dict(_nan_metrics)
-
-        fooof_rows.append({"subject": sub, "roi_idx": ri, **metrics})
-
+            print(f"[WARN] FOOOF failed for sub-{sub:03d} ROI index {ri}: {e}")
+            metrics = _nan_metrics()
+        fooof_rows.append({"roi_idx": ri, **metrics})
     return fooof_rows, fm_by_roi

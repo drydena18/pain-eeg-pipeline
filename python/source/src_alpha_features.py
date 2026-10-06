@@ -1,44 +1,50 @@
 """
 src_alpha_features.py - Shared per-window alpha feature computation.
-V 2.0.0
+V 3.1.0
 
 Called once per window (whole / pre / post) from source_core.py. The
 caller prefixes the unprefixed output with whole_ / pre_ / post_.
 
-V2.0.0 changes vs V1.x:
-    - Slow, fast and total alpha POWER now come from filter-Hilbert band-power
-      time courses (src_spectral.src_band_power_tc) computed ONCE on the full
-      epoch and averaged inside each window. Previously they were integrated
-      from a 0.5 s Welch PSD whose ~1.95 Hz bins put a single bin inside each
-      2 Hz sub-band, so pow_slow_alpha / pow_fast_alpha were exactly 0.0 and
-      every metric derived from them was 0.0 or NaN.
-    - paf_cog_hz is still a spectral centre of gravity, from a Welch PSD
-      (2 s segments, clipped to the window; zero-padded to 0.25 Hz bins).
-      A two-band power estimate cannot give a centre frequency.
-    - NaN now PROPAGATES through the ratio metrics instead of being coerced
-      to 0.0, so an un-estimable band shows up as NaN, not as a plausible 0.
-    - GRAND AVERAGE (GA) FIX: GA power is now the MEAN OF PER-TRIAL POWERS,
-      and the GA PSD (used for GA paf_cog_hz and FOOOF) is the MEAN OF
-      PER-TRIAL PSDs. V1.x averaged the time courses across trials FIRST and
-      then took the PSD, which measures only the phase-locked (evoked) part
-      of the signal. Ongoing alpha is mostly not phase-locked to the laser,
-      so trial-averaging first cancelled most of it. GA ratio metrics are
-      computed from the GA powers (ratio of means), so they are consistent
-      with the GA powers written next to them.
-    - Trial rows and GA rows are returned by ONE call per window, so each
-      window's PSDs are computed once.
+MATLAB twin: spec_window_alpha_features.m + spec_metrics_from_powers.m.
+The definitions below are the parity contract for every spatial unit
+(channel in MATLAB, ROI here):
+
+    Trial x unit
+        pow_*        mean of the filter-Hilbert power time course in the window
+        paf_cog_hz   centre of gravity of the window's Welch PSD (8-12 Hz)
+        ratios       from the three powers (see _metrics_from_powers)
+
+    Subject x unit ("GA" here, "chan_summary" in MATLAB)
+        pow_*        mean over trials of the trial powers
+        paf_cog_hz   CoG of the mean-over-trials PSD
+        ratios       from the mean powers (ratio of means)
+
+V3.1.0 changes vs V3.0.0:
+    - slow_alpha_frac removed: it equals (1 + sf_balance) / 2 exactly, so it
+      duplicated every balance-index result. 10 feature families remain.
+
+V3.0.0 changes vs V2.0.0:
+    - Window masks use src_window_mask (quarter-sample tolerance), shared
+      with MATLAB so both select the same samples.
+    - Welch PSDs are computed for all trials x ROIs in one vectorised call.
+    - Power scale is now the band-limited variance (see src_spectral V3.0.0).
 """
 
 from __future__ import annotations
 
 import numpy as np
 
-from src_spectral import src_psd_welch, src_band_power_tc
+from src_spectral import src_band_power_tc, src_cog_from_psd, src_psd_welch, src_window_mask
 
 _EPS0 = 1e-12
 
-# Band keys used throughout this module
 _BAND_KEYS = ("slow", "fast", "alpha")
+
+METRIC_NAMES = (
+    "pow_slow_alpha", "pow_fast_alpha", "pow_alpha_total", "paf_cog_hz",
+    "sf_ratio", "sf_logratio", "sf_balance",
+    "rel_slow_alpha", "rel_fast_alpha", "psi_cog",
+)
 
 
 # ===================================================================
@@ -53,14 +59,7 @@ def src_compute_band_power_tcs(
         trans_bw: float = 1.5,
 ) -> dict:
     """
-    Filter-Hilbert power time courses for the slow, fast and total alpha
-    bands on the FULL epoch.
-
-    Args:
-        tc       : (n_epochs, n_rois, n_times) full-epoch source time courses
-        sfreq    : Sampling frequency in Hz
-        alpha, slow, fast : (lo, hi) band bounds in Hz
-        trans_bw : FIR transition bandwidth in Hz (see src_band_power_tc)
+    Filter-Hilbert power time courses on the FULL epoch.
 
     Returns:
         Dict {"slow", "fast", "alpha"} -> (n_epochs, n_rois, n_times) power
@@ -73,44 +72,22 @@ def src_compute_band_power_tcs(
 # METRICS FROM POWERS (vectorised; works on scalars or arrays)
 # ===================================================================
 def _metrics_from_powers(ps, pf, pa, cog) -> dict:
-    """
-    The 10 alpha metrics + psi_cog from slow / fast / total power and CoG.
-    NaN inputs propagate to NaN outputs.
-    """
+    """The 10 alpha feature families (incl. psi_cog). NaN inputs propagate."""
     ps, pf, pa, cog = (np.asarray(v, dtype = float) for v in (ps, pf, pa, cog))
 
-    sf_ratio        = ps / (pf + _EPS0)
-    sf_logratio     = np.log(ps + _EPS0) - np.log(pf + _EPS0)
-    sf_balance      = (ps - pf) / (ps + pf + _EPS0)
-    slow_alpha_frac = ps / (ps + pf + _EPS0)
-    rel_slow_alpha  = ps / (pa + _EPS0)
-    rel_fast_alpha  = pf / (pa + _EPS0)
-    psi_cog         = sf_balance * (cog - 10.0)
-
+    sf_balance = (ps - pf) / (ps + pf + _EPS0)
     return {
         "pow_slow_alpha":  ps,
         "pow_fast_alpha":  pf,
         "pow_alpha_total": pa,
         "paf_cog_hz":      cog,
-        "sf_ratio":        sf_ratio,
-        "sf_logratio":     sf_logratio,
+        "sf_ratio":        ps / (pf + _EPS0),
+        "sf_logratio":     np.log(ps + _EPS0) - np.log(pf + _EPS0),
         "sf_balance":      sf_balance,
-        "slow_alpha_frac": slow_alpha_frac,
-        "rel_slow_alpha":  rel_slow_alpha,
-        "rel_fast_alpha":  rel_fast_alpha,
-        "psi_cog":         psi_cog,
+        "rel_slow_alpha":  ps / (pa + _EPS0),
+        "rel_fast_alpha":  pf / (pa + _EPS0),
+        "psi_cog":         sf_balance * (cog - 10.0),
     }
-
-
-def _cog_from_psd(freqs: np.ndarray, psd: np.ndarray, alpha: tuple[float, float]) -> float:
-    """Spectral centre of gravity over the alpha band; NaN if not estimable."""
-    idx = (freqs >= alpha[0]) & (freqs <= alpha[1])
-    if np.count_nonzero(idx) < 2:
-        return float("nan")
-    den = float(np.trapezoid(psd[idx], freqs[idx]))
-    if not np.isfinite(den) or den <= 0:
-        return float("nan")
-    return float(np.trapezoid(psd[idx] * freqs[idx], freqs[idx])) / den
 
 
 # ===================================================================
@@ -128,17 +105,14 @@ def src_compute_window_alpha_features(
         fmax: float,
         psd_window_sec: float = 2.0,
         df_target: float = 0.25,
+        overlap: float = 0.5,
 ) -> tuple[list[dict], list[dict], dict]:
     """
-    Compute the 11-metric alpha feature set for one window [tmin, tmax] s.
-
-    Power metrics: mean of the filter-Hilbert power time courses inside the
-    window. paf_cog_hz: centre of gravity of a Welch PSD of the cropped window.
+    Compute the 10-family alpha feature set for one window [tmin, tmax] s.
 
     Args:
         power_tcs      : from src_compute_band_power_tcs (FULL epoch)
         tc             : (n_epochs, n_rois, n_times) FULL-epoch time courses
-                         (cropped here for the Welch PSD)
         times          : (n_times,) full-epoch time axis in seconds
         tmin, tmax     : window bounds in seconds (inclusive)
         sfreq          : Sampling frequency in Hz
@@ -146,16 +120,14 @@ def src_compute_window_alpha_features(
         fmin, fmax     : Welch PSD frequency range
         psd_window_sec : Welch segment length (clipped to the window length)
         df_target      : Welch frequency-grid spacing after zero-padding
+        overlap        : Welch segment overlap fraction
 
     Returns:
-        trial_rows : list of dicts, one per (trial, ROI):
-                     {trial, roi_idx, <11 metrics>}  (unprefixed)
-        ga_rows    : list of dicts, one per ROI: {roi_idx, <11 metrics>},
-                     from mean-over-trials powers and the mean-over-trials PSD
-        ga_psd_by_roi : dict roi_idx -> (freqs, mean-over-trials PSD), for
-                     FOOOF / plotting
+        trial_rows    : one dict per (trial, ROI): {trial, roi_idx, <10 metrics>}
+        ga_rows       : one dict per ROI: {roi_idx, <10 metrics>}
+        ga_psd_by_roi : roi_idx -> (freqs, mean-over-trials PSD)
     """
-    mask = (times >= tmin) & (times <= tmax)
+    mask = src_window_mask(times, tmin, tmax, sfreq)
     if not np.any(mask):
         raise ValueError(
             f"Window [{tmin:.3f}, {tmax:.3f}] s has no samples in epoch range "
@@ -165,43 +137,36 @@ def src_compute_window_alpha_features(
     # Window-mean band power, (n_epochs, n_rois) per band
     pw = {k: power_tcs[k][:, :, mask].mean(axis = -1) for k in _BAND_KEYS}
 
-    # Per-trial Welch PSDs for the CoG, and their trial mean for the GA
-    tc_win = tc[:, :, mask]
-    n_epochs, n_rois, _ = tc_win.shape
-    cog = np.full((n_epochs, n_rois), np.nan)
-    ga_psd_by_roi: dict = {}
+    # Per-trial Welch PSDs (n_epochs, n_rois, n_freqs) and their CoG
+    freqs, psd = src_psd_welch(tc[:, :, mask], sfreq, fmin, fmax, psd_window_sec, overlap, df_target)
+    cog = src_cog_from_psd(freqs, psd, alpha)          # (n_epochs, n_rois)
 
-    for ri in range(n_rois):
-        psds = []
-        freqs = None
-        for ei in range(n_epochs):
-            freqs, psd = src_psd_welch(tc_win[ei, ri, :], sfreq, fmin, fmax, psd_window_sec, df_target = df_target)
-            psds.append(psd)
-            cog[ei, ri] = _cog_from_psd(freqs, psd, alpha)
-        ga_psd_by_roi[ri] = (freqs, np.mean(np.vstack(psds), axis = 0))
+    n_epochs, n_rois = cog.shape
 
-    # Per-trial rows
     feat = _metrics_from_powers(pw["slow"], pw["fast"], pw["alpha"], cog)
     trial_rows: list[dict] = []
     for ei in range(n_epochs):
         for ri in range(n_rois):
-            row = {k: float(v[ei, ri]) for k, v in feat.items()}
+            row = {k: float(feat[k][ei, ri]) for k in METRIC_NAMES}
             row["trial"] = ei + 1
             row["roi_idx"] = ri
             trial_rows.append(row)
 
-    # GA rows: mean-over-trials powers; CoG from the mean-over-trials PSD
+    # GA: mean-over-trials powers; CoG from the mean-over-trials PSD
+    ga_psd = np.nanmean(psd, axis = 0)                 # (n_rois, n_freqs)
+    ga_cog = src_cog_from_psd(freqs, ga_psd, alpha)    # (n_rois,)
+    ga_feat = _metrics_from_powers(
+        np.nanmean(pw["slow"], axis = 0),
+        np.nanmean(pw["fast"], axis = 0),
+        np.nanmean(pw["alpha"], axis = 0),
+        ga_cog,
+    )
     ga_rows: list[dict] = []
+    ga_psd_by_roi: dict = {}
     for ri in range(n_rois):
-        freqs, ga_psd = ga_psd_by_roi[ri]
-        ga_feat = _metrics_from_powers(
-            np.nanmean(pw["slow"][:, ri]),
-            np.nanmean(pw["fast"][:, ri]),
-            np.nanmean(pw["alpha"][:, ri]),
-            _cog_from_psd(freqs, ga_psd, alpha),
-        )
-        row = {k: float(v) for k, v in ga_feat.items()}
+        row = {k: float(ga_feat[k][ri]) for k in METRIC_NAMES}
         row["roi_idx"] = ri
         ga_rows.append(row)
+        ga_psd_by_roi[ri] = (freqs, ga_psd[ri])
 
     return trial_rows, ga_rows, ga_psd_by_roi

@@ -1,53 +1,66 @@
 """
 src_prestim.py - Pre-stimulus Hilbert phase + temporal variability index.
+V 3.0.0
 
-V2.0.0 changes vs V1.x:
-    - REMOVED the alpha-feature computation (pow_slow/pow_fast/pow_alpha,
-      BI_pre, LR_pre, CoG_pre, psi_cog). These are now computed generically
-      for all three windows (whole/pre/post) by
-      src_alpha_features.src_compute_window_alpha_features /
-      src_compute_ga_window_alpha_features, called directly from
-      source_core.py, then prefixed with src_add_prefix. This eliminates
-      the previous duplication of the same BI/LR/CoG formulas between this
-      file and src_poststim.py.
-    - This file now owns ONLY:
-        - Hilbert instantaneous phase at stimulus onset (slow_phase,
-          sin_phase, cos_phase) — unchanged from V1.x, still derived from
-          the FULL epoch (tc_full) to avoid Hilbert edge effects, not from
-          the cropped pre-stim window.
-        - src_compute_tvi_alpha — unchanged; still a generic nMSSD over any
-          1-D sequence. The caller now passes the pre_sf_balance sequence
-          (renamed from BI_pre to match the new whole_/pre_/post_ naming
-          scheme) rather than a bi_pre sequence, but the function itself
-          didn't need to change.
+MATLAB twins: spec_slow_phase_features.m (phase), spec_compute_tvi_alpha.m (TVI).
 
-Metrics Implemented
---------------------
-Hilbert instantaneous phase at stimulus onset [Metric 4]
-    slow_phase      Phase of the slow-alpha (8-10 Hz) analytic signal at t = 0
-    sin_phase       sin(slow_phase)     - linear GAMM regressor
-    cos_phase       cos(slow_phase)     - linear GAMM regressor
+Metrics
+-------
+    slow_phase   Phase of the slow-alpha analytic signal at t = 0 (radians)
+    sin_phase    sin(slow_phase)
+    cos_phase    cos(slow_phase)
+    TVI_alpha    MSSD / Var of the per-trial pre_sf_balance sequence
+                 (subject x ROI scalar, GA CSV only)
 
-Temporal variability index [Metric 6 - TVI_alpha]
-    TVI_alpha       nMSSD of the per-trial pre_sf_balance sequence.
-                    This is a per-subject scalar, written to the GA CSV.
-                    Stays pre-stim-only by design (out of scope for the
-                    whole/pre/post/delta generalization).
+The phase is read from the FULL-epoch filtered signal (not the cropped
+pre-stim window) to keep filter/Hilbert edge effects away from t = 0.
 
-References
------------
-    Furman et al. (2019, 2020); Tu et al. (2016); Nickel et al. (2022);
-    Busch et al. (2009); Mathewson et al. (2009); Li et al. (2018)
+V3.0.0 changes vs V2.0.0:
+    - Band-pass uses the shared FIR (src_spectral.src_bandpass_filter with
+      trans_bw), identical to MATLAB, and is vectorised over trials x ROIs.
+    - Sample nearest t = 0 chosen identically in both languages (first
+      minimum of |t|).
+    - TVI_alpha variance now uses ddof = 1 (unbiased), matching MATLAB's
+      var(x, 0). The MSSD / Var ratio ranges over [0, 4]; ~2 means
+      trial-to-trial independence (the old docstring said [0, 2]).
 """
 
 from __future__ import annotations
 
 import numpy as np
-from scipy.signal import hilbert
 
-from src_spectral import src_bandpass_filter
+from src_spectral import src_analytic_signal, src_bandpass_filter
 
 _EPS = 1e-12
+
+
+def _phase_at(tc: np.ndarray, times: np.ndarray, sfreq: float,
+              slow: tuple[float, float], t_ref: float, trans_bw: float) -> np.ndarray:
+    """Slow-band analytic phase at the sample nearest t_ref; (n_epochs, n_rois)."""
+    idx = int(np.argmin(np.abs(np.asarray(times) - t_ref)))
+    z = src_analytic_signal(src_bandpass_filter(tc, sfreq, slow[0], slow[1], trans_bw))
+    return np.angle(z[..., idx])
+
+
+def _phase_rows(phase: np.ndarray, suffix: str, with_trial: bool) -> list[dict]:
+    rows: list[dict] = []
+    if with_trial:
+        n_epochs, n_rois = phase.shape
+        for ei in range(n_epochs):
+            for ri in range(n_rois):
+                p = float(phase[ei, ri])
+                rows.append({"trial": ei + 1, "roi_idx": ri,
+                             f"slow_phase{suffix}": p,
+                             f"sin_phase{suffix}": float(np.sin(p)),
+                             f"cos_phase{suffix}": float(np.cos(p))})
+    else:
+        for ri, p in enumerate(np.asarray(phase).ravel()):
+            p = float(p)
+            rows.append({"roi_idx": ri,
+                         f"slow_phase{suffix}": p,
+                         f"sin_phase{suffix}": float(np.sin(p)),
+                         f"cos_phase{suffix}": float(np.cos(p))})
+    return rows
 
 
 # ====================================================================
@@ -58,130 +71,46 @@ def src_compute_prestim_phase(
         times_full: np.ndarray,
         sfreq: float,
         slow: tuple[float, float],
+        trans_bw: float = 1.5,
 ) -> list[dict]:
-    """
-    Compute the Hilbert instantaneous phase of the slow-alpha (8-10 Hz)
-    signal at stimulus onset (t = 0) for every (trial, ROI).
-
-    Extracted from the FULL epoch time course (tc_full) rather than the
-    cropped pre-stimulus window, to avoid edge effects from the Hilbert
-    transform. The phase is then read at the sample nearest to t = 0.
-
-    Args:
-        tc_full    : (n_epochs, n_rois, n_times) — full epoch.
-        times_full : (n_times,) — full epoch time axis in seconds.
-        sfreq      : Sampling frequency in Hz.
-        slow       : (lo, hi) slow-alpha sub-band bounds in Hz.
-
-    Returns:
-        List of dicts, one per (trial, ROI):
-            {trial, roi_idx, slow_phase, sin_phase, cos_phase}
-    """
-    n_epochs, n_rois, _ = tc_full.shape
-    t0_idx = int(np.argmin(np.abs(times_full)))
-
-    rows: list[dict] = []
-    for ei in range(n_epochs):
-        for ri in range(n_rois):
-            x_full = tc_full[ei, ri, :]
-            try:
-                x_filt = src_bandpass_filter(x_full, sfreq, slow[0], slow[1])
-                analytic = hilbert(x_filt)
-                slow_phase = float(np.angle(analytic[t0_idx]))
-            except Exception:
-                slow_phase = float("nan")
-
-            rows.append({
-                "trial":      ei + 1,
-                "roi_idx":    ri,
-                "slow_phase": slow_phase,
-                "sin_phase":  float(np.sin(slow_phase)) if not np.isnan(slow_phase) else float("nan"),
-                "cos_phase":  float(np.cos(slow_phase)) if not np.isnan(slow_phase) else float("nan"),
-            })
-
-    return rows
+    """One row per (trial, ROI): {trial, roi_idx, slow_phase, sin_phase, cos_phase}."""
+    phase = _phase_at(tc_full, times_full, sfreq, slow, 0.0, trans_bw)
+    return _phase_rows(phase, "", with_trial = True)
 
 
 # ====================================================================
-# GRAND-AVERAGE PRE-STIMULUS PHASE
+# GRAND-AVERAGE PRE-STIMULUS PHASE (phase of the trial-mean time course)
 # ====================================================================
 def src_compute_ga_prestim_phase(
         tc_full_ga: np.ndarray,
         times_full: np.ndarray,
         sfreq: float,
         slow: tuple[float, float],
+        trans_bw: float = 1.5,
 ) -> list[dict]:
-    """
-    Same as src_compute_prestim_phase but for the GA (trial-averaged) time
-    course.
-
-    Args:
-        tc_full_ga : (1, n_rois, n_times) — GA mean time course, keepdims=True.
-        Other args same as src_compute_prestim_phase.
-
-    Returns:
-        List of dicts, one per ROI (no 'trial' key): {roi_idx, slow_phase, sin_phase, cos_phase}
-    """
-    _, n_rois, _ = tc_full_ga.shape
-    t0_idx = int(np.argmin(np.abs(times_full)))
-
-    rows: list[dict] = []
-    for ri in range(n_rois):
-        x_full = tc_full_ga[0, ri, :]
-        try:
-            x_filt = src_bandpass_filter(x_full, sfreq, slow[0], slow[1])
-            analytic = hilbert(x_filt)
-            slow_phase = float(np.angle(analytic[t0_idx]))
-        except Exception:
-            slow_phase = float("nan")
-
-        rows.append({
-            "roi_idx":    ri,
-            "slow_phase": slow_phase,
-            "sin_phase":  float(np.sin(slow_phase)) if not np.isnan(slow_phase) else float("nan"),
-            "cos_phase":  float(np.cos(slow_phase)) if not np.isnan(slow_phase) else float("nan"),
-        })
-
-    return rows
+    """tc_full_ga: (1, n_rois, n_times). One row per ROI."""
+    phase = _phase_at(tc_full_ga, times_full, sfreq, slow, 0.0, trans_bw)[0]
+    return _phase_rows(phase, "", with_trial = False)
 
 
 # ====================================================================
-# TEMPORAL VARIABILITY INDEX (TVI_alpha / nMSSD)
+# TEMPORAL VARIABILITY INDEX
 # ====================================================================
 def src_compute_tvi_alpha(bi_pre_sequence: np.ndarray) -> float:
     """
-    Compute the temporal variability index (TVI_alpha) from a per-trial
-    balance-index sequence for a single subject x ROI.
+    TVI_alpha = MSSD / Var for one subject x ROI.
 
-    Unchanged from V1.x. Caller now passes the pre_sf_balance sequence
-    (previously BI_pre) — see source_core.py.
+        MSSD = mean((b[k+1] - b[k])^2)
+        Var  = unbiased sample variance (ddof = 1)
 
-        MSSD = mean( (b[k+1] - b[k])^2 ) for k = 1 ... K - 1
-        Var  = variance( b )
-        TVI_alpha = MSSD / Var
-
-    This isolates the *temporal autocorrelation structure* of the pre-stimulus
-    state rather than its total amplitude variability.
-
-    Range: [0, 2]. Near 0 = rigid (slowly varying); near 2 = maximally
-    alternating (each trial flips sign relative to the previous).
-
-    Args:
-        bi_pre_sequence : 1-D array of per-trial balance-index values, shape (K,)
-
-    Returns:
-        TVI_alpha as a float, or NaN if K < 3 (too few trials to be meaningful).
+    NaN when fewer than 3 valid trials or Var ~ 0.
     """
-    b = np.asarray(bi_pre_sequence, dtype=float)
+    b = np.asarray(bi_pre_sequence, dtype = float)
     b = b[~np.isnan(b)]
-    K = len(b)
-    if K < 3:
+    if len(b) < 3:
         return float("nan")
-
     mssd = float(np.mean(np.diff(b) ** 2))
-    var = float(np.var(b, ddof=0))
-
+    var = float(np.var(b, ddof = 1))
     if var < _EPS:
         return float("nan")
-
     return mssd / var
