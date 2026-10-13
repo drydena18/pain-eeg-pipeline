@@ -1,5 +1,5 @@
 function [feat, pw, f, P] = spec_window_alpha_features(PT, X, timesSec, win, fs, F)
-% SPEC_WINDOW_ALPHA_FEATURES  11-metric alpha feature set for one window
+% SPEC_WINDOW_ALPHA_FEATURES  10-family alpha feature set for one window
 % V 1.0.0
 %
 % Python twin: src_alpha_features.src_compute_window_alpha_features

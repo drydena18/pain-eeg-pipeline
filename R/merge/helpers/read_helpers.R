@@ -1,21 +1,21 @@
 # =============================================================================
 # read_helpers.R
 # -----------------------------------------------------------------------------
-# Per-file-type readers for the merge stage. Each function reads ONE file
-# and returns a tidy data frame in a known shape — no cross-file joining
-# here, that happens in merge_core.R once everything's been read.
+# Readers for the small per-experiment inputs (behaviour, participants,
+# cap size, epoch metadata) and discovery of per-subject pipeline files.
 #
-# Column-name harmonization notes (confirmed against real sample files):
-#   - Behavioural CSVs: ID/Trial_Num/Painrating -> subjid/trial/pain_rating
-#     (verified against all 9 real behavioural CSVs)
-#   - participants.tsv: Age/Gender already match expected names directly
-#   - spectral_chan_by_trial.csv: already lowercase metric names
-#     (bi_pre, cog_pre, lr_pre, delta_erd, ...) — canonical form
-#   - source_trial.csv: mixed-case metric names (BI_pre, CoG_pre, LR_pre,
-#     delta_ERD) — MUST be lowercased at ingestion to match spectral's
-#     convention, or the same concept becomes two different metric_name
-#     values in the long-format table (verified this was a real risk with
-#     real sample files: BI_pre vs bi_pre, CoG_pre vs cog_pre, etc.)
+# V2 (Oct 2026):
+#   - read_spectral_file() / read_source_file() removed. Trial- and
+#     subject-level feature CSVs are now ingested directly by DuckDB
+#     (db_write_helpers.R: ingest_feature_csv), which unpivots in SQL instead
+#     of holding every subject's long table in R memory (spectral_metrics
+#     alone is of the order of 10^8 rows at full N with the v3.1 set).
+#   - discover_pipeline_files(): lists files per experiment folder and takes
+#     the subject ID from the file name, so no experiment-name guessing
+#     from paths.
+#   - read_epoch_metadata(): 07_epoch/sub-XXX_epoch_metadata.csv
+#     (epoch_index, event_code, condition, intensity), written by
+#     preproc_core.m >= 2.2.0.
 # =============================================================================
 
 library(readr)
@@ -53,27 +53,19 @@ harmonize_sex <- function(x) {
   )
 }
 
-extract_experiment_name_from_path <- function(file_path, valid_names) {
-  fname <- basename(file_path)
-  matches <- valid_names[str_detect(fname, fixed(valid_names))]
-  if (length(matches) == 1L) return(matches)
-  # fall back to parent-directory matching for files under <root>/<exp_name>/...
-  matches2 <- valid_names[str_detect(file_path, fixed(valid_names))]
-  if (length(matches2) == 1L) return(matches2)
-  if (length(matches) == 0L && length(matches2) == 0L) {
-    stop("Could not match file to an experiment name: ", file_path)
-  }
-  stop("Multiple experiment name matches found for: ", file_path)
-}
-
 # =============================================================================
 # read_behavioural_file()
 # -----------------------------------------------------------------------------
-# Returns: subjid, trial, laser_power, pain_rating, experiment_name,
-#          experiment_id   (one row per trial; trial_index added later in
-#          merge_core.R once data is sorted, same as the old script did)
+# File name must start with the experiment name: <experiment_name>_behaviour.csv
+# Returns: subjid, trial, laser_power, pain_rating, experiment_name, experiment_id
 # =============================================================================
 read_behavioural_file <- function(file_path, experiment_lookup) {
+  exp_name <- str_remove(basename(file_path), "_behaviour\\.csv$")
+  if (!exp_name %in% experiment_lookup$experiment_name) {
+    stop("Behavioural file name does not match any experiment_lookup name: ", basename(file_path))
+  }
+  exp_id <- experiment_lookup$experiment_id[experiment_lookup$experiment_name == exp_name]
+
   df <- read_csv(file_path, show_col_types = FALSE)
   names(df) <- clean_names_local(names(df))
 
@@ -87,12 +79,8 @@ read_behavioural_file <- function(file_path, experiment_lookup) {
   required <- c("subjid", "trial", "laser_power", "pain_rating")
   missing <- setdiff(required, names(df))
   if (length(missing) > 0) {
-    stop("Behavioural file missing required columns (", paste(missing, collapse = ", "),
-         "): ", file_path)
+    stop("Behavioural file missing required columns (", paste(missing, collapse = ", "), "): ", file_path)
   }
-
-  exp_name <- extract_experiment_name_from_path(file_path, experiment_lookup$experiment_name)
-  exp_id   <- experiment_lookup$experiment_id[experiment_lookup$experiment_name == exp_name]
 
   df %>%
     transmute(
@@ -101,13 +89,12 @@ read_behavioural_file <- function(file_path, experiment_lookup) {
       laser_power     = suppressWarnings(as.numeric(laser_power)),
       pain_rating     = suppressWarnings(as.numeric(pain_rating)),
       experiment_name = exp_name,
-      experiment_id   = exp_id
+      experiment_id   = as.integer(exp_id)
     )
 }
 
 # =============================================================================
 # read_participants_file()
-# -----------------------------------------------------------------------------
 # Returns: subjid, age, sex, experiment_name, experiment_id
 # =============================================================================
 read_participants_file <- function(file_path, experiment_name, experiment_id) {
@@ -133,13 +120,12 @@ read_participants_file <- function(file_path, experiment_name, experiment_id) {
       age             = suppressWarnings(as.numeric(age)),
       sex             = harmonize_sex(sex),
       experiment_name = experiment_name,
-      experiment_id   = experiment_id
+      experiment_id   = as.integer(experiment_id)
     )
 }
 
 # =============================================================================
 # read_cap_size_file()
-# -----------------------------------------------------------------------------
 # Returns: experiment_name, experiment_id, cap_size
 # =============================================================================
 read_cap_size_file <- function(file_path) {
@@ -162,104 +148,68 @@ read_cap_size_file <- function(file_path) {
 }
 
 # =============================================================================
-# read_spectral_file()
+# discover_pipeline_files()
 # -----------------------------------------------------------------------------
-# Reads one sub-XXX_spectral_chan_by_trial.csv, pivots wide metric columns
-# into long format (metric_name, metric_value), lowercases metric names
-# (already lowercase in this file per the real sample, but normalized
-# explicitly rather than assumed, in case a future pipeline revision
-# changes casing).
+# For every experiment and every file kind in merge_cfg$files, lists
+# <data_root>/<experiment_name>/<subdir>/**/<pattern> and parses the subject
+# ID from the leading "sub-NNN_".
 #
-# Returns long format: subjid, trial, channel, metric_name, metric_value,
-#                       experiment_name, experiment_id
+# Returns: experiment_name, experiment_id, subjid, kind, path
+# Errors if one subject has two files of the same kind (ambiguous).
 # =============================================================================
-read_spectral_file <- function(file_path, experiment_lookup) {
-  df <- read_csv(file_path, show_col_types = FALSE)
-  names(df) <- clean_names_local(names(df))
-
-  if (!"subjid" %in% names(df) && "subject" %in% names(df)) {
-    df <- rename(df, subjid = subject)
+discover_pipeline_files <- function(data_root, experiment_lookup, file_specs) {
+  rows <- list()
+  for (i in seq_len(nrow(experiment_lookup))) {
+    exp_name <- experiment_lookup$experiment_name[i]
+    exp_id   <- experiment_lookup$experiment_id[i]
+    for (kind in names(file_specs)) {
+      root <- file.path(data_root, exp_name, file_specs[[kind]]$subdir)
+      if (!dir.exists(root)) next
+      paths <- list.files(root, pattern = file_specs[[kind]]$pattern,
+                          recursive = TRUE, full.names = TRUE)
+      if (length(paths) == 0) next
+      rows[[length(rows) + 1]] <- tibble(
+        experiment_name = exp_name,
+        experiment_id   = as.integer(exp_id),
+        subjid          = as.integer(str_match(basename(paths), "^sub-(\\d+)_")[, 2]),
+        kind            = kind,
+        path            = paths
+      )
+    }
   }
-  if (!"chan_label" %in% names(df)) {
-    stop("Spectral file missing chan_label column: ", file_path)
+  out <- bind_rows(rows)
+  if (nrow(out) == 0) {
+    return(tibble(experiment_name = character(), experiment_id = integer(),
+                  subjid = integer(), kind = character(), path = character()))
   }
 
-  required <- c("subjid", "trial", "chan_label")
-  missing <- setdiff(required, names(df))
-  if (length(missing) > 0) {
-    stop("Spectral file missing required columns (", paste(missing, collapse = ", "),
-         "): ", file_path)
+  dup <- out %>% count(experiment_id, subjid, kind) %>% filter(n > 1)
+  if (nrow(dup) > 0) {
+    ex <- out %>% semi_join(dup, by = c("experiment_id", "subjid", "kind")) %>% pull(path)
+    stop("Multiple files of the same kind for one subject (remove the stale copy):\n  ",
+         paste(head(ex, 10), collapse = "\n  "))
   }
-
-  exp_name <- extract_experiment_name_from_path(file_path, experiment_lookup$experiment_name)
-  exp_id   <- experiment_lookup$experiment_id[experiment_lookup$experiment_name == exp_name]
-
-  id_cols <- c("subjid", "trial", "chan_idx", "chan_label")
-  metric_cols <- setdiff(names(df), id_cols)
-
-  df %>%
-    select(subjid, trial, channel = chan_label, all_of(metric_cols)) %>%
-    pivot_longer(
-      cols      = all_of(metric_cols),
-      names_to  = "metric_name",
-      values_to = "metric_value"
-    ) %>%
-    mutate(
-      metric_name = str_to_lower(metric_name),
-      subjid      = as.integer(subjid),
-      trial       = as.integer(trial),
-      channel     = as.character(channel)
-    ) %>%
-    filter(!is.na(metric_value)) %>%
-    mutate(experiment_name = exp_name, experiment_id = exp_id)
+  out
 }
 
 # =============================================================================
-# read_source_file()
-# -----------------------------------------------------------------------------
-# Reads one sub-XXX_source_trial.csv, pivots wide metric columns into long
-# format. CRITICAL: lowercases metric names to match spectral's convention
-# (BI_pre -> bi_pre, CoG_pre -> cog_pre, etc.) — confirmed necessary against
-# real sample files, where source uses mixed case and spectral does not.
-#
-# Returns long format: subjid, trial, roi, metric_name, metric_value,
-#                       experiment_name, experiment_id
+# read_epoch_metadata()
+# Returns: trial (= epoch_index), event_code, condition, intensity
 # =============================================================================
-read_source_file <- function(file_path, experiment_lookup) {
-  df <- read_csv(file_path, show_col_types = FALSE)
+read_epoch_metadata <- function(file_path) {
+  df <- read_csv(file_path, show_col_types = FALSE,
+                 col_types = cols(.default = col_character()))
   names(df) <- clean_names_local(names(df))
-
-  if ("subject" %in% names(df) && !"subjid" %in% names(df)) {
-    df <- rename(df, subjid = subject)
-  }
-
-  required <- c("subjid", "trial", "roi")
+  required <- c("epoch_index", "event_code", "condition", "intensity")
   missing <- setdiff(required, names(df))
   if (length(missing) > 0) {
-    stop("Source file missing required columns (", paste(missing, collapse = ", "),
-         "): ", file_path)
+    stop("Epoch metadata missing columns (", paste(missing, collapse = ", "), "): ", file_path)
   }
-
-  exp_name <- extract_experiment_name_from_path(file_path, experiment_lookup$experiment_name)
-  exp_id   <- experiment_lookup$experiment_id[experiment_lookup$experiment_name == exp_name]
-
-  id_cols <- c("subjid", "trial", "roi")
-  metric_cols <- setdiff(names(df), id_cols)
-
   df %>%
-    select(subjid, trial, roi, all_of(metric_cols)) %>%
-    pivot_longer(
-      cols      = all_of(metric_cols),
-      names_to  = "metric_name",
-      values_to = "metric_value"
-    ) %>%
-    mutate(
-      metric_name = str_to_lower(metric_name),   # <- the critical harmonization step
-      subjid      = as.integer(subjid),
-      trial       = as.integer(trial),
-      roi         = as.character(roi),
-      metric_value = suppressWarnings(as.numeric(metric_value))
-    ) %>%
-    filter(!is.na(metric_value)) %>%
-    mutate(experiment_name = exp_name, experiment_id = exp_id)
+    transmute(
+      trial      = as.integer(epoch_index),
+      event_code = as.character(event_code),
+      condition  = str_to_lower(coalesce(condition, "unknown")),
+      intensity  = str_to_lower(coalesce(intensity, "unknown"))
+    )
 }

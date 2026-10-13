@@ -23,10 +23,22 @@
 #     real limitation, not a bug, and is why existing assignments are never
 #     overwritten: the source of truth is what's already in subject_split,
 #     not what a fresh run would compute.
+#
+# V2 (Oct 2026):
+#   - subject_split is NOT in DERIVED_TABLES, so merge_core.R's rebuild
+#     never drops it (db_write_helpers.R).
+#   - Stops if any subject has no cap_size. Previously such subjects were
+#     grouped under cap_size = NA, where `filter(cap_size == NA)` matches
+#     nothing, so they were silently never assigned and never fitted.
+#   - Split is assigned to every subject with behaviour, including subjects
+#     excluded by the alignment check. The split is a property of the
+#     person, not of the current preprocessing run, so a subject that is
+#     fixed and re-ingested later keeps the group it was first given.
 # =============================================================================
 
 library(DBI)
 library(dplyr)
+library(tibble)
 
 # =============================================================================
 # init_split_table()
@@ -72,10 +84,18 @@ assign_new_subjects_to_split <- function(con, train_frac, seed) {
   all_subjects <- dbGetQuery(con, "SELECT global_subjid, cap_size FROM subjects")
   existing <- dbGetQuery(con, "SELECT global_subjid, cap_size, split_group FROM subject_split")
 
+  no_cap <- all_subjects$global_subjid[is.na(all_subjects$cap_size) | all_subjects$cap_size == ""]
+  if (length(no_cap) > 0) {
+    stop("Subjects with no cap_size cannot be stratified (first 10): ",
+         paste(head(no_cap, 10), collapse = ", "),
+         "\nAdd their experiment to the cap_size file and re-run.")
+  }
+
   new_subjects <- all_subjects %>% filter(!global_subjid %in% existing$global_subjid)
 
   if (nrow(new_subjects) == 0) {
-    message("  No new subjects to assign — subject_split is up to date.")
+    message("  No new subjects to assign — subject_split is up to date (",
+            nrow(existing), " subjects).")
     return(invisible(NULL))
   }
 
@@ -85,7 +105,7 @@ assign_new_subjects_to_split <- function(con, train_frac, seed) {
 
   assigned_rows <- list()
 
-  for (this_cap in unique(new_subjects$cap_size)) {
+  for (this_cap in sort(unique(new_subjects$cap_size))) {
 
     # Running counts so far for this cap_size, from EXISTING assignments
     # only (never recomputed from scratch — this is what makes the split
@@ -119,14 +139,14 @@ assign_new_subjects_to_split <- function(con, train_frac, seed) {
         global_subjid = new_this_cap$global_subjid[i],
         cap_size      = this_cap,
         split_group   = grp,
-        split_seed    = seed,
+        split_seed    = as.integer(seed),
         assigned_at   = as.character(Sys.time())
       )
     }
   }
 
   new_assignments <- bind_rows(assigned_rows)
-  dbWriteTable(con, "subject_split", new_assignments, append = TRUE)
+  dbAppendTable(con, "subject_split", as.data.frame(new_assignments))
 
   tab <- new_assignments %>% count(cap_size, split_group)
   message("  New assignments by cap_size:")

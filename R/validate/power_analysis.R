@@ -30,9 +30,42 @@
 #   <fig_dir>/: one power curve figure per metric x ROI
 #   Console: full summary + binding constraint callout
 #
-# Run from R/gamm/ working directory (sources gamm_defaults.R and
-# helpers/db_helpers.R from there). Requires source_core.R and
-# merge_core.R to have already run successfully.
+# Run from R/gamm/ working directory:
+#   setwd("R/gamm"); source("../validate/power_analysis.R")
+# (sources gamm_defaults.R and helpers/*.R from there). Requires
+# merge_core.R and source_core.R to have already run successfully.
+#
+# V2 (Oct 2026):
+#   - Only gamm_fitted rows of the current feature_set are used.
+#   - close_results_db() was called but never defined here (it lives in
+#     gamm_combo_core.R, which was not sourced); now sourced.
+#   - Holdout predictors are z-scored with the TRAINING mean/SD. They were
+#     z-scored with the holdout's own mean/SD, which is not the scale the
+#     model was fit on.
+#   - powerCurve() had no `test =`, so simr tested the FIRST fixed effect,
+#     laser_power_z: the curves were power to detect the laser effect, not
+#     the metric. Now test = fixed(<metric part>, "z").
+#   - The curve ran from the current N up to n_target_total without
+#     simr::extend(), which powerCurve() needs to go beyond the subjects that
+#     exist. Now extended first.
+#   - Between / within split: the lmer refit includes both parts (linear),
+#     power is for the primary part (default: subject mean), and training
+#     data use the screen model's own scaling (mod$zscale).
+#   - as.data.frame() on a powerCurve object fails (no method), so every
+#     curve was lost to the tryCatch; values now come from summary().
+#   - Per-cap-size subsets kept unused subject levels, which makes
+#     extend() / powerCurve() fail ("number of levels differs"); droplevels().
+#   - Holdout data prepared and predicted with the shared helpers
+#     (prepare_holdout / predict_population). Note holdout_replicate.R is
+#     now the replication test; the bootstrap here only sizes the split.
+#   - Holdout prediction failed for every model: predict() on a
+#     discrete = TRUE bam() with subject levels unseen in training stops
+#     with "data is too long", and the tryCatch turned that into a silent
+#     skip, so the holdout bootstrap never ran. Unseen subject (and
+#     experiment) levels are now mapped to a training level and the random
+#     effect is excluded, which gives the population-level prediction
+#     (the placeholder level has no effect once the term is excluded;
+#     tested).
 #
 # Methodological note on script frequency:
 #   Run ONCE after first real results from source_core.R on interim data,
@@ -65,6 +98,8 @@ library(simr)
 
 source("gamm_defaults.R")
 source("helpers/db_helpers.R")
+source("helpers/gamm_combo_core.R")
+source("helpers/hit_helpers.R")
 
 # =============================================================================
 # CONFIG
@@ -87,20 +122,22 @@ dir.create(pa_cfg$fig_dir, recursive = TRUE, showWarnings = FALSE)
 # CONNECT
 # =============================================================================
 data_con    <- connect_data_db(gamm_cfg$data_db_path, read_only = TRUE)
-results_con <- connect_results_db(gamm_cfg$results_db_path)
+results_con <- init_results_db(gamm_cfg$results_db_path)
 
 # =============================================================================
 # STEP 1: PULL ALL SIGNIFICANT SOURCE MODELS FROM gamm_fitted
 # =============================================================================
-message("== Step 1: Identifying significant models ==")
+message("== Step 1: Identifying significant models (feature_set ",
+        gamm_cfg$feature_set, ") ==")
 
 all_models <- dbGetQuery(results_con, "
   SELECT level, group_value, model_name, metrics, n_metrics,
          p_value, r_sq, dev_expl, aic, rds_path
   FROM gamm_fitted
-  WHERE level     = 'source'
-    AND n_metrics = 1
-") %>%
+  WHERE level       = 'source'
+    AND n_metrics   = 1
+    AND feature_set = ?
+", params = list(gamm_cfg$feature_set)) %>%
   mutate(
     p_value_num = suppressWarnings(as.numeric(p_value)),
     r_sq        = suppressWarnings(as.numeric(r_sq))
@@ -115,14 +152,14 @@ all_models <- dbGetQuery(results_con, "
 if (nrow(all_models) == 0) {
   stop(
     "No significant single-metric source models found in gamm_fitted ",
-    "(p < ", pa_cfg$p_sig, ", level = 'source'). ",
-    "Run source_core.R first."
+    "(p < ", pa_cfg$p_sig, ", level = 'source', feature_set = '",
+    gamm_cfg$feature_set, "'). Run source_core.R first."
   )
 }
 
 message("  Found ", nrow(all_models), " significant model(s) to analyse:")
 for (i in seq_len(nrow(all_models))) {
-  message(sprintf("    [%d] %-20s @ %-30s  r_sq=%.3f  p=%.4f",
+  message(sprintf("    [%d] %-28s @ %-14s  r_sq=%.3f  p=%.4f",
                   i, all_models$metrics[i], all_models$group_value[i],
                   all_models$r_sq[i], all_models$p_value_num[i]))
 }
@@ -158,32 +195,60 @@ message(sprintf("  TOTAL  train = %d  holdout = %d  (%.1f%% / %.1f%%)",
 # HELPER FUNCTIONS
 # =============================================================================
 
+base_filter <- function(df) {
+  df %>% filter(!is.na(pain_rating), !is.na(laser_power),
+                !is.na(trial_index), !is.na(age), !is.na(global_subjid))
+}
+
+# Mean / SD of every z-scored column, taken from the training data, so the
+# holdout can be put on the scale the model was fit on.
+scaling_params <- function(df, raw_cols) {
+  setNames(lapply(raw_cols, function(cn) {
+    c(mean = mean(df[[cn]], na.rm = TRUE), sd = stats::sd(df[[cn]], na.rm = TRUE))
+  }), raw_cols)
+}
+apply_scaling <- function(x, p) (x - p[["mean"]]) / p[["sd"]]
+
 # --- Load and z-score training data for one metric x ROI ---
-load_training_data <- function(data_con, roi, this_metric) {
+# Uses the scaling stored on the screen model (mod$zscale) when present, so
+# the lmer refit sees the same predictor scale as the bam(); adds the
+# between / within split if the screen used it.
+load_training_data <- function(data_con, roi, this_metric, mod_bam) {
   raw_metric <- str_remove(this_metric, "_z$")
-  df <- load_source_metrics_wide(data_con, roi) %>%
-    filter(!is.na(pain_rating), !is.na(laser_power),
-           !is.na(trial_index), !is.na(age), !is.na(global_subjid)) %>%
+  df <- load_source_metrics_wide(data_con, roi, metrics = raw_metric) %>%
+    base_filter() %>%
     mutate(
       global_subjid = as.factor(as.character(global_subjid)),
-      experiment_id = as.factor(as.character(experiment_id)),
-      age_z         = as.numeric(scale(age)),
-      laser_power_z = as.numeric(scale(laser_power)),
-      trial_index_z = as.numeric(scale(trial_index))
+      experiment_id = as.factor(as.character(experiment_id))
     )
   if (!raw_metric %in% names(df)) return(NULL)
-  df[[this_metric]] <- as.numeric(scale(df[[raw_metric]]))
+  df <- df %>% filter(!is.na(.data[[raw_metric]]))
+  need <- c("age", "laser_power", "trial_index", raw_metric)
+  sc <- if (!is.null(mod_bam$zscale) && all(need %in% names(mod_bam$zscale)))
+    mod_bam$zscale[need] else scaling_params(df, need)
+  df <- df %>%
+    mutate(
+      age_z         = apply_scaling(age, sc$age),
+      laser_power_z = apply_scaling(laser_power, sc$laser_power),
+      trial_index_z = apply_scaling(trial_index, sc$trial_index)
+    )
+  df[[this_metric]] <- apply_scaling(df[[raw_metric]], sc[[raw_metric]])
+  if (identical(mod_bam$gamm_meta$decomposition, "between_within"))
+    df <- add_between_within(df, this_metric)
+  attr(df, "scaling") <- sc
   df
 }
 
 # --- Refit as lmer for simr ---
-fit_lmer_for_simr <- function(df, this_metric) {
+# metric_vars: the metric column(s) as in the bam (one pooled column, or the
+# between + within pair). Entered linearly: simr needs a parametric effect.
+fit_lmer_for_simr <- function(df, metric_vars) {
   re_terms <- "(1 | global_subjid)"
   if (n_distinct(df$experiment_id) > 1)
     re_terms <- paste(re_terms, "+ (1 | experiment_id)")
   f <- as.formula(paste(
     "pain_rating ~ laser_power_z + trial_index_z + age_z +",
-    this_metric, "+", re_terms
+    paste(metric_vars, collapse = " + "), "+", re_terms
   ))
   tryCatch(
     lmer(f, data = df, REML = TRUE,
@@ -193,15 +258,23 @@ fit_lmer_for_simr <- function(df, this_metric) {
 }
 
 # --- Run power curve for one subset (pooled or per cap_size) ---
-run_power_curve <- function(mod, along_var, n_current, n_target, label, n_steps, n_sim) {
+# test_var: the effect whose power is estimated. Without `test =`, simr
+# tests the FIRST fixed effect in the formula, which here is laser_power_z.
+run_power_curve <- function(mod, along_var, n_current, n_target, label, n_steps, n_sim,
+                            test_var) {
   breaks <- unique(round(seq(n_current, n_target, length.out = n_steps)))
   breaks <- breaks[breaks >= n_current]
   tryCatch(
     {
-      pc <- powerCurve(mod, along = along_var, breaks = breaks,
-                       nsim = n_sim, progress = FALSE)
-      df <- as.data.frame(pc)
-      names(df) <- c("n", "power", "lower", "upper")
+      # powerCurve() can only subset subjects that exist; extend() adds
+      # simulated subjects so the curve can reach the projected N.
+      mod_ext <- if (n_target > n_current) simr::extend(mod, along = along_var, n = n_target) else mod
+      pc <- powerCurve(mod_ext, test = simr::fixed(test_var, "z"), along = along_var,
+                       breaks = breaks, nsim = n_sim, progress = FALSE)
+      # summary() is the documented accessor (as.data.frame() has no method
+      # for powerCurve objects): one row per break.
+      sm <- summary(pc)
+      df <- data.frame(n = sm$nlevels, power = sm$mean, lower = sm$lower, upper = sm$upper)
       df$group <- label
       df
     },
@@ -228,35 +301,29 @@ extract_n_required <- function(curve_df, label, power_targets) {
 }
 
 # --- Bootstrap holdout stability ---
+# Held-out rows prepared and predicted exactly as in holdout_replicate.R
+# (prepare_holdout / predict_population in helpers/hit_helpers.R).
 bootstrap_holdout <- function(data_con, roi, this_metric, mod_bam, n_boot, ci_flag) {
-  raw_metric <- str_remove(this_metric, "_z$")
-  df_ho <- load_holdout_source_metrics_wide(data_con, roi) %>%
-    filter(!is.na(pain_rating), !is.na(laser_power),
-           !is.na(trial_index), !is.na(age), !is.na(global_subjid)) %>%
-    mutate(
-      global_subjid = as.factor(as.character(global_subjid)),
-      experiment_id = as.factor(as.character(experiment_id)),
-      age_z         = as.numeric(scale(age)),
-      laser_power_z = as.numeric(scale(laser_power)),
-      trial_index_z = as.numeric(scale(trial_index))
-    )
-
-  if (!raw_metric %in% names(df_ho) || nrow(df_ho) == 0) return(NULL)
-  df_ho[[this_metric]] <- as.numeric(scale(df_ho[[raw_metric]]))
+  df_ho <- prepare_holdout(data_con, "source", roi, this_metric, mod_bam, gamm_cfg)
+  if (is.null(df_ho) || nrow(df_ho) == 0) return(NULL)
 
   df_ho$predicted <- tryCatch(
-    predict(mod_bam, newdata = df_ho,
-            exclude = "s(global_subjid)", type = "response"),
-    error = function(e) NULL
+    predict_population(mod_bam, df_ho),
+    error = function(e) {
+      message("  [WARN] holdout prediction failed: ", conditionMessage(e))
+      NULL
+    }
   )
   if (is.null(df_ho$predicted)) return(NULL)
+  df_ho <- df_ho %>% filter(!is.na(predicted))
 
   rmse_fn <- function(a, p) sqrt(mean((a - p)^2, na.rm = TRUE))
   r_fn    <- function(a, p) cor(a, p, use = "complete.obs")
 
+  by_subj <- split(df_ho, as.character(df_ho$global_subjid))
   boot_mat <- replicate(n_boot, {
-    subs   <- sample(unique(df_ho$global_subjid), replace = TRUE)
-    boot_df <- map_dfr(subs, ~filter(df_ho, global_subjid == .x))
+    subs    <- sample(names(by_subj), replace = TRUE)
+    boot_df <- bind_rows(by_subj[subs])
     c(rmse = rmse_fn(boot_df$pain_rating, boot_df$predicted),
       r    = r_fn(boot_df$pain_rating,    boot_df$predicted))
   })
@@ -287,7 +354,6 @@ bootstrap_holdout <- function(data_con, roi, this_metric, mod_bam, n_boot, ci_fl
 message("\n== Step 3: Running power analysis for each significant model ==")
 
 all_power_rows  <- list()
-all_curve_plots <- list()
 
 for (i in seq_len(nrow(all_models))) {
   row         <- all_models[i, ]
@@ -300,7 +366,9 @@ for (i in seq_len(nrow(all_models))) {
                   row$r_sq, row$p_value_num))
 
   # Load training data
-  df_train <- load_training_data(data_con, this_roi, this_metric)
+  df_train <- load_training_data(data_con, this_roi, this_metric, mod_bam)
+  metric_vars <- model_metric_vars(mod_bam, this_metric)
+  test_var    <- primary_var(mod_bam, this_metric)
   if (is.null(df_train) || nrow(df_train) == 0) {
     message("  Skipping — training data unavailable.")
     next
@@ -314,40 +382,40 @@ for (i in seq_len(nrow(all_models))) {
   }
 
   # lmer refit
-  mod_lmer <- fit_lmer_for_simr(df_train, this_metric)
+  mod_lmer <- fit_lmer_for_simr(df_train, metric_vars)
   if (is.null(mod_lmer)) next
 
   message("  lmer OK — subject RE SD: ",
           round(as.data.frame(VarCorr(mod_lmer))$sdcor[1], 4),
           "  residual SD: ",
           round(attr(VarCorr(mod_lmer), "sc"), 4),
-          "  beta(", this_metric, "): ",
-          round(fixef(mod_lmer)[this_metric], 4))
+          "  beta: ",
+          round(fixef(mod_lmer)[test_var], 4), "  (power is for ", test_var, ")")
 
   # --- Pooled power curve ---
-  n_target_pooled <- pa_cfg$n_target_total
   curve_pooled <- run_power_curve(
     mod_lmer, "global_subjid",
     n_current = n_train_subj,
-    n_target  = n_target_pooled,
+    n_target  = pa_cfg$n_target_total,
     label     = "pooled",
     n_steps   = pa_cfg$n_steps,
-    n_sim     = pa_cfg$n_sim
+    n_sim     = pa_cfg$n_sim,
+    test_var  = test_var
   )
   power_rows <- extract_n_required(curve_pooled, "pooled", pa_cfg$power_targets)
 
   # --- Per cap_size power curves ---
   all_curves_this_model <- list(curve_pooled)
 
-  for (this_cap in sort(unique(df_train$cap_size))) {
-    df_cap   <- filter(df_train, cap_size == this_cap)
+  for (this_cap in sort(unique(as.character(df_train$cap_size)))) {
+    df_cap   <- droplevels(filter(df_train, cap_size == this_cap))  # unused subject levels break extend()
     n_cap    <- n_distinct(df_cap$global_subjid)
     if (n_cap < 5) {
       message("  Skipping cap_size ", this_cap, " — only ", n_cap, " subjects.")
       next
     }
 
-    mod_cap <- fit_lmer_for_simr(df_cap, this_metric)
+    mod_cap <- fit_lmer_for_simr(df_cap, metric_vars)
     if (is.null(mod_cap)) next
 
     n_target_cap <- round(pa_cfg$n_target_total *
@@ -360,7 +428,8 @@ for (i in seq_len(nrow(all_models))) {
       n_target  = max(n_target_cap, n_cap + 5L),
       label     = lbl,
       n_steps   = pa_cfg$n_steps,
-      n_sim     = pa_cfg$n_sim
+      n_sim     = pa_cfg$n_sim,
+      test_var  = test_var
     )
     cap_rows <- extract_n_required(curve_cap, lbl, pa_cfg$power_targets)
     if (!is.null(cap_rows)) power_rows <- bind_rows(power_rows, cap_rows)
@@ -388,7 +457,7 @@ for (i in seq_len(nrow(all_models))) {
   # --- Holdout stability ---
   message("  Running holdout bootstrap (", pa_cfg$n_boot, " resamples)...")
   ho <- bootstrap_holdout(data_con, this_roi, this_metric, mod_bam,
-                           pa_cfg$n_boot, pa_cfg$ci_width_flag)
+                          pa_cfg$n_boot, pa_cfg$ci_width_flag)
   if (!is.null(ho)) {
     message(sprintf("  Holdout: %d subjects  r=%.3f [%.3f, %.3f]  RMSE=%.3f [%.3f, %.3f]  stable=%s",
                     ho$n_holdout,
@@ -433,7 +502,7 @@ for (i in seq_len(nrow(all_models))) {
         title    = paste0("Power curve: ", this_metric, " @ ", this_roi),
         subtitle = paste0("simr (nsim=", pa_cfg$n_sim, " per point)  |  ",
                           "lmer approximation of bam()  |  ",
-                          "r\u00b2=", round(row$r_sq, 3),
+                          "r²=", round(row$r_sq, 3),
                           "  p=", signif(row$p_value_num, 3)),
         x        = "N subjects (training set)",
         y        = "Estimated power",
@@ -443,8 +512,8 @@ for (i in seq_len(nrow(all_models))) {
       theme(legend.position = "bottom")
 
     fig_name <- paste0("power_curve_",
-                        str_replace_all(this_metric, "_z$", ""), "_",
-                        str_replace_all(this_roi, "-", "_"), ".png")
+                       str_replace_all(this_metric, "_z$", ""), "_",
+                       str_replace_all(this_roi, "-", "_"), ".png")
     fig_path <- file.path(pa_cfg$fig_dir, fig_name)
     ggsave(fig_path, p, width = 8, height = 5, dpi = 150)
     message("  Figure saved: ", fig_path)
@@ -509,8 +578,8 @@ if (nrow(all_power_df) > 0) {
       message(sprintf("  Need n=%d for 80%% power on the binding metric (%s @ %s).",
                       binding_80$n_required, binding_80$metric, binding_80$roi))
       new_frac <- round(binding_80$n_required / pa_cfg$n_target_total + 0.01, 2)
-      message(sprintf("  Consider increasing split_train_frac in merge_defaults.R",
-                      " to at least %.2f.", new_frac))
+      message(sprintf("  Consider increasing split_train_frac in merge_defaults.R to at least %.2f.",
+                      new_frac))
     }
   }
 }
@@ -520,7 +589,7 @@ if (nrow(all_power_df) > 0) {
 # =============================================================================
 message("\n== Step 5: Writing to results.duckdb ==")
 
-dbExecute(results_con, "
+invisible(dbExecute(results_con, "
   CREATE TABLE IF NOT EXISTS power_analysis (
     fitted_at    VARCHAR,
     metric       VARCHAR,
@@ -529,28 +598,27 @@ dbExecute(results_con, "
     power_target DOUBLE,
     n_required   INTEGER,
     achieved     BOOLEAN,
-    max_power    DOUBLE,
-    PRIMARY KEY (metric, roi, group_label, power_target)
+    max_power    DOUBLE
   )
-")
+"))
 
 final_rows <- bind_rows(all_power_rows) %>%
   rename(group_label = group)
 
-# Upsert all rows for this run
+# Upsert all rows for this run (delete this metric x ROI, then insert).
+# No primary key: holdout_bootstrap rows have power_target = NULL, which a
+# PRIMARY KEY column cannot hold.
 if (nrow(final_rows) > 0) {
-  for (met in unique(final_rows$metric)) {
-    for (r in unique(final_rows$roi[final_rows$metric == met])) {
-      dbExecute(results_con,
-        "DELETE FROM power_analysis WHERE metric = ? AND roi = ?",
-        params = list(met, r)
-      )
-    }
+  keys <- distinct(final_rows, metric, roi)
+  for (k in seq_len(nrow(keys))) {
+    invisible(dbExecute(results_con,
+      "DELETE FROM power_analysis WHERE metric = ? AND roi = ?",
+      params = list(keys$metric[k], keys$roi[k])
+    ))
   }
-  dbWriteTable(results_con, "power_analysis",
-               final_rows %>% select(fitted_at, metric, roi, group_label,
-                                      power_target, n_required, achieved, max_power),
-               append = TRUE)
+  dbAppendTable(results_con, "power_analysis",
+                as.data.frame(final_rows %>% select(fitted_at, metric, roi, group_label,
+                                                    power_target, n_required, achieved, max_power)))
   message("  Written ", nrow(final_rows), " rows to power_analysis table.")
 }
 
