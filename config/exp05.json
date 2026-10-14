@@ -1,0 +1,404 @@
+{
+  "meta": {
+    "schema": "v1",
+    "config": "exp05_v1.0.0"
+  },
+  "paths": {
+    "raw_root": "/cifs/seminowicz/eegPainDatasets/CNED/65ByANT",
+    "proj_root": "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/65ByANT",
+    "da_root": "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis"
+  },
+  "exp": {
+    "id": "exp05",
+    "task": "65ByANT",
+    "out_dirname": "65ByANT",
+    "out_prefix": "65ANT_32_",
+    "raw": {
+      "pattern": "sub-%03d/eeg/sub-%03d_task-65ByANT_eeg.vhdr",
+      "search_recursive": false
+    },
+    "montage": {
+      "enabled": false,
+      "csv": "",
+      "select_ab_only": false,
+      "do_lookup": false
+    },
+    "subjects": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51,
+      52,
+      53,
+      54,
+      55,
+      56,
+      57,
+      58,
+      59,
+      60,
+      61,
+      62,
+      63,
+      64,
+      65
+    ],
+    "channel_locs": {
+      "use_elp": true,
+      "elp_path_key": "P.CORE.ELP_FILE"
+    }
+  },
+  "preproc": {
+    "concat": {
+      "enabled": false,
+      "n_sessions": 1,
+      "session_pattern": ""
+    },
+    "filter": {
+      "enabled": true,
+      "type": "fir",
+      "highpass_hz": 0.5,
+      "lowpass_hz": 40,
+      "tag": "fir"
+    },
+    "notch": {
+      "enabled": true,
+      "freq_hz": 60,
+      "bw_hz": 2,
+      "tag": "notch60"
+    },
+    "resample": {
+      "enabled": true,
+      "target_hz": 500,
+      "tag": "rs500"
+    },
+    "reref": {
+      "enabled": true,
+      "mode": "average",
+      "channels": [],
+      "tag": "reref"
+    },
+    "initrej": {
+      "enabled": true,
+      "tag": "initrej",
+      "scroll": {
+        "enabled": true,
+        "spacing_uv": 50
+      },
+      "badchan": {
+        "enabled": false,
+        "method": "flatline_or_variance",
+        "flatline_sec": 5,
+        "variance_z": 5
+      },
+      "badseg": {
+        "enabled": true,
+        "method": "threshold",
+        "threshold_uv": 150
+      }
+    },
+    "ica": {
+      "enabled": true,
+      "method": "runica",
+      "runica": {
+        "extended": 1
+      },
+      "train_scroll": {
+        "enabled": true,
+        "spacing_uv": 50
+      },
+      "scroll": {
+        "enabled": true,
+        "spacing_uv": 50
+      },
+      "confirm_scroll": {
+        "enabled": true,
+        "spacing_uv": 50
+      },
+      "grid": {
+        "enabled": true,
+        "n_ics": 20
+      },
+      "tag": "ica",
+      "iclabel": {
+        "enabled": true,
+        "tag": "iclabel",
+        "auto_reject": false,
+        "thresholds": {
+          "eye": 0.9,
+          "muscle": 0.9,
+          "heart": 0.9,
+          "line_noise": 0.9,
+          "channel_noise": 0.9,
+          "other": 0.0,
+          "brain_min": 0.0
+        }
+      }
+    },
+    "epoch": {
+      "enabled": true,
+      "events": [
+        {
+          "code": "s22",
+          "condition": "pain",
+          "intensity": ""
+        }
+      ],
+      "tmin_sec": -2.2,
+      "tmax_sec": 2.0,
+      "tag": "epoch",
+      "_comment": "-2.2 s start keeps the 2.2 s band-power filter edge zone (1.1 s) outside the pre window (-1.0 to -0.1 s)."
+    },
+    "baseline": {
+      "enabled": true,
+      "window_sec": [
+        -0.5,
+        0.0
+      ],
+      "tag": "base"
+    },
+    "hilbert": {
+      "enabled": true,
+      "slow_hz": [
+        8,
+        10
+      ],
+      "tag": "hilbert",
+      "_comment": "Stage 09 (preprocessing). Not read by spectral_core V3, which computes phase with the shared FIR."
+    }
+  },
+  "features": {
+    "_comment": "Single source of truth for feature extraction, read by BOTH matlab/spectral/spectral_default.m and python/source/source_default.py. Validated against the preproc block (epoch limits, pass band) at startup.",
+    "windows": {
+      "whole_sec": [
+        -1.0,
+        2.0
+      ],
+      "pre_sec": [
+        -1.0,
+        -0.1
+      ],
+      "post_sec": [
+        0.1,
+        0.8
+      ]
+    },
+    "bands": {
+      "alpha_hz": [
+        8,
+        12
+      ],
+      "slow_hz": [
+        8,
+        10
+      ],
+      "fast_hz": [
+        10,
+        12
+      ]
+    },
+    "band_power": {
+      "method": "filter_hilbert",
+      "trans_bw_hz": 1.5
+    },
+    "psd": {
+      "fmin_hz": 1,
+      "fmax_hz": 40,
+      "window_sec": 2.0,
+      "overlap_frac": 0.5,
+      "df_target_hz": 0.25
+    },
+    "erd": {
+      "eps0_frac": 0.001,
+      "p5_percentile": 5
+    },
+    "lep": {
+      "n2_window_sec": [
+        0.15,
+        0.35
+      ],
+      "p2_window_sec": [
+        0.25,
+        0.5
+      ]
+    },
+    "phase": {
+      "post_ref_sec": 0.2
+    },
+    "fooof": {
+      "enabled": true,
+      "aperiodic_mode": "fixed",
+      "peak_width_limits": [
+        1.0,
+        12.0
+      ],
+      "max_n_peaks": 6,
+      "min_peak_height": 0.1,
+      "peak_threshold": 2.0,
+      "freq_range": [
+        1.0,
+        40.0
+      ]
+    }
+  },
+  "spectral": {
+    "input_stage": "08_base",
+    "fooof": {
+      "python_exe": "/home/UWO/darsenea/envs/thesis/bin/python",
+      "script_path": "/home/UWO/darsenea/Documents/GitHub/pain-alpha-dynamics/python/spectral/fooof_bridge.py"
+    },
+    "qc": {
+      "plot_mode": "summary",
+      "save_heatmaps": true,
+      "legend_max_channels": 20,
+      "max_debug_trials": 6
+    },
+    "trial_spectral": {
+      "enabled": true,
+      "pre_sec": [
+        -0.2,
+        0.0
+      ],
+      "post_sec": [
+        0.0,
+        0.8
+      ],
+      "max_trials": 50,
+      "legend_max_channels": 16,
+      "fmin_hz": 1,
+      "fmax_hz": 40,
+      "spectrogram_win_sec": 0.5,
+      "spectrogram_overlap": 0.9
+    },
+    "lep": {
+      "enabled": true,
+      "window_sec": [
+        -0.1,
+        1.0
+      ],
+      "_comment": "window_sec = stored waveform span only; N2/P2 search windows are in features.lep"
+    },
+    "phase": {
+      "enabled": true,
+      "n_permutations": 5000
+    }
+  },
+  "source": {
+    "enabled": true,
+    "input": {
+      "stage_dir": "08_base",
+      "allow_fallback_search": true
+    },
+    "fsaverage": {
+      "subjects_dir": "/home/UWO/darsenea/mne_data/"
+    },
+    "forward": {
+      "bem": "fsaverage",
+      "mindist_mm": 5.0
+    },
+    "inverse": {
+      "method": "sLORETA",
+      "snr": 3.0,
+      "pick_ori": "normal"
+    },
+    "roi": {
+      "parcellation": "aparc",
+      "mode": "mean_flip",
+      "use_custom_rois": true,
+      "hemisphere_split": true,
+      "custom_rois": {
+        "_note": "Active when use_custom_rois = true. Keys are ROI names; values are aparc label names (lh-X / rh-X or X-lh / X-rh). hemisphere_split = true adds <ROI>_lh and <ROI>_rh next to every bilateral ROI.",
+        "_comment": "S2 is a proxy: supramarginal is the closest cortical surface label but isn't perfectly S2 anatomically. M1 is included as it frequently appears in pain neuromatrix discussions.",
+        "S1": [
+          "lh-postcentral",
+          "rh-postcentral",
+          "lh-paracentral",
+          "rh-paracentral"
+        ],
+        "S2": [
+          "lh-supramarginal",
+          "rh-supramarginal"
+        ],
+        "ACC": [
+          "lh-caudalanteriorcingulate",
+          "rh-caudalanteriorcingulate",
+          "lh-rostralanteriorcingulate",
+          "rh-rostralanteriorcingulate"
+        ],
+        "Insula": [
+          "lh-insula",
+          "rh-insula"
+        ],
+        "dlPFC": [
+          "lh-rostralmiddlefrontal",
+          "rh-rostralmiddlefrontal",
+          "lh-caudalmiddlefrontal",
+          "rh-caudalmiddlefrontal"
+        ],
+        "M1": [
+          "lh-precentral",
+          "rh-precentral"
+        ]
+      }
+    },
+    "noise_cov": {
+      "tmin": -0.2,
+      "tmax": 0.0
+    },
+    "outputs": {
+      "root": "AUTO",
+      "save_roi_csv": true,
+      "csv_all_rois": true
+    },
+    "qc": {
+      "save_brain_images": true
+    }
+  }
+}

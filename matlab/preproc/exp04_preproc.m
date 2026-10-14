@@ -1,9 +1,9 @@
 function exp04_preproc(subjects_override)
-% EXP04_PREPROC Entrypoint for preprocessing experiment 03.
+% EXP04_PREPROC Entrypoint for preprocessing experiment 04.
 % V 1.0.2
 %
 % Call chain:
-%   exp03_preproc.m -> preproc_default.m -> preproc_core.m
+%   exp04_preproc.m -> preproc_default.m -> preproc_core.m
 
 exp_id = "exp04";
 
