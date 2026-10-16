@@ -1,18 +1,18 @@
 function trials = spec_select_trials_to_plot(featChan, qc, nTr)
-% SPEC_SELECT_TRIALS_TO_PLOT Auto=pick a few trials: extremes of GA
+% SPEC_SELECT_TRIALS_TO_PLOT Auto-pick a few trials: extremes of GA
 % whole-epoch sf_balance and PAF (CoG)
-% V 1.1.0
+% V 1.1.1  (V1.1.1: sort(..., 'decend') typo -> 'descend'; it errored)
 
 k = 5;
 if isfield(qc, 'max_debug_trials'), k = qc.max_debug_trials; end
 k = max(1, min(k, nTr));
 
-% Make a GA-ish prozy by averaging across all channels
+% Make a GA-ish proxy by averaging across all channels
 sf = mean(featChan.whole_sf_balance, 1, 'omitnan');
 paf = mean(featChan.whole_paf_cog_hz, 1, 'omitnan');
 
 [~, ix1] = sort(sf, 'ascend');
-[~, ix2] = sort(paf, 'decend');
+[~, ix2] = sort(paf, 'descend');
 [~, ix3] = sort(paf, 'ascend');
 [~, ix4] = sort(sf, 'descend');
 
