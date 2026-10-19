@@ -1,24 +1,25 @@
 function spec_plot_trial_spectral_qc(outDir, EEG, cfg, subjid, logf)
 % SPEC_PLOT_TRIAL_SPECTRAL_QC
+% V 1.1.0
+%
 % Saves one spectrogram figure per trial: Hz on Y, time (ms) on X,
 % power (dB) on colour.  Channels are averaged in the linear power domain
 % before plotting so the result is the grand-average (GA) spectrogram.
 %
-% Replaces the old pre/post Welch PSD split.  The full epoch is used so
-% that pre-stimulus alpha and post-stimulus broadband suppression are both
-% visible in one panel.
+% V1.1.0: cfg.spectral.psd no longer exists (PSD settings moved to the
+%         shared `features` block in V3), and reading it crashed the whole
+%         QC step. The only value used from it was an optional nfft
+%         override; it is now read from cfg.spectral.trial_spectral.nfft if
+%         set, otherwise chosen automatically.
 %
 % Config keys read (all under cfg.spectral.trial_spectral):
 %   max_trials             - cap on number of trials saved  (default 20)
 %   fmin_hz / fmax_hz      - frequency display range        (default 1/40)
 %   spectrogram_win_sec    - STFT window length in seconds  (default 0.5)
 %   spectrogram_overlap    - overlap fraction 0-1           (default 0.90)
-%
-% Config keys NO LONGER USED (kept in JSON for backward compat, ignored):
-%   pre_sec, post_sec, legend_max_channels
+%   nfft                   - optional FFT length            (default auto)
 
-ts  = cfg.spectral.trial_spectral;
-psd = cfg.spectral.psd;
+ts = cfg.spectral.trial_spectral;
 
 % ---- Basic guards -------------------------------------------------------
 if EEG.trials <= 1
@@ -37,16 +38,11 @@ fmin      = defaultFieldVal(ts, 'fmin_hz',    1);
 fmax      = defaultFieldVal(ts, 'fmax_hz',    40);
 
 % Spectrogram-specific window: shorter than the PSD window to give useful
-% time resolution.  0.5 s → ~2 Hz freq resolution at typical EEG rates,
+% time resolution.  0.5 s -> ~2 Hz freq resolution at typical EEG rates,
 % which is sufficient to resolve the 8-10 and 10-12 Hz sub-bands.
-winSec  = defaultFieldVal(ts, 'spectrogram_win_sec', 0.5);
-ovrFrac = defaultFieldVal(ts, 'spectrogram_overlap',  0.90);
-
-% Fall back to psd.nfft if set, otherwise auto
-nfft_cfg = 0;
-if isfield(psd, 'nfft') && ~isempty(psd.nfft) && psd.nfft > 0
-    nfft_cfg = psd.nfft;
-end
+winSec   = defaultFieldVal(ts, 'spectrogram_win_sec', 0.5);
+ovrFrac  = defaultFieldVal(ts, 'spectrogram_overlap',  0.90);
+nfft_cfg = defaultFieldVal(ts, 'nfft', 0);
 
 fs   = EEG.srate;
 nChan = EEG.nbchan;

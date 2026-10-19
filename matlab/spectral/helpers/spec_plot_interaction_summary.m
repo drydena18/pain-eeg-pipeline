@@ -1,76 +1,65 @@
 function spec_plot_interaction_summary(outPath, featChan, featGA, chanLabels, subjid, logf)
 %% SPEC_PLOT_INTERACTION_SUMMARY
 % Per-subject overview of pre-stim interaction metrics
-% V 2.0.0
+% V 2.1.0
 %
-% V 2.0.0 changes vs V 1.1.0:
-%   Field renames only (no behaviour change) to match the new
-%   whole_/pre_/post_/delta_ metric scheme in spectral_core.m.
-%       bi_pre -> pre_sf_balance
-%       lr_pre -> pre_sf_logratio
-%       cog_pre -> pre_paf_cog_hz
+% V 2.1.0 changes vs V 2.0.0 (feature set v3.1 names):
+%   - delta_erd -> erd_asym (ERD_slow - ERD_fast) in panels [1,3] and [2,2].
+%     The old name made the whole figure fail.
+%   - phase_slow_rad -> slow_phase in panel [3,1].
 %
-% V 1.1.0 changes vs V 1.0.0:
-%   - Fixed "Parent input must be a polaraxes object" error: nexttile returns
-%     a regular Axes; polarhistogram requires a PolarAxes.  The fix captures
-%     the tile's Position, deletes the regular axes, then creates a polaraxes
-%     in the same screen location.
-%   - Fixed missing semicolon on hasFlag assignment (was printing to console).
-%   - Fixed title typo: "RL_pre" -> "LR_pre" in panel [1,1].
-%
-% Produces a single multi-panel figure covering all new alpha interaction metrics.
+% V 2.0.0: bi_pre -> pre_sf_balance, lr_pre -> pre_sf_logratio,
+%          cog_pre -> pre_paf_cog_hz.
+% V 1.1.0: polarhistogram parent fix; title typo.
 %
 % Layout (3 rows x 3 columns):
-%   Row 1 – GA trial sequence (line plots):
+%   Row 1 - GA trial sequence (line plots):
 %           [1,1] BI_pre + LR_pre (dual y-axis)
 %           [1,2] CoG_pre with 10 Hz boundary marked
-%           [1,3] ΔERD with zero reference
-%   Row 2 – Channel x trial heatmaps (diverging colourmap):
+%           [1,3] ERD asymmetry with zero reference
+%   Row 2 - Channel x trial heatmaps (diverging colourmap):
 %           [2,1] BI_pre [chan x trial]
-%           [2,2] ΔERD   [chan x trial]
+%           [2,2] ERD asymmetry [chan x trial]
 %           [2,3] CoG_pre [chan x trial]
-%   Row 3 – Phase / p5_flag / BI_pre autocorrelation:
+%   Row 3 - Phase / p5_flag / BI_pre autocorrelation:
 %           [3,1] Slow-alpha phase polar histogram (rose)
 %           [3,2] p5_flag heatmap [chan x trial]
 %           [3,3] BI_pre GA autocorrelation (lag 1-10)
 %
-% Rows 3 panels are each conditional – drawn only when the relevant data exists.
-% Missing panels display a "not available" placeholder.
-%
 % Inputs:
 %   - outPath       : full path for the saved PNG
-%   - featChan      : struct of [nChar x nTr] fields from spectral_core
-%   - featGA        : struct of [nTr x 1] fields (GA across channels)
+%   - featChan      : struct of [nChan x nTr] fields from spectral_core
+%   - featGA        : struct of [1 x nTr] fields (GA across channels)
 %   - chanLabels    : cell/string array of channel labels
 %   - subjid        : integer subject ID
 %   - logf          : (optional) MATLAB log file handle
 
 if nargin < 6, logf = []; end
 if isstring(chanLabels), chanLabels = cellstr(chanLabels); end
- 
+
 nTr = numel(featGA.pre_sf_balance);
 nC_panels = 3;
 nR_panels = 3;
- 
+
 nChan = numel(chanLabels);
 step = 1;
 if nChan > 40, step = 2; end
 if nChan > 80, step = 4; end
 yt = 1:step:nChan;
- 
+
 figW = 1800;
 figH = max(1400, 300*nR_panels + 20*nChan);
- 
+
 h = figure('Visible', 'off', 'Units', 'pixels', 'Position', [100 100 figW figH]);
 tl = tiledlayout(h, nR_panels, nC_panels, 'TileSpacing', 'compact', 'Padding', 'compact');
- 
+
 title(tl, sprintf('sub-%03d | Pre-Stimulus Alpha Interaction Metrics', subjid), ...
     'Interpreter', 'none', 'FontSize', 14, 'FontWeight', 'bold');
- 
+
 trials = (1:nTr)';
- 
+
 % ================================================================
-% ROW 1 – GA trial sequence
+% ROW 1 - GA trial sequence
 % ================================================================
 % [1,1] BI_pre + LR_pre on dual axes
 ax = nexttile(tl, 1);
@@ -79,18 +68,18 @@ plot(ax, trials, featGA.pre_sf_balance, '-o', 'MarkerSize', 3, 'Color', [0.13 0.
 yline(ax, 0, ':', 'Color', [0.5 0.5 0.5]);
 ylabel(ax, 'BI_{pre} [-1, +1]', 'Interpreter', 'tex');
 ylim(ax, [-1.05 1.05]);
- 
+
 yyaxis(ax, 'right');
 plot(ax, trials, featGA.pre_sf_logratio, '-s', 'MarkerSize', 3, 'Color', [0.84 0.15 0.16]);
 yline(ax, 0, ':', 'Color', [0.5 0.5 0.5]);
 ylabel(ax, 'LR_{pre} (log ratio)', 'Interpreter', 'tex');
- 
-title(ax, 'BI_{pre} & LR_{pre} over trials', 'Interpreter', 'tex');   % V1.1.0: was RL_pre
+
+title(ax, 'BI_{pre} & LR_{pre} over trials', 'Interpreter', 'tex');
 xlabel(ax, 'Trial');
 legend(ax, {'BI_{pre}', 'LR_{pre}'}, 'Interpreter', 'tex', 'Location', 'best');
 grid(ax, 'on');
- 
-% [1,2] CoG_pre – weighted spectral centroid within alpha band
+
+% [1,2] CoG_pre - weighted spectral centroid within alpha band
 ax = nexttile(tl, 2);
 plot(ax, trials, featGA.pre_paf_cog_hz, '-o', 'MarkerSize', 3, 'Color', [0.17 0.63 0.17]);
 yline(ax, 10, '--k', '10 Hz', 'LabelHorizontalAlignment', 'left', 'FontSize', 9);
@@ -98,32 +87,38 @@ ylabel(ax, 'CoG_{pre} (Hz)', 'Interpreter', 'tex');
 xlabel(ax, 'Trial');
 title(ax, 'CoG_{pre}: Pre-stim Center of Gravity', 'Interpreter', 'tex');
 grid(ax, 'on');
- 
-% [1,3] ΔERD – fast vs slow alpha desynchronisation asymmetry
+
+% [1,3] ERD asymmetry - slow vs fast alpha desynchronisation
 ax = nexttile(tl, 3);
-plot(ax, trials, featGA.delta_erd, '-o', 'MarkerSize', 3, 'Color', [0.58 0.40 0.74]);
-yline(ax, 0, '--k', 'Equal', 'LabelHorizontalAlignment', 'left', 'FontSize', 9);
-ylabel(ax, '\DeltaERD (ERD_{slow} - ERD_{fast})', 'Interpreter', 'tex');
-xlabel(ax, 'Trial');
-title(ax, '\DeltaERD: Sub-band ERD asymmetry', 'Interpreter', 'tex');
-grid(ax, 'on');
- 
+if isfield(featGA, 'erd_asym')
+    plot(ax, trials, featGA.erd_asym, '-o', 'MarkerSize', 3, 'Color', [0.58 0.40 0.74]);
+    yline(ax, 0, '--k', 'Equal', 'LabelHorizontalAlignment', 'left', 'FontSize', 9);
+    ylabel(ax, 'ERD_{asym} (ERD_{slow} - ERD_{fast})', 'Interpreter', 'tex');
+    xlabel(ax, 'Trial');
+    grid(ax, 'on');
+else
+    text(ax, 0.5, 0.5, 'not available', 'Units', 'normalized', ...
+        'HorizontalAlignment', 'center', 'Color', [0.5 0.5 0.5]);
+    axis(ax, 'off');
+end
+title(ax, 'ERD_{asym}: Sub-band ERD asymmetry', 'Interpreter', 'tex');
+
 % ================================================================
-% ROW 2 – Channel x trial heatmaps
+% ROW 2 - Channel x trial heatmaps
 % ================================================================
 heatmap_items = {
     4, 'pre_sf_balance',    'BI_{pre} [chan \times trial]';
-    5, 'delta_erd', '\DeltaERD [chan \times trial]';
-    6, 'pre_paf_cog_hz',   'CoG_{pre} [chan \times trial]';
+    5, 'erd_asym',          'ERD_{asym} [chan \times trial]';
+    6, 'pre_paf_cog_hz',    'CoG_{pre} [chan \times trial]';
 };
- 
+
 for r = 1:size(heatmap_items, 1)
     tile_idx = heatmap_items{r, 1};
     fn  = heatmap_items{r, 2};
     ttl = heatmap_items{r, 3};
- 
+
     ax = nexttile(tl, tile_idx);
- 
+
     if isfield(featChan, fn) && ~isempty(featChan.(fn))
         X = featChan.(fn);
         imagesc(ax, X);
@@ -134,62 +129,52 @@ for r = 1:size(heatmap_items, 1)
         ylabel(ax, 'Channel');
         colorbar(ax, 'Location', 'eastoutside');
         colormap(ax, spec_diverging_cmap());
-        clim_abs = max(abs(X(isfinite(X))));   % isfinite drops NaN+Inf; no toolbox needed
+        clim_abs = max(abs(X(isfinite(X))));
         if ~isempty(clim_abs) && clim_abs > 0
-            caxis(ax, [-clim_abs, clim_abs]);   % caxis works R2014b+; clim is R2022a only
+            caxis(ax, [-clim_abs, clim_abs]);
         end
     else
         text(ax, 0.5, 0.5, 'not available', 'Units', 'normalized', ...
             'HorizontalAlignment', 'center', 'Color', [0.5 0.5 0.5]);
         axis(ax, 'off');
     end
- 
+
     title(ax, ttl, 'Interpreter', 'tex');
 end
- 
+
 % ================================================================
-% ROW 3 – Phase rose / p5_flag / BI_pre autocorrelation
+% ROW 3 - Phase rose / p5_flag / BI_pre autocorrelation
 % ================================================================
- 
-% ---------------------------------------------------------------
-% [3,1] Circular histogram of GA phase at stimulus onset
-%
-% FIX (V1.1.0): nexttile returns a regular Axes object, but
-% polarhistogram requires a PolarAxes as its parent.  We capture
-% the tile Position, delete the regular axes, then create a
-% polaraxes in the same screen rectangle.
-% ---------------------------------------------------------------
+
+% [3,1] Circular histogram of GA phase at stimulus onset. polarhistogram
+% needs a PolarAxes: replace the tile's regular axes in place.
 ax_placeholder = nexttile(tl, 7);
-hasPhase = isfield(featGA, 'phase_slow_rad') && ...
-           ~all(isnan(featGA.phase_slow_rad));
- 
+hasPhase = isfield(featGA, 'slow_phase') && ~all(isnan(featGA.slow_phase));
+
 if hasPhase
-    phi = featGA.phase_slow_rad(~isnan(featGA.phase_slow_rad));
- 
-    % Replace the regular axes with a polaraxes in the same tile position
+    phi = featGA.slow_phase(~isnan(featGA.slow_phase));
+
     pos = ax_placeholder.Position;
     delete(ax_placeholder);
     ax = polaraxes(h, 'Position', pos);
- 
+
     polarhistogram(ax, phi, 24, 'Normalization', 'probability', ...
         'FaceColor', [0.13 0.47 0.71], 'FaceAlpha', 0.6);
     ax.ThetaZeroLocation = 'top';
     ax.ThetaDir          = 'clockwise';
     title(ax, 'GA Slow-alpha Phase at t = 0', 'Interpreter', 'none');
 else
-    ax = ax_placeholder;   % keep the regular axes for the placeholder
+    ax = ax_placeholder;
     text(ax, 0.5, 0.5, 'phase not available', 'Units', 'normalized', ...
         'HorizontalAlignment', 'center', 'Color', [0.5 0.5 0.5]);
     axis(ax, 'off');
     title(ax, 'GA Slow-alpha Phase at t = 0', 'Interpreter', 'none');
 end
- 
-% ---------------------------------------------------------------
-% [3,2] p5_flag heatmap – binary map of unstable-power trials
-% ---------------------------------------------------------------
+
+% [3,2] p5_flag heatmap - binary map of unstable-power trials
 ax = nexttile(tl, 8);
-hasFlag = isfield(featChan, 'p5_flag') && ~isempty(featChan.p5_flag);   % V1.1.0: added semicolon
- 
+hasFlag = isfield(featChan, 'p5_flag') && ~isempty(featChan.p5_flag);
+
 if hasFlag
     F = featChan.p5_flag;
     imagesc(ax, F);
@@ -201,7 +186,7 @@ if hasFlag
     cb = colorbar(ax, 'Location', 'eastoutside');
     cb.Ticks = [0 1]; cb.TickLabels = {'ok', 'flagged'};
     xlabel(ax, 'Trial'); ylabel(ax, 'Channel');
-    pct = 100 * mean(F(:));
+    pct = 100 * mean(F(:), 'omitnan');
     title(ax, sprintf('p5 Flag (%.1f%% cells flagged)', pct), 'Interpreter', 'none');
 else
     text(ax, 0.5, 0.5, 'not available', 'Units', 'normalized', ...
@@ -209,16 +194,14 @@ else
     axis(ax, 'off');
     title(ax, 'p5 Flag', 'Interpreter', 'none');
 end
- 
-% ---------------------------------------------------------------
+
 % [3,3] BI_pre autocorrelation (lags 1-10)
 % Slow decay -> rigid state; rapid decay -> flexible state
-% ---------------------------------------------------------------
 ax = nexttile(tl, 9);
 b    = featGA.pre_sf_balance;
 b_ok = b(~isnan(b));
 maxLag = min(10, floor(numel(b_ok) / 3));
- 
+
 if numel(b_ok) >= 6
     [ac, lags] = xcorr(b_ok - mean(b_ok), maxLag, 'coeff');
     posLags = lags >= 0;
@@ -238,13 +221,13 @@ else
     axis(ax, 'off');
     title(ax, 'BI_{pre} GA Autocorrelation', 'Interpreter', 'tex');
 end
- 
+
 exportgraphics(h, outPath, 'Resolution', 200);
 close(h);
- 
+
 spec_logmsg(logf, '[INTERACT_FIG] Saved -> %s', outPath);
 end
- 
+
 % ================================================================
 % LOCAL: blue-white-red diverging colormap (64 levels)
 % ================================================================
