@@ -5,20 +5,21 @@
 **Dataset:** CNED - Zhao et al., Sci Data (2025)  
 https://doi.org/10.1038/s41597-025-05900-1
 
-**Feature set:** v3.1 (spectral_core.m 3.1.0, source_core.py 4.1.0, preproc_core.m 2.2.1)
+**Feature set:** v3.1 (spectral_core.m 3.1.0, source_core.py 4.1.0, preproc_core.m 2.2.1)  
+**R stage:** V3 (Oct 2026): non-discrete fits by default, decomposition-keyed results, robustness suite, channel-vs-source comparison and classical tests on DuckDB
 
 ---
 
 ## 1. Overview
 
-This R pipeline takes the outputs of the MATLAB preprocessing/spectral pipeline and the Python source-localization pipeline, checks that every subject's EEG trials line up with their behavioural trials, loads everything into a normalized DuckDB database, and fits a screen of statistical models.
+This R pipeline takes the outputs of the MATLAB preprocessing/spectral pipeline and the Python source-localization pipeline, checks that every subject's EEG trials line up with their behavioural trials, loads everything into a normalized DuckDB database, fits a screen of statistical models, and then tests every hit: held-out replication, sex differences, power, robustness, and channel vs source.
 
 Two parallel analytical streams run side by side:
 
 - **Channel space** — scalp electroencephalography (EEG) features, one model set per electrode.
 - **Source space** — standardized low-resolution electromagnetic tomography (sLORETA) projections onto fsaverage, one model set per region of interest (ROI).
 
-Together they support a formal comparison of whether source localization improves the prediction of trial-level pain ratings.
+Together they support a formal comparison of whether source localization improves the prediction of trial-level pain ratings (`compare_levels.R`).
 
 The primary statistical tool is the **generalized additive mixed model (GAMM)**, fitted with `mgcv::bam()` using fast restricted maximum likelihood (fREML) and double-penalty selection (`select = TRUE`). GAMMs suit trial-level pain data because they:
 
@@ -36,10 +37,10 @@ The model-fitting stage is **combo-capable**. One engine (`gamm_combo_core.R`) g
 
 | Database | Role | Tables |
 |---|---|---|
-| `data.duckdb` | Input data; read-only during the GAMM and validate stages | `subjects`, `trials`, `epochs`, `alignment_qc`, `spectral_metrics`, `source_metrics`, `spectral_subject_metrics`, `source_subject_metrics`, `ingest_log`, `subject_split` |
-| `results.duckdb` | Model results; written by the GAMM and validate stages | `gamm_fitted`, `gamm_sex_diff`, `holdout_replication`, `power_analysis` |
+| `data.duckdb` | Input data; read-only during the GAMM, validate and robustness stages | `subjects`, `trials`, `epochs`, `alignment_qc`, `spectral_metrics`, `source_metrics`, `spectral_subject_metrics`, `source_subject_metrics`, `ingest_log`, `subject_split` |
+| `results.duckdb` | Model results; written by the GAMM, validate and robustness stages | `gamm_fitted`, `gamm_sex_diff`, `holdout_replication`, `power_analysis`, `robustness` |
 
-The merge stage builds `data.duckdb`. `results.duckdb` is written by `source_core.R`, `channel_core.R` and `power_analysis.R`. No stage writes to both databases.
+The merge stage builds `data.duckdb`. `results.duckdb` is written by the scripts in `R/gamm/`, `R/validate/` and `R/robustness/`. No stage writes to both databases.
 
 ### `data.duckdb` Tables
 
@@ -48,7 +49,7 @@ The merge stage builds `data.duckdb`. `results.duckdb` is written by `source_cor
 | `subjects` | subject | `global_subjid`, `subjid`, `experiment_id`, `experiment_name`, `age`, `sex`, `cap_size` |
 | `trials` | subject × trial | `trial`, `trial_index`, `laser_power`, `pain_rating` (from behaviour) |
 | `epochs` | subject × epoch | `trial` (= epoch index), `event_code`, `condition`, `intensity` (low/high/unknown) from `07_epoch/sub-XXX_epoch_metadata.csv` |
-| `alignment_qc` | subject | trial-alignment check result: counts, intensity check, `status`, `reason`, `ingested` (Section 3) |
+| `alignment_qc` | subject | trial-alignment check result: counts, intensity check, `status`, `reason`, `ingested` (Section 2, Trial Alignment) |
 | `spectral_metrics` | subject × trial × channel × metric | trial-level channel-space features (long) |
 | `source_metrics` | subject × trial × ROI × metric | trial-level source-space features (long) |
 | `spectral_subject_metrics` | subject × channel × metric | subject-level summaries: trial-variability index (TVI), inter-trial coherence (ITC), fitting oscillations and one-over-f (FOOOF) parameters, trial-mean window features |
@@ -90,6 +91,7 @@ Behaviour is joined to EEG by `trial` = epoch index. That is only correct if the
 | `count_mismatch` | epoch / spectral / source / behaviour counts differ | no (`exclude_misaligned = TRUE`) |
 | `intensity_mismatch` | low/high labels disagree with `laser_power` | no (`exclude_misaligned = TRUE`) |
 | `behaviour_noncontiguous` | behavioural trial numbers are not 1..n | no |
+| `rating_out_of_range` | a rating outside `rating_range` (data-entry error) | no |
 | `no_eeg` | behaviour only (not yet processed) | — |
 | `no_behaviour` | EEG outputs but no behavioural rows | no |
 | `read_error` / `ingest_error` | a file could not be read / inserted | no (transaction rolled back) |
@@ -103,7 +105,7 @@ Behaviour is joined to EEG by `trial` = epoch index. That is only correct if the
 - Assignments are made incrementally as new subjects are ingested. A subject's group is set once and never changed by later runs.
 - Every subject with behaviour is assigned, including subjects excluded by the alignment check. The split belongs to the person, so a subject who is fixed and re-ingested later keeps their original group.
 - `subject_split` is the only table the merge rebuild never drops.
-- The GAMM stage reads training subjects only; held-out subjects are reserved for cross-validation (CV).
+- The GAMM screen reads training subjects only; held-out subjects are reserved for `holdout_replicate.R` and the held-out parts of the robustness tests.
 
 ### Pipeline Flow
 
@@ -125,19 +127,21 @@ Experiment behavioural CSVs, participants.tsv, cap_size.csv
           ▼                    ▼
   R/gamm/source_core.R   R/gamm/channel_core.R
   (per ROI)              (per channel)
-          │                    │
           └─────────┬──────────┘
                     ▼
-             results.duckdb
-             (gamm_fitted)
+       results.duckdb (gamm_fitted)
                     │
-                    ▼
-    R/validate/power_analysis.R
-    (all significant source models, per cap_size + pooled)
-                    │
-                    ▼
-             results.duckdb
-             (power_analysis)
+   ┌────────────┬───┴────────┬──────────────┬─────────────────┐
+   ▼            ▼            ▼              ▼                 ▼
+sex_diff_   plot_gamm_   holdout_       compare_levels.R   ../validate/
+core.R      hits.R       replicate.R    (channel vs        power_analysis.R
+                             │           source)
+                             ▼
+                 ../robustness/robustness_core.R
+                 (replicated hits: LOEO, k-fold,
+                  permutation, split-half, FOOOF)
+
+classical_tests.R reads data.duckdb only (ERD t-tests, rmANOVA, Rayleigh).
 ```
 
 ---
@@ -148,7 +152,7 @@ Experiment behavioural CSVs, participants.tsv, cap_size.csv
 
 | File | Role |
 |---|---|
-| `merge_defaults.R` | Paths (`data_root`, `behav_dir`, `cap_size_file`, `data_db_path`), `feature_set`, `rebuild_derived_tables`, the per-experiment file layout (`files`), `exclude_misaligned`, the experiment lookup, split seed and fraction. Edit here when paths change or an experiment is added. |
+| `merge_defaults.R` | Paths (`data_root`, `behav_dir`, `cap_size_file`, `data_db_path`), `feature_set`, `rebuild_derived_tables`, the per-experiment file layout (`files`), `exclude_misaligned`, `rating_range`, the experiment lookup, split seed and fraction. Edit here when paths change or an experiment is added. |
 | `merge_core.R` | Orchestrator. (1) drops and recreates the derived tables; (2) reads behaviour, participants and cap size; (3) discovers each experiment's pipeline outputs; (4) per subject: alignment check, then all of that subject's EEG files ingested in one transaction; (5) writes `alignment_qc` and prints a status summary; (6) assigns the split to new subjects. Stops if EEG files exist but no subject was ingested. |
 | `helpers/read_helpers.R` | `read_behavioural_file()`, `read_participants_file()`, `read_cap_size_file()`, `read_epoch_metadata()`, and `discover_pipeline_files()` (subject ID from the file name; errors if one subject has two files of the same kind). |
 | `helpers/db_write_helpers.R` | Schema (`init_data_schema()`), rebuild (`drop_derived_tables()`), delete-then-insert helpers, `ingest_feature_csv()` (SQL unpivot of one CSV) and `log_ingest()`. |
@@ -157,23 +161,28 @@ Experiment behavioural CSVs, participants.tsv, cap_size.csv
 
 ### `R/gamm/`
 
+All scripts are run from `R/gamm/`.
+
 | File | Role |
 |---|---|
-| `gamm_defaults.R` | Database paths, output directory, `feature_set`, metric selection (`metric_include` / `metric_exclude`), unit selection (`roi_include` / `channel_include`), QC (`exclude_p5_flag`, `min_fooof_r2`, `min_trials_grp`), `combo_sizes`, `tensor_pairs`, `k_max`, `nthreads`, `bam_discrete`, `apply_fdr_correction`. |
+| `gamm_defaults.R` | Database paths, output directory, `feature_set`, metric selection (`metric_include` / `metric_exclude`), `metric_decomposition` / `primary_part`, unit selection (`roi_include` / `channel_include`), QC (`exclude_p5_flag`, `min_fooof_r2`, `min_trials_grp`), `combo_sizes`, `tensor_pairs`, `k_max`, `nthreads`, `bam_discrete`, follow-up and held-out settings, figure settings, `robustness`, `compare` and `classical` blocks, `apply_fdr_correction`. |
 | `source_core.R` | Entry point for the source-space screen: `run_gamm_screen("source")`. |
 | `channel_core.R` | Entry point for the channel-space screen: `run_gamm_screen("channel")`. One model set per channel; channels are not pooled into one model. |
 | `helpers/gamm_screen.R` | The per-unit loop shared by both entry points: load the screened metrics for training subjects, QC, z-score, build the base formula, fit every combo, write each result. |
-| `helpers/gamm_combo_core.R` | Fitting engine: `generate_metric_combos()`, `build_combo_formula()` (additive or tensor), `fit_gamm_combo()` (fit, save `.rds`, return a result row), `init_results_db()` / `write_result_row()` / `close_results_db()`. |
+| `helpers/gamm_combo_core.R` | Fitting engine: `generate_metric_combos()`, `build_combo_formula()` (additive or tensor), `fit_gamm_combo()` (fit, save `.rds`, return a result row), `model_out_dir()`, `init_results_db()` / `write_result_row()` / `close_results_db()`. |
 | `sex_diff_core.R` | Follow-up on every significant single-metric model: refits it on the same rows with sex as an ordered factor, so a **difference curve** (other − reference sex) tests whether the curve shape differs. Writes `gamm_sex_diff` (Section 4). |
-| `holdout_replicate.R` | **The replication step.** For every significant single-metric model: the training-fit metric model and a nested baseline (same training rows, metric term removed) both predict the held-out subjects at population level. Change in prediction error at trial and subject level, 95% CI from resampling held-out subjects, Benjamini–Hochberg across hits. Writes `holdout_replication` and a forest plot per level. |
+| `holdout_replicate.R` | **The replication step.** For every significant single-metric model: the training-fit metric model and a nested baseline (same training rows, metric term removed) both predict the held-out subjects at population level. Change in prediction error at trial and subject level, 95% CI from resampling held-out subjects, Benjamini–Hochberg (BH) across hits. Writes `holdout_replication` and a forest plot per level. |
 | `plot_gamm_hits.R` | Figures for every significant single-metric model (Section 5, Figures). Reads only `results.duckdb` and the `.rds` files. |
-| `helpers/hit_helpers.R` | Shared by the follow-up scripts: `load_hits()`, `metric_label()` / `unit_label()`, population-level predictions (`marginal_lpmatrix()`, `predict_from_lp()`), held-out prediction (`predict_population()`, `prepare_holdout()`, `refit_baseline()`, `boot_subjects()`), the figure theme, `fmt_p()`. |
+| `compare_levels.R` | **Channel vs source.** Per metric: share of units with a screen hit at each level, held-out replication counts; for metrics with a hit at both levels, a paired held-out comparison of the best ROI and the best channel (chosen by screen p, training data only) and the correlation of their fitted curves. Writes `compare/level_summary.csv`, `compare/level_paired_holdout.csv`, `figures/level_comparison.png`. Replaces `R/analysis/behavioural_analysis/compare_channel_source_gamm.R`. |
+| `classical_tests.R` | Classical tests on the v3.1 source tables: ERD (paired t-tests, post vs pre power per ROI × band), metric differences across ROIs (repeated-measures ANOVA, Greenhouse–Geisser via `afex` if installed, BH pairwise), Rayleigh tests of phase uniformity per subject × ROI. Writes CSVs, figures and a text report to `classical$out_dir`. Replaces `R/analysis/behavioural_analysis/run_classical_tests.R`. |
+| `helpers/hit_helpers.R` | Shared by the follow-up scripts: `load_hits()`, `ensure_derived_table()`, `fig_unit_dir()`, `metric_label()` / `unit_label()`, population-level predictions (`marginal_lpmatrix()`, `predict_from_lp()`), held-out prediction (`predict_population()`, `prepare_holdout()`, `refit_baseline()`, `boot_subjects()`), the figure theme, `fmt_p()`. |
 | `helpers/db_helpers.R` | `connect_data_db()` (read-only), `list_available_units()` / `list_available_metrics()`, `select_metrics()` / `select_units()`, `load_metrics_wide()` (trial level; wrappers `load_source_metrics_wide()`, `load_channel_metrics_wide()`, `load_holdout_source_metrics_wide()`), `load_subject_metrics_wide()` (subject level). |
+| `check_discrete_between_p.R` | 30-second check of whether `bam(discrete = TRUE)` gives valid p-values for subject-level smooths on your mgcv version (Section 5, `bam_discrete`). |
 
 **Metrics screened.** `metric_include` selects the 10 alpha families × 4 windows plus the 4 ERD metrics: **44 metrics** per unit. Not screened:
 
 - `p5_flag` — a QC flag. With `exclude_p5_flag = TRUE` it drops trials instead.
-- Phase columns — circular, so a smooth on a linear axis is wrong.
+- Phase columns — circular, so a smooth on a linear axis is wrong (tested for uniformity in `classical_tests.R` instead).
 - LEP columns — a different signal and question.
 
 **ROIs.** `source_metrics` holds 18 ROIs: S1, S2, ACC (anterior cingulate cortex), Insula, dlPFC (dorsolateral prefrontal cortex) and M1, each bilateral plus `_lh` and `_rh`. Screening all three versions tests each region three times with partly redundant data. Restrict with `roi_include` if that is not wanted.
@@ -182,34 +191,44 @@ Experiment behavioural CSVs, participants.tsv, cap_size.csv
 
 | File | Role |
 |---|---|
-| `power_analysis.R` | For every significant single-metric source model of the current `feature_set`: refits as `lmer()` (both parts of a split metric, linear), runs `simr::powerCurve()` for the **primary part** pooled and per cap size (after `simr::extend()` to reach the projected N), and bootstraps holdout prediction error. Reports the binding constraint and a verdict against current training N. Writes `power_analysis` in `results.duckdb`. Run from `R/gamm/`. |
+| `power_analysis.R` | For every significant single-metric source model of the current `feature_set` and decomposition: refits it as `lmer()` on the screen model's own rows (same QC and scaling; both parts of a split metric, linear; sex and cap size as in the screen), runs `simr::powerCurve()` for the **primary part** pooled and per cap size (after `simr::extend()` to reach the projected N), at the observed effect **and at half of it** (`effect_scales`: screen hits are selected for looking large, so their estimates are inflated), and bootstraps holdout prediction error. Per-cap-size requirements are converted to total training N. Reports the binding constraint and a verdict at the smallest effect scale. Writes `power_analysis` in `results.duckdb`. Run from `R/gamm/`. |
 
 **Run frequency:** twice — once on interim data to make the split-fraction decision, once near full N as a confirmatory check. Do not run repeatedly and adjust the split based on results (optional stopping).
+
+### `R/robustness/`
+
+| File | Role |
+|---|---|
+| `robustness_core.R` | Robustness tests for hits (by default only those that **replicated** in `holdout_replication`): leave-one-experiment-out (LOEO), grouped k-fold cross-validation (CV) within the training set, subject-level permutation test on the held-out set, split-half stability of the fitted curve, FOOOF-fit sensitivity. Writes `robustness` (Section 4) and `<metric>_robustness.png` per hit. Run from `R/gamm/`: `source("../robustness/robustness_core.R")`. |
+| `helpers/robustness_helpers.R` | `refit_formula()` / `refit_pair()` (screen model and nested baseline refit on a subset, terms rebuilt for that subset), `score_predictions()`, `permute_primary()`, `stratified_folds()`, the `robustness` table. |
+
+The drafts `run_robustness.R`, `run_cv_internal.R`, `run_cv_external.R`, `cv_helpers.R` and `cv_split.R` are replaced by these two files (external validation is `holdout_replicate.R`; leave-one-subject-out is replaced by grouped k-fold, which needs k instead of N refits per hit).
 
 ### Not yet migrated
 
 | Location | Status |
 |---|---|
-| `R/robustness/` (`run_cv_internal.R`, `run_cv_external.R`, `cv_helpers.R`, `cv_split.R`, `run_robustness.R`) | Drafts; not runnable as-is (e.g. `models` used before it is defined, `library(stringer)`). Not updated for v3.1. |
-| `R/analysis/behavioural_analysis/` | Legacy CSV-based scripts (`compare_channel_source_gamm.R`, `run_classical_tests.R`, old merge/GAMM scripts). Pending migration to DuckDB. |
+| `R/analysis/behavioural_analysis/` (old merge / GAMM scripts, `gamm_combo_core.R` copy) | Legacy CSV-based scripts, superseded by `R/merge/` and `R/gamm/`. Kept for reference only; do not source them alongside the current stage. |
 
 ---
 
-## 4. `gamm_fitted` Schema
+## 4. `results.duckdb` Schemas
 
-Primary key: `(feature_set, level, group_value, model_name)`. `init_results_db()` refuses to open a `gamm_fitted` table that predates v3.1 (no `feature_set` column) and asks for `results.duckdb` to be archived.
+### `gamm_fitted`
+
+Primary key: `(feature_set, decomposition, level, group_value, model_name)`. `init_results_db()` refuses to open a `gamm_fitted` table without the `feature_set`, `decomposition` and `bam_discrete` columns and asks for `results.duckdb` to be archived (those rows came from discrete fits, whose between-subject p-values are invalid).
 
 | Column | Type | Description |
 |---|---|---|
 | `fitted_at` | VARCHAR | Timestamp of this fit |
-| `decomposition` | VARCHAR | `between_within` or `pooled` |
-| `primary_part` | VARCHAR | `between`, `within` or `pooled`: which term `edf` / `f_stat` / `p_value` describe |
 | `feature_set` | VARCHAR | Pipeline feature set the metrics came from (e.g. `v3.1`) |
 | `level` | VARCHAR | `'source'` or `'channel'` |
 | `group_value` | VARCHAR | ROI (e.g. `Insula_lh`) or channel label (e.g. `Cz`) |
 | `model_name` | VARCHAR | `m00_baseline` or generated from the combo (e.g. `m_1metric_pre_paf_cog_hz`) |
 | `metrics` | VARCHAR | Pipe-delimited z-scored metric names (e.g. `pre_paf_cog_hz_z\|erd_asym_z`) |
 | `n_metrics` | INTEGER | Metrics in this combo (0 = baseline) |
+| `decomposition` | VARCHAR | `between_within` or `pooled` |
+| `primary_part` | VARCHAR | `between`, `within` or `pooled`: which term `edf` / `f_stat` / `p_value` describe |
 | `edf` | VARCHAR | Pipe-delimited effective degrees of freedom per metric smooth |
 | `f_stat` | VARCHAR | Pipe-delimited F statistics per metric smooth |
 | `p_value` | VARCHAR | Pipe-delimited p-values per metric smooth (primary part) |
@@ -220,6 +239,7 @@ Primary key: `(feature_set, level, group_value, model_name)`. `init_results_db()
 | `r_sq` | DOUBLE | Adjusted R² |
 | `n_obs` | INTEGER | Observations used |
 | `n_subjects` | INTEGER | Subjects contributing at least one complete row |
+| `bam_discrete` | BOOLEAN | Whether the fit used `discrete = TRUE` (p-values of subject-level terms invalid if TRUE) |
 | `rds_path` | VARCHAR | Path to the saved model object |
 
 Smooth-term statistics are matched to metrics by the variables inside each term label (`s(x)`, `te(a,b)`), not by substring. In a tensor pair both metrics report the shared `te()` term.
@@ -227,22 +247,20 @@ Smooth-term statistics are matched to metrics by the variables inside each term 
 **Useful queries:**
 
 ```sql
--- Significant source-space single-metric results, ranked by r_sq
-SELECT group_value, metrics, r_sq, p_value, aic
+-- Significant source-space single-metric results, ranked by p
+SELECT group_value, metrics, p_value, p_other, r_sq
 FROM gamm_fitted
-WHERE feature_set = 'v3.1' AND level = 'source' AND n_metrics = 1
+WHERE feature_set = 'v3.1' AND decomposition = 'between_within'
+  AND level = 'source' AND n_metrics = 1
   AND TRY_CAST(p_value AS DOUBLE) < 0.05
-ORDER BY r_sq DESC;
+ORDER BY TRY_CAST(p_value AS DOUBLE);
 
--- Change in AIC versus the baseline model, per ROI
-SELECT b.group_value AS roi, b.metrics, b.aic - a.aic AS delta_aic
-FROM gamm_fitted a
-JOIN gamm_fitted b
-  ON a.feature_set = b.feature_set AND a.level = b.level
- AND a.group_value = b.group_value
-WHERE a.model_name = 'm00_baseline' AND b.n_metrics = 1
-  AND a.level = 'source' AND a.feature_set = 'v3.1'
-ORDER BY delta_aic;
+-- Hits that replicated, with their robustness headline numbers
+SELECT h.level, h.group_value, h.metric, h.subj_pct, r.test, r.variant, r.stat, r.p_value
+FROM holdout_replication h
+JOIN robustness r USING (feature_set, decomposition, level, group_value, metric)
+WHERE h.replicated AND r.variant IN ('all', 'subject_level')
+ORDER BY h.level, h.group_value, h.metric, r.test;
 ```
 
 **Useful `data.duckdb` queries:**
@@ -256,11 +274,9 @@ SELECT global_subjid, status, reason
 FROM alignment_qc WHERE NOT ingested AND status <> 'no_eeg';
 ```
 
----
+### `gamm_sex_diff`
 
-### `gamm_sex_diff` Schema
-
-One row per significant single-metric model (primary key `(feature_set, level, group_value, metric)`).
+One row per significant single-metric model (primary key `(feature_set, decomposition, level, group_value, metric)`). Derived from `gamm_fitted` and the `.rds` files; an older layout is dropped and rebuilt.
 
 | Column | Description |
 |---|---|
@@ -270,16 +286,14 @@ One row per significant single-metric model (primary key `(feature_set, level, g
 | `n_subj_ref`, `n_subj_other` | subjects of each sex in the model |
 | `term_type` | `smooth` (difference smooth) or `linear` (metric entered linearly in the screen; slope difference instead) |
 | `diff_edf`, `diff_f`, `diff_p` | statistics of the difference curve: does the shape differ by sex? |
-| `diff_p_fdr` | Benjamini–Hochberg adjusted `diff_p` across all hits of the run |
+| `diff_p_fdr` | BH-adjusted `diff_p` across all hits of the run |
 | `sex_offset`, `sex_offset_p` | overall difference in level (other − reference) |
 | `aic_screen`, `aic_sex`, `delta_aic` | AIC of the screen model, of the sex model, and the change (negative = sex model better; same rows, so comparable) |
-| `rds_path` | `<out_dir>/<level>/<unit>/sexdiff_<metric>.rds` |
+| `rds_path` | `<out_dir>/<level>/<unit>/[pooled/]sexdiff_<metric>.rds` |
 
----
+### `holdout_replication`
 
-### `holdout_replication` Schema
-
-One row per significant single-metric model (primary key `(feature_set, level, group_value, metric)`).
+One row per significant single-metric model (primary key `(feature_set, decomposition, level, group_value, metric)`). Derived; an older layout is rebuilt.
 
 | Column | Description |
 |---|---|
@@ -290,6 +304,34 @@ One row per significant single-metric model (primary key `(feature_set, level, g
 | `primary_level` | `subject` or `trial` (`holdout_primary`) |
 | `primary_p_fdr` | BH-adjusted p of the primary level across all hits |
 | `replicated` | primary error at least `holdout_min_pct` % lower than baseline **and** `primary_p_fdr` < `holdout_alpha` |
+
+### `power_analysis`
+
+One row per metric × ROI × group (`pooled`, `cap_size_<n>`) × effect scale × power target, plus one `holdout_bootstrap` row per metric × ROI. An older layout is renamed to `power_analysis_pre_v3`, not dropped.
+
+| Column | Description |
+|---|---|
+| `feature_set`, `decomposition`, `metric`, `roi`, `group_label` | identity |
+| `effect_scale` | multiplier on the metric's estimated coefficient (1 = observed) |
+| `power_target`, `achieved`, `max_power` | target, whether the curve reached it within the projected N, highest power on the curve |
+| `n_current` | subjects in the group now |
+| `n_required` | subjects in the group needed for the target |
+| `n_required_total` | the same as total training N (`n_required` / the group's share of training subjects) |
+| `holdout_r`, `holdout_r_lo`, `holdout_r_hi`, `holdout_rmse`, `holdout_stable` | holdout bootstrap rows only |
+
+### `robustness`
+
+One row per hit × test × variant (primary key `(feature_set, decomposition, level, group_value, metric, test, variant)`). Derived; an older layout is rebuilt.
+
+| `test` | `variant` | `stat` / `stat_lo` / `stat_hi` | `p_value` |
+|---|---|---|---|
+| `loeo` | `exp_<id>`, `all` | primary change in error (%) for subjects of the left-out experiment, 95% CI | one-sided bootstrap p |
+| `kfold` | `fold_01`…, `all` | the same for left-out training subjects | one-sided bootstrap p |
+| `permutation` | `subject_level` | observed primary change in error (%); 2.5 / 97.5% of the null | (1 + #null ≤ observed) / (n_perm + 1) |
+| `split_half` | `all` | median correlation of the two half-sample metric curves; 2.5 / 97.5% over repetitions | — |
+| `fooof_sensitivity` | `fooof_r2_<thr>` | primary change in error (%) after dropping subjects with `fooof_r2` < thr | one-sided bootstrap p |
+
+Prediction tests also fill `trial_*` and `subj_*` (as in `holdout_replication`, plus `_pct_lo` / `_pct_hi`). `status` is `ok` or the reason a variant was skipped; `note` explains special cases (e.g. a cap size absent from a LOEO refit).
 
 ---
 
@@ -318,7 +360,7 @@ Bracketed terms are included only when the factor has more than one level in the
 
 `safe_k()` caps smooth complexity at `min(k_max, n_unique_values - 1)` with a floor of 3. A covariate or metric with fewer than 3 unique values (e.g. `laser_power` in a unit where only two-level experiments remain, or a 0/1 metric) enters **linearly** instead; its row in `gamm_fitted` then reports edf = 1, F = t² and the parametric p-value.
 
-**`bam_discrete`.** `discrete = TRUE` is much faster and is the default. In testing, a discrete fit with very few subjects (12 subjects, 2 experiments) that also contained a subject-level term (`age_z`, `s(experiment_id)`) returned meaningless smooth p-values. At 120 subjects / 9 experiments, discrete and non-discrete fits agreed. Set `bam_discrete = FALSE` for small pilot runs.
+**`bam_discrete` (default `FALSE`).** `discrete = TRUE` is several times faster, but on mgcv 1.9-1 its smooth-term p-values are invalid for terms that are constant within a subject: the `_between_z` part and the subject random effect. In synthetic tests a true between-subject effect gave p = 0.999 with `discrete = TRUE` and p = 7 × 10⁻⁷ without it (same edf, same F), and null between-subject terms also gave p ≈ 1, at 66, 135 and 360 subjects (3–9 experiments). Estimates and predictions agree; only the tests differ. Because the between-subject p-value defines a hit, discrete fits make the screen return no valid hits. Run `check_discrete_between_p.R` before considering `TRUE` on another mgcv version; `run_gamm_screen()` warns if `TRUE` is combined with the between/within split, and every `gamm_fitted` row records the setting.
 
 **Sex-difference model (`sex_diff_core.R`).** The screen model with `sex` replaced by an ordered factor `sex_o` and one term added:
 ```
@@ -332,6 +374,9 @@ With an ordered factor, `s(metric_z)` is the reference sex's curve and `s(metric
 |---|---|
 | `<fig_dir>/<level>/<unit>/<metric>_effect.png` | Predicted pain rating across the metric, in its original units; 95% confidence band; rug of the data; edf, F, p and N. With the split: A = subject-mean curve (the tested part, blue), B = within-person curve (grey), same y-scale |
 | `<fig_dir>/<level>/<unit>/<metric>_sex.png` | A: predicted curve per sex (direct-labelled with n). B: difference curve (Male − Female) with 95% band; x-ranges where the band excludes 0 are shaded. Written only for hits with an `ok` row in `gamm_sex_diff`. |
+| `<fig_dir>/<level>/<unit>/<metric>_robustness.png` | Primary change in held-out error per LOEO experiment, k-fold, FOOOF variant (from `robustness_core.R`); permutation p and split-half r in the subtitle |
+
+Pooled-decomposition figures go to a `pooled/` sub-folder of each unit.
 
 "Predicted" means:
 - the y-axis is in pain-rating units, unlike mgcv's `plot.gam()`, which shows the centred partial effect;
@@ -343,7 +388,7 @@ The x-axis covers the 1st–99th percentile of the metric, and original units co
 
 Colours are a colour-blind-safe pair (`col_sex` in `gamm_defaults.R`), validated for contrast on white. Labels use plain characters only, so they render the same on any machine.
 
-**Held-out prediction (`holdout_replicate.R`).**
+**Held-out prediction (`holdout_replicate.R`, `robustness_core.R`, `compare_levels.R`).**
 - Predictions for held-out people leave out the subject random effect, since they are new people. The experiment effect is kept for experiments seen in training.
 - Held-out metrics are z-scored with the **training** mean/SD.
 - The baseline is refit on the metric model's own training rows, so the two models differ only by the metric.
@@ -361,10 +406,12 @@ Why: `s(global_subjid, bs = "re")` gives each person their own intercept, which 
 
 In a synthetic test, a metric whose subject mean truly predicted pain sensitivity behaved as follows:
 - pooled model: p = 0.67, so never a hit;
-- split model: between p = 1e-5;
-- held-out prediction: replicated, with 36% lower error in held-out people's mean ratings.
+- split model (non-discrete fit): between p < 10⁻⁶;
+- held-out prediction: 10–19% lower error in held-out people's mean ratings; LOEO, k-fold and permutation tests all in the same direction; split-half curve correlation ≈ 1.
 
 `primary_part` (default `"between"`) decides which term's p-value goes into `edf` / `f_stat` / `p_value`, and therefore what counts as a hit. The other term is in `edf_other` / `f_other` / `p_other`. `"between"` answers the research question (does a person's typical value predict their pain sensitivity?). Within-person effects are still estimated and stored, but are not followed up unless `primary_part = "within"`.
+
+Both decompositions can be stored side by side: every results table is keyed on `decomposition`, pooled `.rds` files and figures go to `pooled/` sub-folders, and every follow-up script reads the decomposition set in `gamm_defaults.R`.
 
 Two cautions for between-person terms:
 - **In-sample AIC barely changes.** The subject intercepts already fit each person's mean, so "AIC change vs baseline" is about 0 even for a real effect. Held-out prediction is the test.
@@ -378,7 +425,7 @@ The GAMM screen is explicitly **exploratory**. No correction is applied at the s
 
 This decision is recorded in `gamm_defaults.R` as `apply_fdr_correction = FALSE` (false discovery rate), so it is visible in configuration.
 
-At 44 metrics × 18 ROIs, the source screen alone is 792 single-metric tests, so about 40 "hits" are expected at p < 0.05 under the null.
+At 44 metrics × 18 ROIs, the source screen alone is 792 single-metric tests, so about 40 "hits" are expected at p < 0.05 under the null. Held-out replication applies BH across all hits; the robustness tests then probe the replicated ones.
 
 ---
 
@@ -387,10 +434,11 @@ At 44 metrics × 18 ROIs, the source screen alone is 792 single-metric tests, so
 Scripts are run from their stage directory (`R/merge/` or `R/gamm/`) so relative `source()` calls resolve.
 
 ```
-Step 0 (once, when moving to feature set v3.1):
-                 archive results.duckdb (e.g. rename to results_pre_v3.1.duckdb)
-                   → old gamm_fitted rows were fit on differently defined
-                     metrics; init_results_db() refuses to append to them
+Step 0 (once, when moving to R stage V3):
+                 archive results.duckdb (e.g. rename to results_pre_v3.duckdb)
+                   → old gamm_fitted rows came from discrete fits, whose
+                     between-subject p-values are invalid; init_results_db()
+                     refuses to append to them
                  data.duckdb does NOT need archiving: merge_core.R rebuilds
                  every derived table and keeps subject_split
 
@@ -416,12 +464,18 @@ Step 6:          R/gamm/holdout_replicate.R
                    → held-out prediction for every hit → holdout_replication
                      + holdout_replication_<level>.png
 
-Step 7 (twice):  R/validate/power_analysis.R   (run from R/gamm/)
+Step 7:          R/gamm/compare_levels.R
+                   → channel vs source summary + paired held-out comparison
+
+Step 8:          R/robustness/robustness_core.R   (run from R/gamm/)
+                   → LOEO, k-fold, permutation, split-half, FOOOF sensitivity
+                     for replicated hits → robustness + <metric>_robustness.png
+
+Step 9 (twice):  R/validate/power_analysis.R      (run from R/gamm/)
                    → all significant source hits → power_analysis
 
---- pending ---
-Step 8:          cross-validation (R/robustness/, drafts)
-Step 9:          compare_channel_source_gamm.R, run_classical_tests.R
+Any time:        R/gamm/classical_tests.R
+                   → ERD t-tests, rmANOVA across ROIs, Rayleigh tests
 ```
 
 ---
@@ -434,7 +488,7 @@ library(readr); library(dplyr); library(tidyr); library(stringr)
 library(purrr); library(tibble)
 library(mgcv)       # GAMMs — bam(), select = TRUE, fREML
 library(ggplot2)    # figures
-library(patchwork)  # two-panel sex figures
+library(patchwork)  # two-panel figures
 
 # Database
 library(DBI)
@@ -442,7 +496,10 @@ library(duckdb)
 
 # Power analysis
 library(lme4)       # lmer() refit for simr
-library(simr)       # powerCurve()
+library(simr)       # powerCurve(), extend(), fixef<-
+
+# Optional
+library(afex)       # rmANOVA with Greenhouse–Geisser (classical_tests.R falls back to aov())
 ```
 
 ---
@@ -452,13 +509,17 @@ library(simr)       # powerCurve()
 ```
 db/
 ├── data.duckdb          ← Section 2 tables
-└── results.duckdb       ← gamm_fitted, gamm_sex_diff, holdout_replication, power_analysis
+└── results.duckdb       ← gamm_fitted, gamm_sex_diff, holdout_replication,
+                           power_analysis, robustness
 
 R/gamm_outputs/
-├── source/<roi>/<model_name>.rds, sexdiff_<metric>.rds
+├── source/<roi>/<model_name>.rds, sexdiff_<metric>.rds   (pooled/ for pooled models)
 ├── channel/<channel>/<model_name>.rds, sexdiff_<metric>.rds
-├── figures/<level>/<unit>/<metric>_effect.png, <metric>_sex.png
+├── figures/<level>/<unit>/<metric>_effect.png, <metric>_sex.png, <metric>_robustness.png
 ├── figures/holdout_replication_<level>.png
+├── figures/level_comparison.png
+├── compare/level_summary.csv, level_paired_holdout.csv
+├── classical_tests/test1_*, test2_*, test3_*, classical_tests_report.txt
 └── power_analysis/power_curve_<metric>_<roi>.png
 ```
 
@@ -481,5 +542,9 @@ R/gamm_outputs/
 **Explicit metric selection.** The screen fits only what `metric_include` names, so a new column in the feature CSVs (for example a QC flag) can never silently become a predictor.
 
 **`data.duckdb` opened read-only during the GAMM stage.** `connect_data_db()` enforces `read_only = TRUE`, so an accidental write fails loudly.
+
+**Non-discrete fits.** Correct p-values for subject-level terms matter more than speed: they define the hits.
+
+**Prediction is the criterion; every check uses the same machinery.** Held-out replication, LOEO, k-fold and the channel-vs-source comparison all compare a metric model against its nested baseline on people the fit never saw, with subject-level resampling. Permutations shuffle whole subjects, never trials, so within-subject correlation is preserved.
 
 **Multiple comparisons: no correction at the screening stage.** The holdout replication is the correction, and the decision is recorded in configuration.

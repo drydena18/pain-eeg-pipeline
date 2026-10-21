@@ -2,17 +2,17 @@
 # plot_gamm_hits.R
 # =============================================================================
 # Figures for every significant single-metric GAMM (p < gamm_cfg$hits_p_sig,
-# current feature_set, source and channel). Run from R/gamm/ after
-# source_core.R / channel_core.R, and after sex_diff_core.R if the sex
-# figures are wanted.
+# current feature_set and decomposition, source and channel). Run from
+# R/gamm/ after source_core.R / channel_core.R, and after sex_diff_core.R if
+# the sex figures are wanted.
 #
 # Per hit:
-#   <fig_dir>/<level>/<unit>/<metric>_effect.png
+#   <fig_dir>/<level>/<unit>/[pooled/]<metric>_effect.png
 #     Predicted pain rating across the metric, in the metric's original
 #     units, with a 95% confidence band and a rug of the observed data.
 #     With the between/within split: A = subject-mean curve (the tested
 #     part, coloured), B = within-person curve (grey), same y-scale.
-#   <fig_dir>/<level>/<unit>/<metric>_sex.png       (if gamm_sex_diff has it)
+#   <fig_dir>/<level>/<unit>/[pooled/]<metric>_sex.png  (if gamm_sex_diff has it)
 #     A: predicted curve for each sex.  B: the difference curve
 #     (other - reference) with its 95% band; x-ranges where the band
 #     excludes 0 are shaded.
@@ -25,6 +25,9 @@
 # centred partial effect.
 #
 # Reads only: results.duckdb (gamm_fitted, gamm_sex_diff) and the .rds files.
+#
+# V3 (Oct 2026): hits and sex rows filtered on decomposition; pooled figures
+# go to a pooled/ sub-folder.
 # =============================================================================
 
 library(dplyr)
@@ -39,6 +42,7 @@ source("helpers/gamm_combo_core.R")
 source("helpers/hit_helpers.R")
 
 cfg <- gamm_cfg
+decomp <- cfg$metric_decomposition
 # Colours, sex labels and theme_gamm() live in helpers/hit_helpers.R.
 
 # Up to n observed values (trials) for the rug, inside the plotted range.
@@ -215,10 +219,12 @@ plot_sex <- function(hit, sx, fit) {
 # RUN
 # =============================================================================
 results_con <- dbConnect(duckdb::duckdb(), dbdir = cfg$results_db_path, read_only = TRUE)
-hits <- load_hits(results_con, cfg$feature_set, p_sig = cfg$hits_p_sig)
-sexdiff <- if (dbExistsTable(results_con, "gamm_sex_diff")) {
-  as_tibble(dbGetQuery(results_con, "SELECT * FROM gamm_sex_diff WHERE feature_set = ?",
-                       params = list(cfg$feature_set)))
+hits <- load_hits(results_con, cfg$feature_set, p_sig = cfg$hits_p_sig, decomposition = decomp)
+sexdiff <- if (dbExistsTable(results_con, "gamm_sex_diff") &&
+               "decomposition" %in% dbListFields(results_con, "gamm_sex_diff")) {
+  as_tibble(dbGetQuery(results_con,
+                       "SELECT * FROM gamm_sex_diff WHERE feature_set = ? AND decomposition = ?",
+                       params = list(cfg$feature_set, decomp)))
 } else tibble()
 dbDisconnect(results_con, shutdown = TRUE)
 
@@ -232,7 +238,7 @@ n_main <- n_sex <- 0L
 for (i in seq_len(nrow(hits))) {
   h <- hits[i, ]
   if (!h$rds_ok) { message("  [WARN] missing model file: ", h$rds_path); next }
-  out_dir <- file.path(cfg$fig_dir, h$level, h$group_value)
+  out_dir <- fig_unit_dir(cfg$fig_dir, h$level, h$group_value, decomp)
   dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
   stem <- sub("_z$", "", h$metrics)
   mod <- readRDS(h$rds_path)

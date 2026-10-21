@@ -13,6 +13,7 @@
 #   build_combo_formula()      construct a formula from a base + metric vector
 #   generate_metric_combos()   enumerate which metric combinations to fit
 #   fit_gamm_combo()           fit one bam(), return model + a result-row tibble
+#   model_out_dir()            where a unit's .rds files go (per decomposition)
 #   init_results_db()          open/create the DuckDB results table
 #   write_result_row()         incremental upsert of one fit's result row
 #   close_results_db()         clean disconnect
@@ -50,6 +51,16 @@
 #     two-level experiment) or a 0/1 metric made every model at that unit
 #     fail with "fewer unique covariate combinations than ... degrees of
 #     freedom".
+#
+# V3 (Oct 2026):
+#   - gamm_fitted records bam_discrete (whether the p-values came from a
+#     discrete fit, which is invalid for subject-level terms; see
+#     gamm_defaults.R) and its primary key includes decomposition, so a
+#     pooled run no longer overwrites between_within rows. init_results_db()
+#     refuses a table without bam_discrete: every row in it came from the
+#     old discrete default and its between-subject p-values are invalid.
+#   - model_out_dir(): pooled models go to <unit>/pooled/, so their .rds
+#     files no longer overwrite the between_within ones.
 # =============================================================================
 
 library(dplyr)
@@ -126,6 +137,14 @@ add_between_within <- function(df, metric_z, subj = "global_subjid") {
   df[[paste0(raw, "_between_z")]] <- b
   df[[paste0(raw, "_within_z")]]  <- df[[metric_z]] - b
   df
+}
+
+# Folder for one unit's .rds files. between_within (the default) keeps the
+# original layout; pooled gets its own sub-folder so the two never collide.
+model_out_dir <- function(out_dir, level, unit, decomposition = "between_within") {
+  d <- file.path(out_dir, level, unit)
+  if (identical(decomposition, "pooled")) d <- file.path(d, "pooled")
+  d
 }
 
 # =============================================================================
@@ -222,7 +241,8 @@ smooth_term_variables <- function(label) {
 # =============================================================================
 extract_combo_result_row <- function(mod, model_name, level, group_value, metrics,
                                      rds_path, feature_set, n_subjects,
-                                     decomposition = "pooled", primary_part = "between") {
+                                     decomposition = "pooled", primary_part = "between",
+                                     discrete = FALSE) {
   sm <- summary(mod)
   s_tab <- sm$s.table
 
@@ -288,6 +308,7 @@ extract_combo_result_row <- function(mod, model_name, level, group_value, metric
     r_sq        = sm$r.sq,
     n_obs       = as.integer(nobs(mod)),
     n_subjects  = as.integer(n_subjects),
+    bam_discrete = isTRUE(discrete),
     rds_path    = rds_path
   )
 }
@@ -305,7 +326,7 @@ extract_combo_result_row <- function(mod, model_name, level, group_value, metric
 fit_gamm_combo <- function(data, level, group_value, metrics, base_formula, model_name,
                            out_dir, tensor_pairs = list(), k_max = 10,
                            feature_set = NA_character_, nthreads = 4L,
-                           discrete = TRUE, zscale = NULL,
+                           discrete = FALSE, zscale = NULL,
                            decomposition = "pooled", primary_part = "between") {
 
   formula_use <- build_combo_formula(base_formula, metrics, data,
@@ -333,14 +354,16 @@ fit_gamm_combo <- function(data, level, group_value, metrics, base_formula, mode
   mod$gamm_meta <- list(level = level, group_value = group_value, model_name = model_name,
                         metrics = metrics, feature_set = feature_set,
                         decomposition = decomposition,
-                        primary_part = if (identical(decomposition, "between_within")) primary_part else "pooled")
+                        primary_part = if (identical(decomposition, "between_within")) primary_part else "pooled",
+                        bam_discrete = isTRUE(discrete))
 
   rds_path <- file.path(out_dir, paste0(model_name, ".rds"))
   saveRDS(mod, rds_path)
 
   result_row <- extract_combo_result_row(mod, model_name, level, group_value, metrics,
                                          rds_path, feature_set, n_subj,
-                                         decomposition = decomposition, primary_part = primary_part)
+                                         decomposition = decomposition, primary_part = primary_part,
+                                         discrete = discrete)
 
   list(model = mod, result_row = result_row)
 }
@@ -349,9 +372,10 @@ fit_gamm_combo <- function(data, level, group_value, metrics, base_formula, mode
 # DuckDB results table — incremental write design
 # -----------------------------------------------------------------------------
 # init_results_db(): opens (or creates) results.duckdb and ensures
-#   gamm_fitted exists. Stops if an existing gamm_fitted predates v3.1 (no
-#   feature_set column): those rows were fit on differently-defined metrics
-#   and must not be mixed with new ones.
+#   gamm_fitted exists. Stops if an existing gamm_fitted predates the V3
+#   layout (no feature_set / decomposition / bam_discrete column): those rows
+#   were fit on differently-defined metrics or with discrete = TRUE, whose
+#   between-subject p-values are invalid, and must not be mixed with new ones.
 #
 # write_result_row(): appends ONE row immediately (delete-then-insert on the
 #   primary key). Single-process only; if screens are ever parallelised
@@ -365,11 +389,13 @@ init_results_db <- function(db_path) {
 
   if (dbExistsTable(con, "gamm_fitted")) {
     cols <- dbListFields(con, "gamm_fitted")
-    if (!all(c("feature_set", "decomposition") %in% cols)) {
+    if (!all(c("feature_set", "decomposition", "bam_discrete") %in% cols)) {
       dbDisconnect(con, shutdown = TRUE)
       stop("results.duckdb holds a gamm_fitted table from an older version of the GAMM ",
-           "stage (no feature_set / decomposition column).\nArchive it first, e.g. rename\n  ",
-           db_path, "\nto results_pre_v3.1.duckdb, then re-run.")
+           "stage (no feature_set / decomposition / bam_discrete column). Its ",
+           "between-subject p-values came from discrete = TRUE fits and are invalid.\n",
+           "Archive it first, e.g. rename\n  ", db_path,
+           "\nto results_pre_v3.duckdb, then re-run the screen.")
     }
   }
 
@@ -396,8 +422,9 @@ init_results_db <- function(db_path) {
       r_sq         DOUBLE,
       n_obs        INTEGER,
       n_subjects   INTEGER,
+      bam_discrete BOOLEAN,
       rds_path     VARCHAR,
-      PRIMARY KEY (feature_set, level, group_value, model_name)
+      PRIMARY KEY (feature_set, decomposition, level, group_value, model_name)
     )
   ")
   con
@@ -408,8 +435,9 @@ write_result_row <- function(con, result_row) {
 
   dbExecute(con,
     "DELETE FROM gamm_fitted
-     WHERE feature_set = ? AND level = ? AND group_value = ? AND model_name = ?",
-    params = list(result_row$feature_set, result_row$level,
+     WHERE feature_set = ? AND decomposition = ? AND level = ? AND group_value = ?
+       AND model_name = ?",
+    params = list(result_row$feature_set, result_row$decomposition, result_row$level,
                   result_row$group_value, result_row$model_name)
   )
   dbAppendTable(con, "gamm_fitted", as.data.frame(result_row))

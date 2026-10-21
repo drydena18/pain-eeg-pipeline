@@ -1,10 +1,14 @@
 # =============================================================================
 # hit_helpers.R
 # -----------------------------------------------------------------------------
-# Shared by sex_diff_core.R and plot_gamm_hits.R.
+# Shared by sex_diff_core.R, plot_gamm_hits.R, holdout_replicate.R,
+# compare_levels.R, ../validate/power_analysis.R and
+# ../robustness/robustness_core.R.
 #
 #   load_hits()            significant single-metric models of the current
-#                          feature set, from gamm_fitted
+#                          feature set and decomposition, from gamm_fitted
+#   ensure_derived_table() (re)create a follow-up table whose layout changed
+#   fig_unit_dir()         figure folder for one unit (per decomposition)
 #   metric_label()         "pre_paf_cog_hz" -> "Pre-stimulus PAF (CoG, Hz)"
 #   unit_label()           "Insula_lh" -> "Insula (left)"
 #   smooth_labels_re()     labels of the random-effect smooths in a model
@@ -16,6 +20,11 @@
 #
 # All predictions use the model's own frame (mod$model), so they describe
 # exactly the rows the model was fitted on.
+#
+# V3 (Oct 2026): load_hits() filters on decomposition (gamm_fitted now holds
+# both) and warns about rows fitted with discrete = TRUE; bam_discrete
+# defaults to FALSE in refit_baseline(); ensure_derived_table() and
+# fig_unit_dir() added.
 # =============================================================================
 
 library(DBI)
@@ -25,39 +34,69 @@ library(tibble)
 # =============================================================================
 # Significant models
 # =============================================================================
+# decomposition: "between_within" / "pooled"; NULL = both (not recommended:
+# the follow-up tables are keyed per decomposition).
 load_hits <- function(results_con, feature_set, p_sig = 0.05,
-                      levels = c("source", "channel")) {
+                      levels = c("source", "channel"), decomposition = NULL) {
+  dec_sql <- if (is.null(decomposition)) "" else
+    sprintf("AND decomposition = %s", as.character(dbQuoteString(results_con, decomposition)))
   rows <- dbGetQuery(results_con, sprintf("
     SELECT level, group_value, model_name, metrics, decomposition, primary_part,
            edf, f_stat, p_value, edf_other, f_other, p_other,
-           aic, dev_expl, r_sq, n_obs, n_subjects, rds_path
+           aic, dev_expl, r_sq, n_obs, n_subjects, bam_discrete, rds_path
     FROM gamm_fitted
     WHERE feature_set = ? AND n_metrics = 1
-      AND level IN (%s)",
-    paste(sprintf("'%s'", levels), collapse = ", ")),
+      AND level IN (%s) %s",
+    paste(sprintf("'%s'", levels), collapse = ", "), dec_sql),
     params = list(feature_set))
 
-  base <- dbGetQuery(results_con, "
-    SELECT level, group_value, aic AS aic_baseline, n_obs AS n_obs_baseline
+  base <- dbGetQuery(results_con, sprintf("
+    SELECT level, group_value, decomposition, aic AS aic_baseline, n_obs AS n_obs_baseline
     FROM gamm_fitted
-    WHERE feature_set = ? AND model_name = 'm00_baseline'",
+    WHERE feature_set = ? AND model_name = 'm00_baseline' %s", dec_sql),
     params = list(feature_set))
 
-  rows %>%
+  out <- rows %>%
     as_tibble() %>%
-    mutate(p_num = suppressWarnings(as.numeric(p_value)),
+    mutate(bam_discrete = as.logical(bam_discrete),
+           p_num = suppressWarnings(as.numeric(p_value)),
            edf_num = suppressWarnings(as.numeric(edf)),
            f_num = suppressWarnings(as.numeric(f_stat)),
            p_other_num = suppressWarnings(as.numeric(p_other)),
            edf_other_num = suppressWarnings(as.numeric(edf_other)),
            f_other_num = suppressWarnings(as.numeric(f_other))) %>%
     filter(!is.na(p_num), p_num < p_sig) %>%
-    left_join(base, by = c("level", "group_value")) %>%
+    left_join(base, by = c("level", "group_value", "decomposition")) %>%
     # dAIC is only meaningful when both models saw the same rows
     mutate(delta_aic = if_else(!is.na(n_obs_baseline) & n_obs == n_obs_baseline,
                                aic - aic_baseline, NA_real_),
            rds_ok = !is.na(rds_path) & file.exists(rds_path)) %>%
     arrange(level, group_value, p_num)
+
+  n_bad <- sum(out$bam_discrete %in% TRUE & out$decomposition == "between_within")
+  if (n_bad > 0)
+    warning(n_bad, " hit(s) come from discrete = TRUE fits with the between/within split; ",
+            "their between-subject p-values are invalid. Re-run the screen with bam_discrete = FALSE.",
+            call. = FALSE, immediate. = TRUE)
+  out
+}
+
+# A follow-up table (gamm_sex_diff, holdout_replication, ...) is derived
+# entirely from gamm_fitted and the .rds files, so a table with an older
+# layout is simply dropped and recreated.
+ensure_derived_table <- function(con, table, required_cols, create_sql) {
+  if (dbExistsTable(con, table) && !all(required_cols %in% dbListFields(con, table))) {
+    message("  Rebuilding ", table, " (older layout).")
+    invisible(dbExecute(con, sprintf("DROP TABLE %s", table)))
+  }
+  invisible(dbExecute(con, create_sql))
+}
+
+# <fig_dir>/<level>/<unit>/ for between_within; .../<unit>/pooled/ for pooled
+fig_unit_dir <- function(fig_dir, level, unit, decomposition = "between_within") {
+  d <- file.path(fig_dir, level, unit)
+  if (identical(decomposition, "pooled")) d <- file.path(d, "pooled")
+  d
 }
 
 # =============================================================================
@@ -346,7 +385,7 @@ refit_baseline <- function(mod, metric_z, cfg) {
   keep <- labs[!vapply(labs, function(l) any(mv %in% all.vars(str2lang(l))), logical(1))]
   f0 <- stats::reformulate(keep, response = "pain_rating")
   bam(f0, data = mod$model, method = "fREML", select = TRUE,
-      discrete = !isFALSE(cfg$bam_discrete), nthreads = cfg$nthreads)
+      discrete = isTRUE(cfg$bam_discrete), nthreads = cfg$nthreads)
 }
 
 # Cluster (subject) bootstrap of a mean difference.

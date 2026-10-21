@@ -1,9 +1,15 @@
 """
 source_default.py  -  Config validation, safe defaults, and dispatch.
-V 3.1.0
+V 3.2.0
 
 Call chain:
     expXX_source.py  ->  source_default()  ->  source_core()
+
+V3.2.0: source.noise_cov.method ("ad_hoc" default | "empirical"). The ad hoc
+diagonal covariance (mne.make_ad_hoc_cov) replaces the -0.2 to 0 s empirical
+baseline covariance, which overlapped the pre-stimulus alpha window and
+treated that alpha as noise. noise_cov.tmin / tmax are read only for
+"empirical" (kept as a sensitivity check). See src_inverse.py for rationale.
 
 V3.1.0: features.windows.whole_sec (default [-1, 2] s) replaces "whole =
 full epoch" now that epochs run -2.2 to 2.0 s; validation warns when a window
@@ -63,6 +69,8 @@ DEFAULT_CUSTOM_ROIS = {
                "lh-caudalmiddlefrontal", "rh-caudalmiddlefrontal"],
     "M1":     ["lh-precentral", "rh-precentral"],
 }
+
+NOISE_COV_METHODS = ("ad_hoc", "empirical")
 
 
 # =============================================================================
@@ -170,6 +178,20 @@ def validate_features_against_preproc(feat: dict, cfg: dict, sfreq: float | None
         raise ValueError(f"features.phase.post_ref_sec = {ref} is outside the epoch.")
 
 
+def validate_noise_cov(nc: dict, feat: dict):
+    """Check source.noise_cov; warn when an empirical window overlaps the pre window."""
+    nc["method"] = str(nc["method"]).lower()
+    if nc["method"] not in NOISE_COV_METHODS:
+        raise ValueError(f"cfg.source.noise_cov.method = '{nc['method']}' is not supported "
+                         f"({' | '.join(NOISE_COV_METHODS)}).")
+    if nc["method"] == "empirical":
+        a, b = float(nc["tmin"]), float(nc["tmax"])
+        pre = feat["windows"]["pre_sec"]
+        if a < pre[1] and b > pre[0]:
+            print(f"[WARN] source.noise_cov [{a}, {b}] s overlaps features.windows.pre_sec {pre}; "
+                  "sLORETA will treat pre-stimulus alpha as noise. Use method = 'ad_hoc' for primary analyses.")
+
+
 # =============================================================================
 # ENTRY POINT
 # =============================================================================
@@ -230,8 +252,10 @@ def source_default(exp_id: str, cfg_in: dict, subjects_override = None):
     _d(src["inverse"], "pick_ori", "normal")
 
     _d(src, "noise_cov", {})
-    _d(src["noise_cov"], "tmin", -0.2)
+    _d(src["noise_cov"], "method", "ad_hoc")   # diagonal, non-informative; see src_inverse.py
+    _d(src["noise_cov"], "tmin", -0.2)         # read only when method = "empirical"
     _d(src["noise_cov"], "tmax",  0.0)
+    validate_noise_cov(src["noise_cov"], feat)
 
     apply_features_to_source(src, feat)
 
@@ -257,6 +281,7 @@ def source_default(exp_id: str, cfg_in: dict, subjects_override = None):
 
     # ── Run header ───────────────────────────────────────────────────────────
     roi = src["roi"]
+    nc = src["noise_cov"]
     print(f"\n[{exp['id']}] SOURCE  subjects ({len(exp['subjects'])}): {exp['subjects']}")
     print(f"  Input stage    : {src['input']['stage_dir']}")
     print(f"  Output root    : {src['outputs']['root']}")
@@ -265,7 +290,10 @@ def source_default(exp_id: str, cfg_in: dict, subjects_override = None):
     print(f"  Windows        : whole {feat['windows']['whole_sec']} s, pre {feat['windows']['pre_sec']} s, post {feat['windows']['post_sec']} s")
     print(f"  Band power     : filter-Hilbert, slow {feat['bands']['slow_hz']} / fast {feat['bands']['fast_hz']} Hz, "
           f"trans_bw {feat['band_power']['trans_bw_hz']} Hz")
-    print(f"  Noise cov      : {src['noise_cov']['tmin']:.3f} - {src['noise_cov']['tmax']:.3f} s")
+    if nc["method"] == "ad_hoc":
+        print("  Noise cov      : ad hoc diagonal (mne.make_ad_hoc_cov)")
+    else:
+        print(f"  Noise cov      : empirical, {float(nc['tmin']):.3f} - {float(nc['tmax']):.3f} s")
     print(f"  LEP N2 / P2    : {feat['lep']['n2_window_sec']} / {feat['lep']['p2_window_sec']} s")
     print(f"  FOOOF          : {'enabled (' + feat['fooof']['aperiodic_mode'] + ')' if feat['fooof']['enabled'] else 'disabled'}")
 

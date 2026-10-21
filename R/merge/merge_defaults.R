@@ -21,9 +21,9 @@ merge_cfg <- list(
     data_root = "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis",
 
     # Behavioural CSVs (one per experiment: <experiment_name>_behaviour.csv)
-    behav_dir = "/home/UWO/darsenea/Documents/GitHub/pain-alpha-dynamics/R/analysis/experiment",
+    behav_dir = "/home/UWO/darsenea/Documents/GitHub/pain-alpha-dynamics/R/data/behaviour",
 
-    cap_size_file = "/home/UWO/darsenea/Documents/GitHub/pain-alpha-dynamics/R/analysis/behavioural_analysis/cap_size.csv",
+    cap_size_file = "/home/UWO/darsenea/Documents/GitHub/pain-alpha-dynamics/R/data/cap_size.csv",
 
     # -- Output database ----
     data_db_path = "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/db/data.duckdb",

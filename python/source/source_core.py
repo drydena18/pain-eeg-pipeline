@@ -1,6 +1,6 @@
 """
 source_core.py  -  Per-subject orchestration loop for sLORETA source analysis.
-V 4.1.0
+V 4.2.0
 
 V4.0.0 changes vs V3.1.0 (channel/source parity release; MATLAB twin is
 spectral_core.m V3.0.0):
@@ -16,6 +16,8 @@ spectral_core.m V3.0.0):
     - roi.hemisphere_split adds <ROI>_lh / <ROI>_rh next to each bilateral ROI.
     - V4.1.0: whole window from features.windows.whole_sec (not the full
       epoch); slow_alpha_frac dropped; delta_erd -> erd_asym.
+    - V4.2.0: noise_cov.method ("ad_hoc" default | "empirical") passed to
+      src_make_inverse_operator; ROI time courses streamed (src_inverse.py).
 
 Per-subject outputs
 ───────────────────
@@ -174,6 +176,7 @@ def source_core(cfg: dict, da_root: str, exp_out: str):
     hemi_split = bool(roi_cfg.get("hemisphere_split", True))
     roi_mode   = roi_cfg.get("mode", "mean_flip")
 
+    noise_method = str(src_cfg["noise_cov"].get("method", "ad_hoc")).lower()
     noise_tmin = float(src_cfg["noise_cov"]["tmin"])
     noise_tmax = float(src_cfg["noise_cov"]["tmax"])
     mindist_mm = float(src_cfg["forward"]["mindist_mm"])
@@ -233,6 +236,7 @@ def source_core(cfg: dict, da_root: str, exp_out: str):
                 epochs, bem_sol, trans, src_space,
                 noise_tmin, noise_tmax, mindist_mm, loose, depth,
                 fwd_cache_path = fwd_cache, logf = logf,
+                noise_method = noise_method,
             )
 
             tc, times = src_apply_inverse_epochs(epochs, inv, fwd, labels, lambda2, pick_ori, roi_mode, logf)

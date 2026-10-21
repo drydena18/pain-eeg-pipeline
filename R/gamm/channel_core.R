@@ -9,10 +9,13 @@
 # Reads:  data.duckdb     (subjects, trials, spectral_metrics, subject_split,
 #                          alignment_qc - read-only)
 # Writes: results.duckdb  (gamm_fitted, incremental per-model writes)
-#         <out_dir>/channel/<channel>/<model_name>.rds
+#         <out_dir>/channel/<channel>/[pooled/]<model_name>.rds
 #
 # V2 (Oct 2026): the per-unit loop now lives in helpers/gamm_screen.R and
 # is shared with source_core.R (the two copies had drifted; see that file).
+# V3 (Oct 2026): bam_discrete = FALSE by default (see gamm_defaults.R). The
+# channel screen is the expensive one (64 channels x 45 models); restrict
+# gamm_cfg$channel_include for a first pass if needed.
 # =============================================================================
 
 source("gamm_defaults.R")

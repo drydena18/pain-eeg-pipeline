@@ -9,7 +9,7 @@
 # predict pain sensitivity?), not significance in a refit.
 #
 # For every significant single-metric model (p < hits_p_sig, current
-# feature_set, source and channel):
+# feature_set and decomposition, source and channel):
 #   1. Metric model   = the screen model (fit on TRAIN subjects).
 #      Baseline model = the same model without the metric term, refit on
 #      exactly the same training rows (nested; differs only by the metric).
@@ -33,8 +33,11 @@
 #      hits is < holdout_alpha.
 #
 # Writes: results.duckdb  holdout_replication (one row per hit)
-#         <fig_dir>/holdout_replication_<level>.png  (forest plot)
+#         <fig_dir>/holdout_replication_<level>[_pooled].png  (forest plot)
 # Reads:  data.duckdb (holdout subjects, read-only), gamm_fitted, the .rds
+#
+# V3 (Oct 2026): keyed on decomposition (column added; an older table is
+# rebuilt - it is derived from gamm_fitted and the .rds files).
 # =============================================================================
 
 library(dplyr)
@@ -48,16 +51,18 @@ source("helpers/gamm_combo_core.R")
 source("helpers/hit_helpers.R")
 
 cfg <- gamm_cfg
+decomp <- cfg$metric_decomposition
 primary <- match.arg(cfg$holdout_primary, c("subject", "trial"))
 set.seed(cfg$holdout_seed)
 
 data_con    <- connect_data_db(cfg$data_db_path, read_only = TRUE)
 results_con <- init_results_db(cfg$results_db_path)
 
-invisible(dbExecute(results_con, "
+ensure_derived_table(results_con, "holdout_replication", c("decomposition"), "
   CREATE TABLE IF NOT EXISTS holdout_replication (
     fitted_at          VARCHAR,
     feature_set        VARCHAR,
+    decomposition      VARCHAR,
     level              VARCHAR,
     group_value        VARCHAR,
     metric             VARCHAR,
@@ -84,10 +89,10 @@ invisible(dbExecute(results_con, "
     primary_level      VARCHAR,
     primary_p_fdr      DOUBLE,
     replicated         BOOLEAN,
-    PRIMARY KEY (feature_set, level, group_value, metric)
-  )"))
+    PRIMARY KEY (feature_set, decomposition, level, group_value, metric)
+  )")
 
-hits <- load_hits(results_con, cfg$feature_set, p_sig = cfg$hits_p_sig)
+hits <- load_hits(results_con, cfg$feature_set, p_sig = cfg$hits_p_sig, decomposition = decomp)
 if (nrow(hits) == 0) stop("No significant single-metric models in gamm_fitted.")
 message("Held-out replication: ", nrow(hits), " hit(s); primary criterion = ", primary,
         "-level prediction")
@@ -97,6 +102,7 @@ message("Held-out replication: ", nrow(hits), " hit(s); primary criterion = ", p
 # -----------------------------------------------------------------------------
 evaluate_hit <- function(h) {
   row <- tibble(fitted_at = as.character(Sys.time()), feature_set = cfg$feature_set,
+                decomposition = decomp,
                 level = h$level, group_value = h$group_value, metric = h$metrics,
                 status = "ok", screen_p = h$p_num)
   if (!h$rds_ok) return(mutate(row, status = "rds_missing"))
@@ -153,6 +159,7 @@ for (i in seq_len(nrow(hits))) {
   res[[i]] <- tryCatch(evaluate_hit(h), error = function(e) {
     message("    [WARN] ", conditionMessage(e))
     tibble(fitted_at = as.character(Sys.time()), feature_set = cfg$feature_set,
+           decomposition = decomp,
            level = h$level, group_value = h$group_value, metric = h$metrics,
            status = paste("error:", conditionMessage(e)), screen_p = h$p_num)
   })
@@ -182,8 +189,10 @@ for (cn in setdiff(cols, names(res))) res[[cn]] <- NA
 res_out <- as.data.frame(res[, cols])
 for (i in seq_len(nrow(res_out))) {
   invisible(dbExecute(results_con,
-    "DELETE FROM holdout_replication WHERE feature_set = ? AND level = ? AND group_value = ? AND metric = ?",
-    params = list(res_out$feature_set[i], res_out$level[i], res_out$group_value[i], res_out$metric[i])))
+    "DELETE FROM holdout_replication WHERE feature_set = ? AND decomposition = ? AND level = ?
+       AND group_value = ? AND metric = ?",
+    params = list(res_out$feature_set[i], res_out$decomposition[i], res_out$level[i],
+                  res_out$group_value[i], res_out$metric[i])))
 }
 invisible(dbAppendTable(results_con, "holdout_replication", res_out))
 
@@ -223,7 +232,8 @@ for (lv in unique(res$level[ok])) {
     theme_gamm() +
     theme(legend.position = "top", legend.justification = "left",
           panel.grid.major.y = element_blank())
-  ggsave(file.path(cfg$fig_dir, sprintf("holdout_replication_%s.png", lv)), p,
+  ggsave(file.path(cfg$fig_dir, sprintf("holdout_replication_%s%s.png", lv,
+                                        if (decomp == "pooled") "_pooled" else "")), p,
          width = cfg$fig_width * 1.3, height = max(3, 1.6 + 0.32 * nrow(fd)),
          dpi = cfg$fig_dpi, bg = "white")
 }

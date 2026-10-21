@@ -13,6 +13,10 @@
 # the level-specific parts (table, unit column, output folder) come from
 # level_spec() in db_helpers.R.
 #
+# V3 (Oct 2026): bam_discrete defaults to FALSE (a missing setting no longer
+# means TRUE); a loud warning if discrete fits are combined with the
+# between/within split; pooled models are written to <unit>/pooled/.
+#
 # Per unit:
 #   1. Load the screened metrics (gamm_cfg$metric_include) for TRAIN
 #      subjects, pivoted wide and joined to subjects + trials.
@@ -83,8 +87,15 @@ run_gamm_screen <- function(level = c("source", "channel"), cfg = gamm_cfg) {
   decomposition <- match.arg(cfg$metric_decomposition %||% "between_within",
                              c("between_within", "pooled"))
   primary_part  <- match.arg(cfg$primary_part %||% "between", c("between", "within"))
+  discrete <- isTRUE(cfg$bam_discrete)
   unit_col <- sp$unit_col
   unit_lbl <- if (level == "source") "ROI" else "Channel"
+
+  if (discrete && decomposition == "between_within") {
+    warning("bam_discrete = TRUE with metric_decomposition = 'between_within': discrete fits ",
+            "return invalid p-values for the subject-level (_between_z) terms, so hits will be ",
+            "wrong. Set bam_discrete = FALSE in gamm_defaults.R.", immediate. = TRUE, call. = FALSE)
+  }
 
   data_con    <- connect_data_db(cfg$data_db_path, read_only = TRUE)
   on.exit(try(disconnect_db(data_con), silent = TRUE), add = TRUE)
@@ -108,7 +119,8 @@ run_gamm_screen <- function(level = c("source", "channel"), cfg = gamm_cfg) {
   message("Metrics selected: ", length(metrics_sel), " of ", length(available), " in ", sp$table)
   message("Metric decomposition: ", decomposition,
           if (decomposition == "between_within")
-            paste0(" (p-value reported for the ", primary_part, "-subject part)") else "")
+            paste0(" (p-value reported for the ", primary_part, "-subject part)") else "",
+          " | bam discrete = ", discrete)
   skipped <- setdiff(available, metrics_sel)
   if (length(skipped) > 0) message("  Not screened: ", paste(skipped, collapse = ", "))
 
@@ -140,7 +152,7 @@ run_gamm_screen <- function(level = c("source", "channel"), cfg = gamm_cfg) {
     message("  ", unit_lbl, ": ", this_unit)
     message(strrep("=", 60))
 
-    unit_dir <- file.path(cfg$out_dir, level, this_unit)
+    unit_dir <- model_out_dir(cfg$out_dir, level, this_unit, decomposition)
     dir.create(unit_dir, recursive = TRUE, showWarnings = FALSE)
 
     df <- load_metrics_wide(data_con, level, this_unit, metrics = load_cols, split = "train")
@@ -265,7 +277,7 @@ run_gamm_screen <- function(level = c("source", "channel"), cfg = gamm_cfg) {
         k_max        = cfg$k_max,
         feature_set  = cfg$feature_set,
         nthreads     = cfg$nthreads,
-        discrete     = !isFALSE(cfg$bam_discrete),
+        discrete     = discrete,
         zscale       = zscale,
         decomposition = decomposition,
         primary_part = primary_part
@@ -281,7 +293,8 @@ run_gamm_screen <- function(level = c("source", "channel"), cfg = gamm_cfg) {
 
   message("\n", unit_lbl, " GAMM combo screen complete.")
   message("Results table: ", cfg$results_db_path, "  (table: gamm_fitted, feature_set = ",
-          cfg$feature_set, ")")
-  message("Model objects under: ", file.path(cfg$out_dir, level), "/<unit>/<model_name>.rds")
+          cfg$feature_set, ", decomposition = ", decomposition, ")")
+  message("Model objects under: ", file.path(cfg$out_dir, level), "/<unit>/",
+          if (decomposition == "pooled") "pooled/" else "", "<model_name>.rds")
   invisible(NULL)
 }

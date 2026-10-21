@@ -5,8 +5,9 @@
 # males and females? Run from R/gamm/ after source_core.R / channel_core.R.
 #
 # For every significant single-metric model (p < gamm_cfg$hits_p_sig, current
-# feature_set, both levels), the screen model is refitted on EXACTLY the same
-# rows (its own model frame) with sex as an ordered factor:
+# feature_set and decomposition, both levels), the screen model is refitted
+# on EXACTLY the same rows (its own model frame) with sex as an ordered
+# factor:
 #
 #   screen : ... + sex      + s(metric_z)
 #   here   : ... + sex_o    + s(metric_z) + s(metric_z, by = sex_o)
@@ -26,10 +27,13 @@
 #
 # Reads:  results.duckdb  gamm_fitted; the screen .rds files
 # Writes: results.duckdb  gamm_sex_diff (one row per hit)
-#         <out_dir>/<level>/<unit>/sexdiff_<metric>.rds
+#         <out_dir>/<level>/<unit>/[pooled/]sexdiff_<metric>.rds
 #
 # Multiple comparisons: diff_p is uncorrected; diff_p_fdr is
 # Benjamini-Hochberg across all hits of this run (both levels together).
+#
+# V3 (Oct 2026): keyed on decomposition; bam_discrete defaults to FALSE
+# (discrete p-values for the subject-level difference curve are invalid).
 # =============================================================================
 
 library(dplyr)
@@ -42,19 +46,17 @@ source("helpers/gamm_combo_core.R")
 source("helpers/hit_helpers.R")
 
 ref_sex <- gamm_cfg$sex_reference
+decomp  <- gamm_cfg$metric_decomposition
 
 results_con <- init_results_db(gamm_cfg$results_db_path)
 
 # Derived entirely from gamm_fitted + the .rds files, so an older layout is
 # simply rebuilt.
-if (dbExistsTable(results_con, "gamm_sex_diff") &&
-    !"term_var" %in% dbListFields(results_con, "gamm_sex_diff"))
-  invisible(dbExecute(results_con, "DROP TABLE gamm_sex_diff"))
-
-invisible(dbExecute(results_con, "
+ensure_derived_table(results_con, "gamm_sex_diff", c("term_var", "decomposition"), "
   CREATE TABLE IF NOT EXISTS gamm_sex_diff (
     fitted_at      VARCHAR,
     feature_set    VARCHAR,
+    decomposition  VARCHAR,
     level          VARCHAR,
     group_value    VARCHAR,
     metric         VARCHAR,
@@ -75,12 +77,14 @@ invisible(dbExecute(results_con, "
     aic_sex        DOUBLE,
     delta_aic      DOUBLE,
     rds_path       VARCHAR,
-    PRIMARY KEY (feature_set, level, group_value, metric)
-  )"))
+    PRIMARY KEY (feature_set, decomposition, level, group_value, metric)
+  )")
 
-hits <- load_hits(results_con, gamm_cfg$feature_set, p_sig = gamm_cfg$hits_p_sig)
+hits <- load_hits(results_con, gamm_cfg$feature_set, p_sig = gamm_cfg$hits_p_sig,
+                  decomposition = decomp)
 if (nrow(hits) == 0) stop("No significant single-metric models in gamm_fitted (feature_set ",
-                          gamm_cfg$feature_set, ", p < ", gamm_cfg$hits_p_sig, ").")
+                          gamm_cfg$feature_set, ", decomposition ", decomp,
+                          ", p < ", gamm_cfg$hits_p_sig, ").")
 message("Sex-difference follow-up: ", nrow(hits), " significant model(s) (p < ",
         gamm_cfg$hits_p_sig, "); reference sex = ", ref_sex)
 
@@ -89,6 +93,7 @@ message("Sex-difference follow-up: ", nrow(hits), " significant model(s) (p < ",
 # -----------------------------------------------------------------------------
 refit_by_sex <- function(hit) {
   row <- tibble(fitted_at = as.character(Sys.time()), feature_set = gamm_cfg$feature_set,
+                decomposition = decomp,
                 level = hit$level, group_value = hit$group_value, metric = hit$metrics,
                 status = "ok", sex_reference = ref_sex, sex_other = NA_character_,
                 n_subj_ref = NA_integer_, n_subj_other = NA_integer_, term_type = NA_character_,
@@ -138,7 +143,7 @@ refit_by_sex <- function(hit) {
 
   fit <- tryCatch(
     bam(f_sex, data = d, method = "fREML", select = TRUE,
-        discrete = !isFALSE(gamm_cfg$bam_discrete), nthreads = gamm_cfg$nthreads),
+        discrete = isTRUE(gamm_cfg$bam_discrete), nthreads = gamm_cfg$nthreads),
     error = function(e) { message("  [WARN] ", conditionMessage(e)); NULL })
   if (is.null(fit)) { row$status <- "fit_failed"; return(row) }
 
@@ -191,8 +196,10 @@ res$diff_p_fdr[ok] <- p.adjust(res$diff_p[ok], method = "BH")
 
 for (i in seq_len(nrow(res))) {
   invisible(dbExecute(results_con,
-    "DELETE FROM gamm_sex_diff WHERE feature_set = ? AND level = ? AND group_value = ? AND metric = ?",
-    params = list(res$feature_set[i], res$level[i], res$group_value[i], res$metric[i])))
+    "DELETE FROM gamm_sex_diff WHERE feature_set = ? AND decomposition = ? AND level = ?
+       AND group_value = ? AND metric = ?",
+    params = list(res$feature_set[i], res$decomposition[i], res$level[i],
+                  res$group_value[i], res$metric[i])))
 }
 invisible(dbAppendTable(results_con, "gamm_sex_diff", as.data.frame(res)))
 
