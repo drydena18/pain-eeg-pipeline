@@ -16,8 +16,9 @@ spectral_core.m V3.0.0):
     - roi.hemisphere_split adds <ROI>_lh / <ROI>_rh next to each bilateral ROI.
     - V4.1.0: whole window from features.windows.whole_sec (not the full
       epoch); slow_alpha_frac dropped; delta_erd -> erd_asym.
-    - V4.2.0: noise_cov.method ("ad_hoc" default | "empirical") passed to
-      src_make_inverse_operator; ROI time courses streamed (src_inverse.py).
+    - V4.2.0: when the .set has no channel positions they are looked up in
+      the preprocessing .elp (cfg.source.montage, src_io.src_apply_montage);
+      the forward cache is then named sub-XXX_elp_fwd.fif.
 
 Per-subject outputs
 ───────────────────
@@ -26,7 +27,7 @@ Per-subject outputs
         sub-XXX_source_ga.csv         subject x ROI
         sub-XXX_source_ga_fooof.csv   subject x ROI FOOOF only
         sub-XXX_source_ga_timecourse.npy, sub-XXX_source_times.npy
-    <out_root>/sub-XXX/fwd/sub-XXX_fwd.fif   cached forward solution
+    <out_root>/sub-XXX/fwd/sub-XXX[_<montage_tag>]_fwd.fif   cached forward solution
     <out_root>/sub-XXX/logs/
 
 Column names in sub-XXX_source_trial.csv are identical to the metric columns
@@ -176,7 +177,6 @@ def source_core(cfg: dict, da_root: str, exp_out: str):
     hemi_split = bool(roi_cfg.get("hemisphere_split", True))
     roi_mode   = roi_cfg.get("mode", "mean_flip")
 
-    noise_method = str(src_cfg["noise_cov"].get("method", "ad_hoc")).lower()
     noise_tmin = float(src_cfg["noise_cov"]["tmin"])
     noise_tmax = float(src_cfg["noise_cov"]["tmax"])
     mindist_mm = float(src_cfg["forward"]["mindist_mm"])
@@ -223,7 +223,7 @@ def source_core(cfg: dict, da_root: str, exp_out: str):
             set_path = src_find_set(da_root, exp_out, stage_dir, out_prefix, sub, allow_fb)
             src_logmsg(logf, "[LOAD] %s", set_path)
 
-            epochs = src_read_epochs(set_path)
+            epochs, montage_tag = src_read_epochs(set_path, src_cfg.get("montage"), logf)
             sfreq = float(epochs.info["sfreq"])
             src_logmsg(logf, "[EPOCHS] n=%d  sfreq=%.1f Hz  t=(%.3f, %.3f)s",
                        len(epochs), sfreq, epochs.tmin, epochs.tmax)
@@ -231,12 +231,14 @@ def source_core(cfg: dict, da_root: str, exp_out: str):
                 src_logmsg(logf, "[SKIP] No epochs - skipping subject.")
                 continue
 
-            fwd_cache = os.path.join(fwd_dir, f"{sub_str}_fwd.fif")
+            # Cache name carries the position source so a forward built from
+            # template positions is never reused for native ones (or vice versa)
+            fwd_name = f"{sub_str}_fwd.fif" if montage_tag == "native" else f"{sub_str}_{montage_tag}_fwd.fif"
+            fwd_cache = os.path.join(fwd_dir, fwd_name)
             inv, fwd = src_make_inverse_operator(
                 epochs, bem_sol, trans, src_space,
                 noise_tmin, noise_tmax, mindist_mm, loose, depth,
                 fwd_cache_path = fwd_cache, logf = logf,
-                noise_method = noise_method,
             )
 
             tc, times = src_apply_inverse_epochs(epochs, inv, fwd, labels, lambda2, pick_ori, roi_mode, logf)
