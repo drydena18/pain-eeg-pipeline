@@ -19,17 +19,17 @@ Run steps
 
     3. Run:
        # All subjects
-       python exp02_source.py --cfg ../../config/exp02.json
+       python exp03_source.py --cfg ../../config/exp03.json
 
        # Subset (recommended for first run)
-       python exp02_source.py --cfg ../../config/exp02.json --subjects 1 2 3
+       python exp03_source.py --cfg ../../config/exp03.json --subjects 1 2 3
 
 Usage (command line):
-    python exp02_source.py
-    python exp02_source.py --subjects 1 2 3 10
-    python exp02_source.py --cfg /path/to/exp02.json
+    python exp03_source.py
+    python exp03_source.py --subjects 1 2 3 10
+    python exp03_source.py --cfg /path/to/exp03.json
 
-Config JSON expected at: <repo_root>/config/exp02.json
+Config JSON expected at: <repo_root>/config/exp03.json
 
 Minimum required JSON keys
 ---------------------------
@@ -89,9 +89,9 @@ def exp02_source(subjects_override = None, cfg_path: str = None):
     source_default(exp_id = exp_id, cfg_in = cfg_in, subjects_override = subjects_override)
 
 def _parse_args():
-    ap = argparse.ArgumentParser(description = "sLORETA source localization - Experiment 1.")
+    ap = argparse.ArgumentParser(description = "sLORETA source localization - Experiment 3.")
     ap.add_argument("--cfg", default = None, metavar = "PATH",
-                    help = "Path to experiment JSON config (default: <repo>/config/exp02.json)")
+                    help = "Path to experiment JSON config (default: <repo>/config/exp03.json)")
     ap.add_argument("--subjects", nargs = "+", type = int, default = None, metavar = "ID",
                     help = "Subject IDs to process (overrides cfg.exp.subjects).")
     return ap.parse_args()
