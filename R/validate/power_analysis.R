@@ -132,10 +132,10 @@ library(ggplot2)
 library(lme4)
 library(simr)
 
-source("gamm_defaults.R")
-source("helpers/db_helpers.R")
-source("helpers/gamm_combo_core.R")
-source("helpers/hit_helpers.R")
+source("/home/UWO/darsenea/Documents/GitHub/pain-alpha-dynamics/R/gamm/gamm_defaults.R")
+source("/home/UWO/darsenea/Documents/GitHub/pain-alpha-dynamics/R/gamm/helpers/db_helpers.R")
+source("/home/UWO/darsenea/Documents/GitHub/pain-alpha-dynamics/R/gamm/helpers/gamm_combo_core.R")
+source("/home/UWO/darsenea/Documents/GitHub/pain-alpha-dynamics/R/gamm/helpers/hit_helpers.R")
 
 # =============================================================================
 # CONFIG

@@ -32,7 +32,7 @@ if logf < 0
 end
 cleanup = onCleanup(@() safeClose(logf));
 
-logmsg(logf, '===== PP %s START sub-%03d (%s) =====', upper(mode), id, string(cfg.exp.id));
+logmsg(logf, '===== PP %s START sub-%03d (%s) =====', upper(mode), id, string(cfg.exp_id));
 rt = struct('subjid', id, 'P', P, 'subRoot', subRoot, 'ST', ST, ...
             'LOGS', LOGS, 'QC', QC, 'logf', logf, 'resume', true);
 end

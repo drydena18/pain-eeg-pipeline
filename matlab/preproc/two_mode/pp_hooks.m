@@ -21,7 +21,7 @@ pp.mode1.clean_copy_fn = @st_clean_copy;
 %   badseg_policy  'remove'    : drop >threshold segments from the ICA training copy
 %                  'keep'      : train on all data (the prompt_yesno default)
 pp.mode1.interp_policy = 'suggested';
-pp.mode1.badseg_policy = 'remove';
+pp.mode1.badseg_policy = 'keep';
 
 % ---- Mode 2a: ICLabel + QC packets, IC PSD metrics, topo grid ---------------
 pp.mode2a.prep_fn = @st_icqc;
