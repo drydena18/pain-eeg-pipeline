@@ -22,7 +22,7 @@ if isfield(cfg, 'runtime_fn') && ~isempty(cfg.runtime_fn)
 end %#ok<NASGU>
 
 EEG = pop_loadset('filename', P.ica_set, 'filepath', P.ica_dir);
-if ~strcmp(pp_hash([EEG.icaweights(:); EEG.icasphere(:)]), dec.weights_hash)
+if ~strcmp(pp_ica_fingerprint(EEG), dec.weights_hash)
     error('pp:decisions', 'IC decisions do not match the ICA weights on disk.');
 end
 if ~isfield(EEG.etc, 'pp_tags') && isfield(info.ica, 'tags')

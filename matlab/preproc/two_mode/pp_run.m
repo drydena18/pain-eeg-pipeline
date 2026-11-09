@@ -39,7 +39,7 @@ for si = 1:numel(subs)
                 case '2b', pp_mode2b(cfg, subj);
             end
         catch ME
-            errs{si} = sprintf('Mode %s: %s', mode, ME.message);
+            errs{si} = sprintf('Mode %s: %s%s', mode, ME.message, local_where(ME));
             pp_log_error(cfg, subj, mode, ME);
             fprintf(2, '  FAILED %s (Mode %s): %s\n', subj, mode, ME.message);
             break;   % don't run later modes for this participant
@@ -83,5 +83,21 @@ if nReview
     else
         fprintf('\nNext: pp_review(cfg)   %d participant(s) ready for IC rejection.\n', nReview);
     end
+end
+end
+
+function w = local_where(ME)
+% First stack frame outside MATLAB/EEGLAB internals, as ' [file:line]'.
+w = '';
+for k = 1:numel(ME.stack)
+    f = ME.stack(k).file;
+    if contains(f, matlabroot) || contains(lower(f), 'eeglab'), continue; end
+    [~, n, e] = fileparts(f);
+    w = sprintf(' [%s%s:%d]', n, e, ME.stack(k).line);
+    return;
+end
+if ~isempty(ME.stack)
+    [~, n, e] = fileparts(ME.stack(1).file);
+    w = sprintf(' [%s%s:%d]', n, e, ME.stack(1).line);
 end
 end
