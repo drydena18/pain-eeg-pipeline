@@ -56,9 +56,9 @@ if _this_dir not in sys.path:
 
 from source_default import source_default # noqa: E402
 
-def exp02_source(subjects_override = None, cfg_path: str = None):
+def exp03_source(subjects_override = None, cfg_path: str = None):
     """
-    Entrypoint for Experiment 1 source localization.
+    Entrypoint for Experiment 3 source localization.
     
     Args:
         subjects_override : Optional list of integer subject IDs.

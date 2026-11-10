@@ -56,7 +56,7 @@ if _this_dir not in sys.path:
 
 from source_default import source_default # noqa: E402
 
-def exp02_source(subjects_override = None, cfg_path: str = None):
+def exp04_source(subjects_override = None, cfg_path: str = None):
     """
     Entrypoint for Experiment 4 source localization.
     

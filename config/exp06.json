@@ -216,22 +216,22 @@
       "enabled": true,
       "events": [
         {
-          "code": "s32",
+          "code": "S 32",
           "condition": "pain",
           "intensity": "1"
         },
         {
-          "code": "s33",
+          "code": "S 33",
           "condition": "pain",
           "intensity": "2"
         },
         {
-          "code": "s34",
+          "code": "S 34",
           "condition": "pain",
           "intensity": "3"
         },
         {
-          "code": "s35",
+          "code": "S 35",
           "condition": "pain",
           "intensity": "4"
         }
