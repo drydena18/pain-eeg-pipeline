@@ -1,6 +1,11 @@
 function [featChan, featGA, summ, aux] = spec_compute_subject_features(X, timesSec, fs, F)
 % SPEC_COMPUTE_SUBJECT_FEATURES  All channel-space features for one subject
-% V 1.1.0  (V1.1.0: whole window from F.windows.whole_sec, not the full epoch)
+% V 1.2.0
+%
+% V1.2.0: aux also returns the per-window band powers (aux.pw) and per-trial
+%         window PSDs (aux.PS), so spec_cluster_features can pool channels
+%         without recomputing them. No feature value changes.
+% V1.1.0: whole window from F.windows.whole_sec, not the full epoch.
 %
 % Python twin: python/source/source_core.compute_subject_features. Kept free
 % of I/O so tests/parity_test.py can compare both pipelines on identical data.
@@ -31,7 +36,9 @@ function [featChan, featGA, summ, aux] = spec_compute_subject_features(X, timesS
 %              ITC, TVI_alpha -> identical names to sub-XXX_source_ga.csv
 %              (FOOOF added by spectral_core)
 %   aux      : f, wholePsdTrialMean [nChan x nF], wholePsd [nChan x nF x nTr],
-%              phaseT0 [nChan x nTr] (for r_cl), gaWholePsd [nF x nTr]
+%              phaseT0 [nChan x nTr] (for r_cl), gaWholePsd [nF x nTr],
+%              pw.(whole|pre|post).(slow|fast|alpha) [nChan x nTr],
+%              PS.(whole|pre|post) [nChan x nF x nTr]
 
 timesSec = double(timesSec(:))';
 X = double(X);
@@ -138,4 +145,6 @@ aux.wholePsdTrialMean = sP.whole;
 aux.gaWholePsd = reshape(mean(PS.whole, 1, 'omitnan'), numel(f), nTr);
 aux.phaseT0 = ph.slow_phase;
 aux.gaPreSfBalance = gft.pre.sf_balance(:);
+aux.pw = pw;   % V1.2.0: for spec_cluster_features
+aux.PS = PS;   % V1.2.0: for spec_cluster_features
 end

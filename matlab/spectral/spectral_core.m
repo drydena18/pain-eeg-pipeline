@@ -1,6 +1,16 @@
 function spectral_core(P, cfg)
 % SPECTRAL_CORE  Channel-space alpha features, computed exactly as in source space
-% V 3.1.0
+% V 3.2.0
+%
+% V3.2.0: electrode clusters (cfg.spectral.clusters, see spectral_default).
+%   Each cluster (e.g. S1_contra / S1_ipsi relative to the stimulated hand)
+%   is computed as one unit by spec_cluster_features - power pooled across
+%   its electrodes, waveform features from the cluster-mean signal - and
+%   appended as extra rows (chan_label = cluster name) to
+%   sub-XXX_spectral_chan_by_trial.csv and sub-XXX_spectral_chan_summary.csv,
+%   so the R merge ingests them unchanged; select them in the GAMM stage with
+%   gamm_cfg$channel_include. Channel rows are byte-for-byte unchanged.
+%   New: csv/sub-XXX_cluster_qc.csv (electrodes found / missing per cluster).
 %
 % V3.1.0: whole window = features.windows.whole_sec; slow_alpha_frac dropped;
 % delta_erd -> erd_asym (see helpers).
@@ -32,10 +42,11 @@ function spectral_core(P, cfg)
 %     Python implementation; per-trial channel-GA fits are dropped.
 %
 % Output structure per subject (P.SPEC_ROOT/sub-XXX/):
-%   csv/  sub-XXX_spectral_chan_by_trial.csv   trial x channel  (read by R merge)
+%   csv/  sub-XXX_spectral_chan_by_trial.csv   trial x (channel + cluster)  (read by R merge)
 %         sub-XXX_spectral_ga_by_trial.csv     trial x channel-mean
-%         sub-XXX_spectral_chan_summary.csv    subject x channel
+%         sub-XXX_spectral_chan_summary.csv    subject x (channel + cluster)
 %         sub-XXX_subject_summary.csv          TVI of channel-mean + r_cl
+%         sub-XXX_cluster_qc.csv               electrodes per cluster (V3.2.0)
 %   lep/  sub-XXX_lep_trials.mat, sub-XXX_lep_ga.mat, sub-XXX_lep_peaks.csv
 %   figures/ tmp/ logs/
 
@@ -53,6 +64,9 @@ phCfg   = cfg.spectral.phase;
 doFooof = logical(F.fooof.enabled);
 doLEP   = logical(lepCfg.enabled);
 doPhase = logical(phCfg.enabled);
+clCfg   = struct('enabled', false);
+if isfield(cfg.spectral, 'clusters'), clCfg = cfg.spectral.clusters; end
+doClus  = logical(clCfg.enabled);
 
 for i = 1:numel(subs)
     subjid = subs(i);
@@ -69,7 +83,7 @@ for i = 1:numel(subs)
     logf = spec_open_log(outLog, subjid, 'spectral');
     cobj = onCleanup(@() spec_safe_close(logf)); %#ok<NASGU>
 
-    spec_logmsg(logf, '===== SPECTRAL V3 START sub-%03d =====', subjid);
+    spec_logmsg(logf, '===== SPECTRAL V3.2 START sub-%03d =====', subjid);
     spec_logmsg(logf, 'Input stage: %s | Plot mode: %s', inStage, plotMode);
 
     % ---------------------------------------------------------------
@@ -131,6 +145,45 @@ for i = 1:numel(subs)
     end
 
     % ---------------------------------------------------------------
+    % 2b. Electrode clusters (V3.2.0)
+    % ---------------------------------------------------------------
+    featC = struct(); summC = struct(); clusNames = {};
+    if doClus
+        try
+            C = spec_resolve_clusters(clCfg, chanLabels);
+            for c = 1:numel(C)
+                spec_logmsg(logf, '[CLUS] %-12s found %d/%d: %s%s', C(c).name, numel(C(c).idx), ...
+                    numel(C(c).requested), strjoin(C(c).found, ' '), ...
+                    local_missing_txt(C(c).missing, C(c).ok, clCfg.min_channels));
+            end
+            spec_write_cluster_qc_csv(fullfile(outCSV, sprintf('sub-%03d_cluster_qc.csv', subjid)), ...
+                subjid, C, clCfg.stim_side, clCfg.min_channels);
+
+            [featC, summC, auxC] = spec_cluster_features(EEG.data, timesSec, fs, F, aux, C);
+            clusNames = auxC.names;
+
+            if doFooof && any(auxC.ok)
+                try
+                    foC = spec_run_fooof_python(aux.f, auxC.wholePsdTrialMean(auxC.ok, :), F, ...
+                        cfg.spectral.fooof, fullfile(outTmp, 'clusters'), subjid, logf);
+                    fn = fieldnames(foC);
+                    for k = 1:numel(fn)
+                        v = nan(numel(C), 1);
+                        v(auxC.ok) = foC.(fn{k});
+                        summC.(fn{k}) = v;
+                    end
+                catch ME
+                    spec_logmsg(logf, '[CLUS][WARN] Cluster FOOOF failed: %s', ME.message);
+                end
+            end
+        catch ME
+            spec_logmsg(logf, '[CLUS][WARN] Cluster features failed (channel outputs unaffected): %s', ...
+                getReport(ME, 'extended', 'hyperlinks', 'off'));
+            featC = struct(); summC = struct(); clusNames = {};
+        end
+    end
+
+    % ---------------------------------------------------------------
     % 3. r_cl (MATLAB-only extra): phase at t = 0 vs single-trial ratings
     % ---------------------------------------------------------------
     rclTable = table();
@@ -143,14 +196,19 @@ for i = 1:numel(subs)
     end
 
     % ---------------------------------------------------------------
-    % 4. Write CSVs
+    % 4. Write CSVs (cluster rows, if any, appended below the channels)
     % ---------------------------------------------------------------
+    trialOut = featChan; summOut = summ; labOut = chanLabels;
+    if ~isempty(clusNames)
+        [trialOut, labOut] = spec_append_units(featChan, chanLabels, featC, clusNames);
+        summOut            = spec_append_units(summ,     chanLabels, summC, clusNames);
+    end
     spec_write_chan_trial_csv(fullfile(outCSV, sprintf('sub-%03d_spectral_chan_by_trial.csv', subjid)), ...
-        subjid, chanLabels, featChan);
+        subjid, labOut, trialOut);
     spec_write_ga_trial_csv(fullfile(outCSV, sprintf('sub-%03d_spectral_ga_by_trial.csv', subjid)), ...
         subjid, featGA, struct());
     spec_write_chan_summary_csv(fullfile(outCSV, sprintf('sub-%03d_spectral_chan_summary.csv', subjid)), ...
-        subjid, chanLabels, summ);
+        subjid, labOut, summOut);
 
     try
         tviOut   = spec_compute_tvi_alpha(aux.gaPreSfBalance, logf);
@@ -173,7 +231,8 @@ for i = 1:numel(subs)
     end
 
     % ---------------------------------------------------------------
-    % 6. QC figures (best effort; plotting helpers predate V3 names)
+    % 6. QC figures (best effort; plotting helpers predate V3 names).
+    %    Channels only - clusters are not drawn on the topographic panels.
     % ---------------------------------------------------------------
     if isfield(cfg.spectral, 'trial_spectral') && logical(cfg.spectral.trial_spectral.enabled)
         try
@@ -199,6 +258,17 @@ for i = 1:numel(subs)
         spec_logmsg(logf, '[WARN] Plotting failed (cosmetic): %s', ME.message);
     end
 
-    spec_logmsg(logf, '===== SPECTRAL V3 DONE sub-%03d =====', subjid);
+    spec_logmsg(logf, '===== SPECTRAL V3.2 DONE sub-%03d =====', subjid);
+end
+end
+
+% -------------------------------------------------------------------------
+function txt = local_missing_txt(missing, ok, minCh)
+txt = '';
+if ~isempty(missing)
+    txt = sprintf(' | MISSING: %s', strjoin(missing, ' '));
+end
+if ~ok
+    txt = sprintf('%s | fewer than %d electrodes -> NaN rows', txt, minCh);
 end
 end

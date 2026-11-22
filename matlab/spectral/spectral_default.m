@@ -1,6 +1,15 @@
 function cfg = spectral_default(P, cfg_in, subjects_override)
 % SPECTRAL_DEFAULT Validate/normalise cfg then dispatch to spectral_core
-% V 2.1.0
+% V 2.2.0
+%
+% V2.2.0: cfg.spectral.clusters (electrode clusters, computed by
+% spec_cluster_features and appended to the channel CSVs by spectral_core
+% V3.2.0). Defaults: S1_contra / S1_ipsi relative to the stimulated hand,
+% built only from electrodes present on all CNED caps (32/62/64), plus
+% SM_furman (C3/Cz/C4) for comparison with Furman et al. 2018/2020.
+% A JSON "clusters" block replaces the default definitions wholesale
+% (lateral / fixed), so an experiment's config is the full record of what
+% was pooled.
 %
 % V2.1.0: features.windows.whole_sec (default [-1 2] s) replaces 'whole =
 % full epoch' now that epochs run -2.2 to 2.0 s; warns when a window lies
@@ -118,6 +127,9 @@ cfg.spectral = defaultStruct(cfg.spectral, 'phase');
 cfg.spectral.phase = defaultField(cfg.spectral.phase, 'enabled',        true);
 cfg.spectral.phase = defaultField(cfg.spectral.phase, 'n_permutations', 5000);
 
+% Electrode clusters (V2.2.0)
+cfg.spectral.clusters = local_cluster_cfg(cfg);
+
 % QC plots
 cfg.spectral = defaultStruct(cfg.spectral, 'trial_spectral');
 cfg.spectral.trial_spectral = defaultField(cfg.spectral.trial_spectral, 'enabled',             false);
@@ -159,6 +171,7 @@ fprintf('  band power  : filter-Hilbert, slow %s / fast %s Hz, trans_bw %.2f Hz\
     mat2str(F.bands.slow_hz), mat2str(F.bands.fast_hz), F.band_power.trans_bw_hz);
 fprintf('  LEP         : N2 %s s, P2 %s s\n', mat2str(F.lep.n2_window_sec), mat2str(F.lep.p2_window_sec));
 fprintf('  FOOOF       : enabled=%d (subject x channel trial-mean PSD)\n', logical(F.fooof.enabled));
+local_print_clusters(cfg.spectral.clusters);
 
 % ----------
 % Dispatch
@@ -167,6 +180,89 @@ if cfg.spectral.enabled
     spectral_core(P, cfg);
 else
     fprintf('[%s] cfg.spectral.enabled=false (skipping spectral_core)\n', string(cfg.exp.id));
+end
+end
+
+% ==========================================================================
+% Local: electrode clusters
+% ==========================================================================
+function cc = local_cluster_defaults()
+% S1: electrodes over left/right sensorimotor cortex that exist on EVERY
+% CNED cap (32-channel ANT/BP 10-20 caps lack C1/C2/CP3/CP4). The centroid
+% of C3/CP1/CP5 lies between C3 and CP3, i.e. over postcentral hand
+% cortex; same for C4/CP2/CP6 on the right.
+% SM_furman: the C3/Cz/C4 sensorimotor ROI of Furman et al. 2018/2020 -
+% kept for comparison with that work, not part of the primary S1 test.
+cc = struct();
+cc.enabled      = true;
+cc.stim_side    = "right";
+cc.min_channels = 2;
+cc.lateral = struct('S1', struct( ...
+    'left',  {{'C3'; 'CP1'; 'CP5'}}, ...
+    'right', {{'C4'; 'CP2'; 'CP6'}}));
+cc.fixed = struct('SM_furman', {{'C3'; 'Cz'; 'C4'}});
+end
+
+function cc = local_cluster_cfg(cfg)
+D = local_cluster_defaults();
+cc = D;
+user = struct();
+if isfield(cfg.spectral, 'clusters') && isstruct(cfg.spectral.clusters)
+    user = cfg.spectral.clusters;
+end
+% Scalars merge onto the defaults; a user "lateral" or "fixed" block
+% REPLACES the default definitions (so S1 can be redefined or SM_furman
+% dropped by giving "fixed": {}).
+for k = {'enabled', 'stim_side', 'min_channels'}
+    if isfield(user, k{1}), cc.(k{1}) = user.(k{1}); end
+end
+for k = {'lateral', 'fixed'}
+    if isfield(user, k{1})
+        v = user.(k{1});
+        if isempty(v), v = struct(); end
+        cc.(k{1}) = v;
+    end
+end
+% Stimulated hand may also be given per experiment as cfg.exp.stim_side.
+if ~isfield(user, 'stim_side') && isfield(cfg.exp, 'stim_side')
+    cc.stim_side = cfg.exp.stim_side;
+end
+
+cc.enabled      = logical(cc.enabled);
+cc.stim_side    = lower(strtrim(string(cc.stim_side)));
+cc.min_channels = double(cc.min_channels);
+if ~any(cc.stim_side == ["left", "right"])
+    error('spectral_default:BadStimSide', ...
+        'spectral.clusters.stim_side must be "left" or "right" (got "%s").', cc.stim_side);
+end
+if ~(isscalar(cc.min_channels) && cc.min_channels >= 1)
+    error('spectral_default:BadMinChannels', 'spectral.clusters.min_channels must be >= 1.');
+end
+end
+
+function local_print_clusters(cc)
+if ~cc.enabled
+    fprintf('  clusters    : disabled\n');
+    return;
+end
+fprintf('  clusters    : stim_side=%s, min_channels=%d\n', cc.stim_side, cc.min_channels);
+side = char(cc.stim_side);
+contra = 'left'; if strcmp(side, 'left'), contra = 'right'; end
+if isstruct(cc.lateral)
+    regs = fieldnames(cc.lateral);
+    for r = 1:numel(regs)
+        if startsWith(regs{r}, 'x_'), continue; end
+        R = cc.lateral.(regs{r});
+        fprintf('                %s_contra = %s | %s_ipsi = %s\n', regs{r}, ...
+            strjoin(cellstr(string(R.(contra))), '/'), regs{r}, strjoin(cellstr(string(R.(side))), '/'));
+    end
+end
+if isstruct(cc.fixed)
+    nm = fieldnames(cc.fixed);
+    for k = 1:numel(nm)
+        if startsWith(nm{k}, 'x_'), continue; end
+        fprintf('                %s = %s\n', nm{k}, strjoin(cellstr(string(cc.fixed.(nm{k}))), '/'));
+    end
 end
 end
 
