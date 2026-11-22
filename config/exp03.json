@@ -302,6 +302,17 @@
     "phase": {
       "enabled": true,
       "n_permutations": 5000
+    },
+    "clusters": {
+      "enabled": true,
+      "stim_side": "right",
+      "min_channels": 2,
+      "lateral": {
+        "S1": { "left": ["C3", "CP1", "CP5"], "right": ["C4", "CP2", "CP6"] }
+      },
+      "fixed": {
+        "SM_furman": ["C3", "Cz", "C4"]
+      }
     }
   },
   "source": {
