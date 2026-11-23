@@ -1,11 +1,11 @@
 function [S, labels] = spec_append_units(A, labelsA, B, labelsB)
-% SPEC_APPEND_UNITS Append extra units (e.g. clusters) below channel rows
+% SPEC_APPEND_UNITS  Append extra units (e.g. clusters) below channel rows
 % V 1.0.0
 %
 % For every field of A whose first dimension is numel(labelsA), the rows
 % of B's same-named field are appended underneath. A field missing from B
 % (or with the wrong number of rows or columns) gets NaN rows, so the
-% CSV writers always see a rectangular (nA + nB x n) array. Fields only in
+% CSV writers always see a rectangular [nA + nB x n] array. Fields only in
 % B are dropped, which keeps the CSV columns identical to a channel-only
 % run.
 %
@@ -14,8 +14,8 @@ function [S, labels] = spec_append_units(A, labelsA, B, labelsB)
 %   B, labelsB : cluster features ([nB x n] fields) and names
 %
 % Outputs:
-%   S       : struct, fields [nA + nB x n]
-%   labels  : column cellstr of nA + nB labels
+%   S      : struct, fields [nA + nB x n]
+%   labels : column cellstr of nA + nB labels
 
 la = local_cellstr(labelsA);
 lb = local_cellstr(labelsB);

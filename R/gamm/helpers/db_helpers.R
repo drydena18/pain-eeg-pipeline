@@ -19,6 +19,15 @@
 # This file owns the long-to-wide PIVOT so the GAMM scripts never see
 # long-format data or write SQL themselves.
 #
+# V3 (Nov 2026):
+#   - apply_channel_units(): channel-level units are electrodes AND electrode
+#     clusters (spectral_core.m >= 3.2.0 writes cluster rows into the channel
+#     tables, chan_label = cluster name). gamm_cfg$channel_units picks
+#     "clusters", "electrodes" or "all"; gamm_cfg$cluster_names says which
+#     labels are clusters. Used by the screen (gamm_screen.R) and by
+#     load_hits() (hit_helpers.R), so every follow-up script sees the same
+#     units as the screen.
+#
 # V2 (Oct 2026):
 #   - One generic loader, load_metrics_wide(con, level, unit, metrics, split),
 #     behind the old load_source_metrics_wide / load_channel_metrics_wide /
@@ -132,6 +141,53 @@ select_units <- function(available, include) {
                                    paste(missing, collapse = ", "))
   intersect(available, include)
 }
+
+# =============================================================================
+# apply_channel_units()
+# -----------------------------------------------------------------------------
+# Channel-level units are electrodes (C3, Cz, ...) and electrode clusters
+# (S1_contra, ...). Keeps the kind selected by `channel_units`:
+#   "clusters"   labels listed in cluster_names
+#   "electrodes" every other label
+#   "all"        both
+# Matching is case-insensitive. Applied BEFORE channel_include, which then
+# narrows within the selected kind.
+#
+# warn = TRUE reports (once per call) cluster_names absent from `available`,
+# and labels that look like clusters (contain "_") but are not listed, which
+# would otherwise be treated as electrodes.
+# =============================================================================
+CHANNEL_UNITS <- c("clusters", "electrodes", "all")
+
+apply_channel_units <- function(available, channel_units = "all",
+                                cluster_names = character(0), warn = TRUE) {
+  channel_units <- tolower(channel_units %||% "all")
+  if (length(channel_units) != 1 || !channel_units %in% CHANNEL_UNITS)
+    stop("gamm_cfg$channel_units must be one of: ", paste(CHANNEL_UNITS, collapse = ", "),
+         " (got ", paste(channel_units, collapse = ", "), ").", call. = FALSE)
+  cluster_names <- as.character(cluster_names %||% character(0))
+  is_cluster <- toupper(available) %in% toupper(cluster_names)
+
+  if (warn && channel_units != "electrodes") {
+    absent <- cluster_names[!toupper(cluster_names) %in% toupper(available)]
+    if (length(absent) > 0)
+      message("  [WARN] cluster_names not in the database: ", paste(absent, collapse = ", "),
+              " (was the spectral stage run with clusters enabled?)")
+  }
+  if (warn) {
+    unlisted <- available[!is_cluster & grepl("_", available)]
+    if (length(unlisted) > 0)
+      message("  [WARN] Channel label(s) look like clusters but are not in cluster_names, ",
+              "so they count as electrodes: ", paste(unlisted, collapse = ", "))
+  }
+
+  switch(channel_units,
+         clusters   = available[is_cluster],
+         electrodes = available[!is_cluster],
+         all        = available)
+}
+
+if (!exists("%||%")) `%||%` <- function(a, b) if (is.null(a)) b else a
 
 # =============================================================================
 # load_metrics_wide()

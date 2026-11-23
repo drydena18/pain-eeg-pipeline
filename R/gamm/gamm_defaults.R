@@ -32,6 +32,12 @@
 #     screen produced no valid hits. Estimates and predictions are unaffected;
 #     only the smooth-term tests are. gamm_fitted now records bam_discrete.
 #   - robustness, comparison and classical-test settings added (bottom).
+#
+# V4 (Nov 2026):
+#   - channel_units / cluster_names: the channel-level screen and every
+#     follow-up script work on electrode clusters, single electrodes, or
+#     both (mirrors spectral.units in the experiment JSON). Primary analysis
+#     = "clusters" (S1 clusters; see docs/s1_clusters.md).
 # =============================================================================
 
 gamm_cfg <- list(
@@ -90,12 +96,31 @@ gamm_cfg <- list(
     # that trial's pain?". The other part is stored in *_other columns.
     primary_part = "between",
 
+    # -- Channel Units: electrodes vs clusters ----
+    # Channel-level units are single electrodes (C3, Cz, ...) and electrode
+    # clusters (rows written by spectral_core.m >= 3.2.0, label = cluster
+    # name). Same choice as spectral.units in the experiment JSON:
+    #   "clusters"   only the units in cluster_names        (primary analysis)
+    #   "electrodes" only single electrodes
+    #   "all"        both
+    # Applies to the screen (channel_core.R) AND to every follow-up script
+    # (load_hits / compare_levels), so results stored from another selection
+    # are ignored rather than mixed in. channel_include then narrows further
+    # within the selected kind, e.g. channel_include = "S1_contra".
+    channel_units = "clusters",
+    # Cluster unit names as written by the spectral stage: <Region>_contra /
+    # <Region>_ipsi for each spectral.clusters.lateral region, plus each
+    # spectral.clusters.fixed name. Matched case-insensitively.
+    cluster_names = c("S1_contra", "S1_ipsi", "SM_furman"),
+
     # -- Unit Selection ----
-    # NULL = every ROI / channel present in the database. The source tables
-    # hold 18 ROIs: 6 bilateral + 6 _lh + 6 _rh. Screening all three is
-    # three partly-redundant tests per region; restrict here if wanted, e.g.
+    # NULL = every unit of the selected kind present in the database. The
+    # source tables hold 18 ROIs: 6 bilateral + 6 _lh + 6 _rh. Screening all
+    # three is three partly-redundant tests per region; restrict here if
+    # wanted, e.g.
     # roi_include = c("S1", "S2", "ACC", "Insula", "dlPFC", "M1")   (bilateral)
     # roi_include = "_(lh|rh)$"                                      (regex)
+    # channel_include = c("S1_contra", "S1_ipsi")   (after channel_units)
     roi_include     = NULL,
     channel_include = NULL,
 
@@ -209,9 +234,9 @@ gamm_cfg <- list(
     # -- Channel vs source comparison (compare_levels.R) ----
     compare = list(
         # Paired held-out comparison: for each metric with a hit at both
-        # levels, the best ROI and the best channel (by held-out subject
-        # error) predict the same held-out subjects. Best-of-64 channels vs
-        # best-of-18 ROIs favours channels; the report says so.
+        # levels, the best ROI and the best channel unit (by screen p)
+        # predict the same held-out subjects. The level with more units has
+        # more chances to fit well by luck; the report says so.
         n_boot = 2000L,
         grid_n = 100L
     ),

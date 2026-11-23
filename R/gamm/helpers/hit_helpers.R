@@ -7,6 +7,8 @@
 #
 #   load_hits()            significant single-metric models of the current
 #                          feature set and decomposition, from gamm_fitted
+#   filter_channel_units() keep the channel-level rows selected by
+#                          channel_units / cluster_names / channel_include
 #   ensure_derived_table() (re)create a follow-up table whose layout changed
 #   fig_unit_dir()         figure folder for one unit (per decomposition)
 #   metric_label()         "pre_paf_cog_hz" -> "Pre-stimulus PAF (CoG, Hz)"
@@ -20,6 +22,13 @@
 #
 # All predictions use the model's own frame (mod$model), so they describe
 # exactly the rows the model was fitted on.
+#
+# V4 (Nov 2026): load_hits() applies gamm_cfg$channel_units /
+# cluster_names / channel_include to channel-level hits (apply_channel_units()
+# in db_helpers.R), so every follow-up script works on the same units as the
+# screen - an older all-electrode screen stored in gamm_fitted no longer
+# leaks electrode hits into a clusters-only follow-up. Pass cfg = NULL to
+# get every stored hit. unit_label() also spells out cluster names.
 #
 # V3 (Oct 2026): load_hits() filters on decomposition (gamm_fitted now holds
 # both) and warns about rows fitted with discrete = TRUE; bam_discrete
@@ -36,8 +45,12 @@ library(tibble)
 # =============================================================================
 # decomposition: "between_within" / "pooled"; NULL = both (not recommended:
 # the follow-up tables are keyed per decomposition).
+# cfg: the GAMM config whose channel_units / cluster_names / channel_include
+# select the channel-level units (defaults to the global gamm_cfg that every
+# follow-up script sources). Source-level hits are not filtered here.
 load_hits <- function(results_con, feature_set, p_sig = 0.05,
-                      levels = c("source", "channel"), decomposition = NULL) {
+                      levels = c("source", "channel"), decomposition = NULL,
+                      cfg = get0("gamm_cfg", envir = globalenv(), ifnotfound = NULL)) {
   dec_sql <- if (is.null(decomposition)) "" else
     sprintf("AND decomposition = %s", as.character(dbQuoteString(results_con, decomposition)))
   rows <- dbGetQuery(results_con, sprintf("
@@ -73,12 +86,33 @@ load_hits <- function(results_con, feature_set, p_sig = 0.05,
            rds_ok = !is.na(rds_path) & file.exists(rds_path)) %>%
     arrange(level, group_value, p_num)
 
+  # -- Channel-level units: same selection as the screen ----
+  out <- filter_channel_units(out, cfg, what = "hit")
+
   n_bad <- sum(out$bam_discrete %in% TRUE & out$decomposition == "between_within")
   if (n_bad > 0)
     warning(n_bad, " hit(s) come from discrete = TRUE fits with the between/within split; ",
             "their between-subject p-values are invalid. Re-run the screen with bam_discrete = FALSE.",
             call. = FALSE, immediate. = TRUE)
   out
+}
+
+# Keep only the channel-level rows the screen would select under cfg
+# (channel_units, cluster_names, channel_include); source rows untouched.
+# df needs `level` and `group_value` columns. cfg = NULL keeps everything.
+filter_channel_units <- function(df, cfg = get0("gamm_cfg", envir = globalenv(), ifnotfound = NULL),
+                                 what = "row") {
+  if (is.null(cfg) || nrow(df) == 0 || !any(df$level == "channel")) return(df)
+  ch <- unique(df$group_value[df$level == "channel"])
+  keep_ch <- select_units(
+    apply_channel_units(ch, cfg$channel_units %||% "all",
+                        cfg$cluster_names %||% character(0), warn = FALSE),
+    cfg$channel_include)
+  n_drop <- sum(df$level == "channel" & !df$group_value %in% keep_ch)
+  if (n_drop > 0)
+    message("  ", n_drop, " channel-level ", what, "(s) outside channel_units = '",
+            cfg$channel_units %||% "all", "' / channel_include ignored.")
+  df[df$level != "channel" | df$group_value %in% keep_ch, , drop = FALSE]
 }
 
 # A follow-up table (gamm_sex_diff, holdout_replication, ...) is derived
@@ -160,7 +194,10 @@ model_metric_vars <- function(mod, metric) {
 
 unit_label <- function(x) {
   x <- sub("_lh$", " (left)", x)
-  sub("_rh$", " (right)", x)
+  x <- sub("_rh$", " (right)", x)
+  x <- sub("_contra$", " (contralateral)", x)
+  x <- sub("_ipsi$", " (ipsilateral)", x)
+  sub("^SM_furman$", "Sensorimotor (C3/Cz/C4)", x)
 }
 
 # =============================================================================

@@ -13,26 +13,33 @@
 #      hits_p_sig), the share of units with a hit, the smallest p and its
 #      unit; held-out summary: hits evaluated / replicated in
 #      holdout_replication, best held-out change in error.
-#      The share, not the count, is compared: 64 channels vs 18 ROIs.
+#      The share, not the count, is compared (e.g. 64 channels vs 18 ROIs).
 #
 #   2. Paired held-out comparison, for metrics with a hit at BOTH levels.
-#      The best ROI and the best channel are chosen by SCREEN p (training
-#      data only, so the held-out set is not used for selection). Both
-#      models predict the same held-out subjects (population level); per
+#      The best ROI and the best channel unit are chosen by SCREEN p
+#      (training data only, so the held-out set is not used for selection).
+#      Both models predict the same held-out subjects (population level); per
 #      subject, squared error of the mean rating, source - channel
 #      (negative = source predicts better). 95% CI and two-sided p from
-#      resampling subjects. Caveat: the best of 64 channels has more chances
-#      to fit well by luck than the best of 18 ROIs (the figure says so).
+#      resampling subjects. Caveat: the level with more units has more
+#      chances to fit well by luck (the figure says so).
 #
 #   3. Curve concordance, same pairs: correlation of the two fitted
 #      primary-part curves (z-scale, over the overlap of their 1st-99th
 #      percentile ranges) - do the two spaces describe the same shape?
+#
+# Channel-level units follow gamm_cfg$channel_units (clusters / electrodes /
+# all): with "clusters" this compares S1_contra / S1_ipsi with the source
+# ROIs, i.e. "does the source analysis agree with the scalp S1 cluster?".
 #
 # Writes: <out_dir>/compare/level_summary.csv, level_paired_holdout.csv
 #         <fig_dir>/level_comparison[_pooled].png
 # Reads:  results.duckdb (gamm_fitted, holdout_replication), the .rds files,
 #         data.duckdb (held-out subjects, read-only)
 #
+# V2 (Nov 2026): channel-level rows filtered by channel_units /
+# cluster_names / channel_include (filter_channel_units(), hit_helpers.R),
+# so stored results from a different unit selection are not mixed in.
 # V1 (Oct 2026).
 # =============================================================================
 
@@ -68,7 +75,8 @@ fits <- dbGetQuery(results_con, "
   WHERE feature_set = ? AND decomposition = ? AND n_metrics = 1",
   params = list(cfg$feature_set, decomp)) %>%
   as_tibble() %>%
-  mutate(p_num = suppressWarnings(as.numeric(p_value)))
+  mutate(p_num = suppressWarnings(as.numeric(p_value))) %>%
+  filter_channel_units(cfg, what = "screened model")
 if (nrow(fits) == 0) stop("No single-metric models in gamm_fitted for feature_set ",
                           cfg$feature_set, ", decomposition ", decomp, ".")
 if (n_distinct(fits$level) < 2) message("[WARN] Only one level in gamm_fitted (",
@@ -80,7 +88,8 @@ ho <- if (dbExistsTable(results_con, "holdout_replication") &&
   as_tibble(dbGetQuery(results_con, "
     SELECT level, group_value, metric AS metrics, status, subj_pct, trial_pct, replicated
     FROM holdout_replication WHERE feature_set = ? AND decomposition = ?",
-    params = list(cfg$feature_set, decomp)))
+    params = list(cfg$feature_set, decomp))) %>%
+    filter_channel_units(cfg, what = "held-out result")
 } else tibble(level = character(), group_value = character(), metrics = character(),
               status = character(), subj_pct = numeric(), trial_pct = numeric(), replicated = logical())
 pct_col <- if (cfg$holdout_primary == "subject") "subj_pct" else "trial_pct"
@@ -183,13 +192,14 @@ pA <- ggplot(fa, aes(x = share_hits, y = y, colour = level)) +
 plots <- pA
 if (nrow(paired) > 0 && any(paired$status == "ok")) {
   pB <- paired %>% filter(status == "ok") %>%
-    mutate(lab = sprintf("%s\n%s vs %s", metric_label(metric), unit_label(source_unit), channel_unit),
+    mutate(lab = sprintf("%s\n%s vs %s", metric_label(metric), unit_label(source_unit),
+                         unit_label(channel_unit)),
            lo = 100 * diff_lo / mse_channel, hi = 100 * diff_hi / mse_channel) %>%
     ggplot(aes(x = diff_pct, y = reorder(lab, -diff_pct))) +
     geom_vline(xintercept = 0, colour = INK_3, linetype = "dashed", linewidth = 0.4) +
     geom_linerange(aes(xmin = lo, xmax = hi), colour = INK_2, linewidth = 0.6) +
     geom_point(colour = INK_2, size = 2.3) +
-    labs(subtitle = "B  Held-out error, best ROI vs best channel (by screen p)",
+    labs(subtitle = "B  Held-out error, best ROI vs best channel unit (by screen p)",
          x = "Source - channel, % of channel error (negative = source better)", y = NULL) +
     theme_gamm()
   plots <- pA | pB
@@ -198,8 +208,9 @@ n_u <- summary_tab %>% group_by(level) %>% summarise(n = max(n_units), .groups =
 n_of <- function(lv) if (lv %in% n_u$level) n_u$n[n_u$level == lv] else 0L
 plots <- plots + plot_annotation(
   title = "Channel space vs source space",
-  caption = paste0("Feature set ", cfg$feature_set, ", ", decomp, " decomposition. B: 95% CI from resampling held-out subjects; ",
-                   "the best of ", n_of("channel"), " channels vs the best of ", n_of("source"),
+  caption = paste0("Feature set ", cfg$feature_set, ", ", decomp, " decomposition; channel units: ",
+                   cfg$channel_units %||% "all", ". B: 95% CI from resampling held-out subjects; ",
+                   "the best of ", n_of("channel"), " channel units vs the best of ", n_of("source"),
                    " ROIs favours the level with more units."),
   theme = theme_gamm())
 ggsave(file.path(cfg$fig_dir, sprintf("level_comparison%s.png", if (decomp == "pooled") "_pooled" else "")),
@@ -217,7 +228,7 @@ message("\nShare of units with a hit, mean over metrics: ",
 if (nrow(paired) > 0) for (i in seq_len(nrow(paired))) {
   r <- paired[i, ]
   if (!identical(r$status, "ok")) { message(sprintf("  %-28s %s", r$metric, r$status)); next }
-  message(sprintf("  %-28s %-10s vs %-5s  source - channel %+6.1f%% [%+.3f, %+.3f]  p %s  curve r = %.2f",
+  message(sprintf("  %-28s %-10s vs %-10s  source - channel %+6.1f%% [%+.3f, %+.3f]  p %s  curve r = %.2f",
                   r$metric, r$source_unit, r$channel_unit, r$diff_pct, r$diff_lo, r$diff_hi,
                   fmt_p(r$p_two_sided), r$curve_r))
 }

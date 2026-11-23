@@ -17,6 +17,10 @@
 # means TRUE); a loud warning if discrete fits are combined with the
 # between/within split; pooled models are written to <unit>/pooled/.
 #
+# V4 (Nov 2026): channel-level units are filtered by gamm_cfg$channel_units
+# ("clusters" | "electrodes" | "all", see apply_channel_units() in
+# db_helpers.R) before channel_include is applied.
+#
 # Per unit:
 #   1. Load the screened metrics (gamm_cfg$metric_include) for TRAIN
 #      subjects, pivoted wide and joined to subjects + trials.
@@ -81,6 +85,17 @@ print_split_summary <- function(data_con) {
   }
 }
 
+# Units to screen at one level: every unit with training data, then (channel
+# level) the electrodes / clusters choice, then roi_include / channel_include.
+select_screen_units <- function(available, level, cfg) {
+  if (level == "channel") {
+    available <- apply_channel_units(available, cfg$channel_units %||% "all",
+                                     cfg$cluster_names %||% character(0))
+    return(select_units(available, cfg$channel_include))
+  }
+  select_units(available, cfg$roi_include)
+}
+
 run_gamm_screen <- function(level = c("source", "channel"), cfg = gamm_cfg) {
   level    <- match.arg(level)
   sp       <- level_spec(level)
@@ -106,10 +121,12 @@ run_gamm_screen <- function(level = c("source", "channel"), cfg = gamm_cfg) {
   print_split_summary(data_con)
 
   # -- Units ----
-  units <- select_units(list_available_units(data_con, level),
-                        if (level == "source") cfg$roi_include else cfg$channel_include)
+  if (level == "channel")
+    message("\nChannel units: ", cfg$channel_units %||% "all",
+            " (clusters = ", paste(cfg$cluster_names %||% character(0), collapse = ", "), ")")
+  units <- select_screen_units(list_available_units(data_con, level), level, cfg)
   if (length(units) == 0) stop("No ", unit_lbl, "s found in ", sp$table,
-                               " for training subjects - check data.duckdb / *_include.")
+                               " for training subjects - check data.duckdb / channel_units / *_include.")
   message("\nScreening ", length(units), " ", unit_lbl, "(s): ", paste(units, collapse = ", "))
 
   # -- Metrics ----

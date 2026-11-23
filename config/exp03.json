@@ -264,6 +264,7 @@
   },
   "spectral": {
     "input_stage": "08_base",
+    "units": "clusters",
     "fooof": {
       "python_exe": "/home/UWO/darsenea/envs/thesis/bin/python",
       "script_path": "/home/UWO/darsenea/Documents/GitHub/pain-alpha-dynamics/python/spectral/fooof_bridge.py"

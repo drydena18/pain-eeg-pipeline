@@ -1,6 +1,10 @@
 function cfg = spectral_default(P, cfg_in, subjects_override)
 % SPECTRAL_DEFAULT Validate/normalise cfg then dispatch to spectral_core
-% V 2.2.0
+% V 2.3.0
+%
+% V2.3.0: cfg.spectral.units = "all" (default) | "electrodes" | "clusters".
+% "clusters" runs feature extraction on the cluster member electrodes only
+% and writes cluster rows only (see spectral_core V3.3.0).
 %
 % V2.2.0: cfg.spectral.clusters (electrode clusters, computed by
 % spec_cluster_features and appended to the channel CSVs by spectral_core
@@ -130,6 +134,21 @@ cfg.spectral.phase = defaultField(cfg.spectral.phase, 'n_permutations', 5000);
 % Electrode clusters (V2.2.0)
 cfg.spectral.clusters = local_cluster_cfg(cfg);
 
+% Which units to compute and write (V2.3.0)
+%   "all"        electrodes + clusters (default)
+%   "electrodes" electrodes only
+%   "clusters"   clusters only: just the member electrodes are processed
+cfg.spectral = defaultField(cfg.spectral, 'units', "all");
+cfg.spectral.units = lower(strtrim(string(cfg.spectral.units)));
+if ~any(cfg.spectral.units == ["all", "electrodes", "clusters"])
+    error('spectral_default:BadUnits', ...
+        'spectral.units must be "all", "electrodes" or "clusters" (got "%s").', cfg.spectral.units);
+end
+if cfg.spectral.units == "clusters" && ~cfg.spectral.clusters.enabled
+    error('spectral_default:ClustersDisabled', ...
+        'spectral.units = "clusters" but spectral.clusters.enabled = false.');
+end
+
 % QC plots
 cfg.spectral = defaultStruct(cfg.spectral, 'trial_spectral');
 cfg.spectral.trial_spectral = defaultField(cfg.spectral.trial_spectral, 'enabled',             false);
@@ -171,7 +190,10 @@ fprintf('  band power  : filter-Hilbert, slow %s / fast %s Hz, trans_bw %.2f Hz\
     mat2str(F.bands.slow_hz), mat2str(F.bands.fast_hz), F.band_power.trans_bw_hz);
 fprintf('  LEP         : N2 %s s, P2 %s s\n', mat2str(F.lep.n2_window_sec), mat2str(F.lep.p2_window_sec));
 fprintf('  FOOOF       : enabled=%d (subject x channel trial-mean PSD)\n', logical(F.fooof.enabled));
-local_print_clusters(cfg.spectral.clusters);
+fprintf('  units       : %s\n', cfg.spectral.units);
+if cfg.spectral.units ~= "electrodes"
+    local_print_clusters(cfg.spectral.clusters);
+end
 
 % ----------
 % Dispatch
