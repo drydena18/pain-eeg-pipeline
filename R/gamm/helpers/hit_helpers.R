@@ -23,7 +23,10 @@
 # All predictions use the model's own frame (mod$model), so they describe
 # exactly the rows the model was fitted on.
 #
-# V4 (Nov 2026): load_hits() returns only levels in gamm_cfg$analysis_levels
+# V4 (Nov 2026): prepare_holdout() fills missing age / sex with the model's
+# own $covariate_fill (training median age, sex "U") when the screen used
+# missing_covariates = "impute".
+# load_hits() returns only levels in gamm_cfg$analysis_levels
 # (an explicit `levels` argument is intersected with it) and applies
 # gamm_cfg$channel_units /
 # cluster_names / channel_include to channel-level hits (apply_channel_units()
@@ -399,6 +402,11 @@ prepare_holdout <- function(data_con, level, unit, metric_z, mod, cfg) {
   if (isTRUE(cfg$exclude_p5_flag)) load_cols <- c(load_cols, "p5_flag")
   df <- load_metrics_wide(data_con, level, unit, metrics = load_cols, split = "holdout")
   if (nrow(df) == 0 || !raw %in% names(df)) return(df[0, ])
+
+  # Missing age / sex filled exactly as for the training subjects (training
+  # median age, sex "U"), if the model was fitted with missing_covariates =
+  # "impute"; otherwise those rows are dropped below, as in the screen.
+  df <- apply_covariate_fill(df, mod$covariate_fill)
 
   df <- df %>%
     filter(!is.na(pain_rating), !is.na(laser_power), !is.na(trial_index),

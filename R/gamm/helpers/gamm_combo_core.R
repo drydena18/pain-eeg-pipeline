@@ -14,6 +14,9 @@
 #   generate_metric_combos()   enumerate which metric combinations to fit
 #   fit_gamm_combo()           fit one bam(), return model + a result-row tibble
 #   model_out_dir()            where a unit's .rds files go (per decomposition)
+#   impute_covariates()        missing age / sex: keep the subject (V4)
+#   apply_covariate_fill()     the same fill applied to new (held-out) rows
+#   adds_rank()                does a parametric term add information?
 #   init_results_db()          open/create the DuckDB results table
 #   write_result_row()         incremental upsert of one fit's result row
 #   close_results_db()         clean disconnect
@@ -61,6 +64,18 @@
 #     old discrete default and its between-subject p-values are invalid.
 #   - model_out_dir(): pooled models go to <unit>/pooled/, so their .rds
 #     files no longer overwrite the between_within ones.
+#
+# V4 (Nov 2026):
+#   - impute_covariates() / apply_covariate_fill(): with
+#     gamm_cfg$missing_covariates = "impute", subjects with missing age or
+#     sex are kept: sex -> its own level "U" (unknown), age -> the median of
+#     the subjects at that unit + an age_missing indicator (0/1). The fill is
+#     stored on every model ($covariate_fill) so held-out rows are filled
+#     the same way (prepare_holdout()). "drop" keeps the old complete-case
+#     behaviour.
+#   - fit_gamm_combo(covariate_fill =) stores it; adds_rank() lets the
+#     screen add age_missing only when it is not aliased with the other
+#     parametric terms (e.g. age missing for a whole experiment = a cap size).
 # =============================================================================
 
 library(dplyr)
@@ -102,6 +117,58 @@ safe_bam <- function(formula, data, nm, unit = NA_character_, nthreads = 4L,
       NULL
     }
   )
+}
+
+# =============================================================================
+# Missing age / sex (V4)
+# -----------------------------------------------------------------------------
+# impute_covariates(df, mode)
+#   mode = "drop"   : nothing changes; the caller drops rows with NA age/sex
+#                     (complete cases, the pre-V4 behaviour).
+#   mode = "impute" : sex NA / ""  -> "U" (own level: unknown sex)
+#                     age NA       -> median age of the subjects in df
+#                                     (one value per subject, so people with
+#                                     many trials do not weigh more)
+#                     age_missing  =  1 where age was filled, else 0
+#   Returns list(df, fill); fill = NULL for "drop", else
+#   list(mode, age, sex, n_age, n_sex) - stored on each model so held-out
+#   rows get the SAME fill (training median, not the held-out median).
+# =============================================================================
+MISSING_COVARIATES <- c("drop", "impute")
+
+impute_covariates <- function(df, mode = "drop") {
+  mode <- match.arg(tolower(mode %||% "drop"), MISSING_COVARIATES)
+  if (mode == "drop") return(list(df = df, fill = NULL))
+  subj <- df[!duplicated(as.character(df$global_subjid)), c("global_subjid", "age", "sex")]
+  sx <- as.character(subj$sex)
+  age_fill <- suppressWarnings(stats::median(subj$age, na.rm = TRUE))
+  if (!is.finite(age_fill)) age_fill <- 0           # no ages at all: age_z drops out (constant)
+  fill <- list(mode = "impute", age = age_fill, sex = "U",
+               n_age = sum(is.na(subj$age)), n_sex = sum(is.na(sx) | sx == ""))
+  list(df = apply_covariate_fill(df, fill), fill = fill)
+}
+
+apply_covariate_fill <- function(df, fill) {
+  if (is.null(fill)) return(df)
+  miss <- is.na(df$age)
+  df$age_missing <- as.numeric(miss)
+  df$age[miss] <- fill$age
+  sx <- as.character(df$sex)
+  sx[is.na(sx) | sx == ""] <- fill$sex
+  df$sex <- sx
+  df
+}
+
+`%||%` <- function(a, b) if (is.null(a)) b else a
+
+# TRUE if parametric term `new` adds a dimension to the model matrix of the
+# parametric terms `terms` in df (i.e. it is not aliased with them).
+adds_rank <- function(terms, new, df) {
+  mm <- function(tt) {
+    f <- stats::reformulate(if (length(tt) == 0) "1" else tt)
+    qr(stats::model.matrix(f, data = df))$rank
+  }
+  mm(c(terms, new)) > mm(terms)
 }
 
 # =============================================================================
@@ -320,14 +387,17 @@ extract_combo_result_row <- function(mod, model_name, level, group_value, metric
 # list(model = ..., result_row = tibble). The caller writes result_row
 # immediately (incremental writes).
 #
-# level       : "source" or "channel"
-# group_value : the ROI name (e.g. "Insula_lh") or channel label (e.g. "Cz")
+# level          : "source" or "channel"
+# group_value    : the ROI name (e.g. "Insula_lh") or channel label (e.g. "Cz")
+# covariate_fill : from impute_covariates() (NULL = complete cases); stored
+#                  on the model as $covariate_fill
 # =============================================================================
 fit_gamm_combo <- function(data, level, group_value, metrics, base_formula, model_name,
                            out_dir, tensor_pairs = list(), k_max = 10,
                            feature_set = NA_character_, nthreads = 4L,
                            discrete = FALSE, zscale = NULL,
-                           decomposition = "pooled", primary_part = "between") {
+                           decomposition = "pooled", primary_part = "between",
+                           covariate_fill = NULL) {
 
   formula_use <- build_combo_formula(base_formula, metrics, data,
                                      tensor_pairs = tensor_pairs, k_max = k_max,
@@ -346,16 +416,18 @@ fit_gamm_combo <- function(data, level, group_value, metrics, base_formula, mode
 
   # Stored on the model object so downstream scripts (plots, sex follow-up,
   # holdout) need only the .rds: original-unit scaling of every z-scored
-  # column, and what the model is.
+  # column, how missing covariates were filled, and what the model is.
   if (!is.null(zscale)) {
     raw <- c("age", "laser_power", "trial_index", sub("_z$", "", metrics))
     mod$zscale <- zscale[intersect(raw, names(zscale))]
   }
+  mod$covariate_fill <- covariate_fill
   mod$gamm_meta <- list(level = level, group_value = group_value, model_name = model_name,
                         metrics = metrics, feature_set = feature_set,
                         decomposition = decomposition,
                         primary_part = if (identical(decomposition, "between_within")) primary_part else "pooled",
-                        bam_discrete = isTRUE(discrete))
+                        bam_discrete = isTRUE(discrete),
+                        missing_covariates = if (is.null(covariate_fill)) "drop" else "impute")
 
   rds_path <- file.path(out_dir, paste0(model_name, ".rds"))
   saveRDS(mod, rds_path)

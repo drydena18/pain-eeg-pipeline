@@ -22,6 +22,11 @@
 # db_helpers.R) before channel_include is applied; a screen at a level not in
 # gamm_cfg$analysis_levels stops (check_screen_level()).
 #
+# V5 (Nov 2026): gamm_cfg$missing_covariates = "impute" keeps subjects with
+# missing age / sex (impute_covariates(), gamm_combo_core.R): sex -> "U",
+# age -> median + age_missing indicator (added only if not aliased). The fill
+# is saved on each model for held-out prediction. "drop" = complete cases.
+#
 # Per unit:
 #   1. Load the screened metrics (gamm_cfg$metric_include) for TRAIN
 #      subjects, pivoted wide and joined to subjects + trials.
@@ -187,6 +192,14 @@ run_gamm_screen <- function(level = c("source", "channel"), cfg = gamm_cfg) {
 
     df <- load_metrics_wide(data_con, level, this_unit, metrics = load_cols, split = "train")
 
+    # Missing age / sex: keep the subject (missing_covariates = "impute") or
+    # drop it below (complete cases, "drop").
+    imp <- impute_covariates(df, cfg$missing_covariates %||% "drop")
+    df  <- imp$df
+    if (!is.null(imp$fill) && imp$fill$n_age + imp$fill$n_sex > 0)
+      message(sprintf("  Missing covariates kept: age for %d subject(s) (filled with median %.1f + age_missing), sex for %d subject(s) (level 'U').",
+                      imp$fill$n_age, imp$fill$age, imp$fill$n_sex))
+
     df <- df %>%
       mutate(
         experiment_id = safe_factor(experiment_id),
@@ -230,7 +243,7 @@ run_gamm_screen <- function(level = c("source", "channel"), cfg = gamm_cfg) {
     # -- z-score covariates + metrics ----
     df <- df %>%
       mutate(
-        age_z         = zscore(age),
+        age_z         = if (isTRUE(stats::sd(age) > 0)) zscore(age) else 0,
         laser_power_z = zscore(laser_power),
         trial_index_z = zscore(trial_index)
       )
@@ -270,9 +283,14 @@ run_gamm_screen <- function(level = c("source", "channel"), cfg = gamm_cfg) {
 
     # -- Base formula (covariates + REs), with level guards ----
 
-    fixed_terms <- "age_z"
+    fixed_terms <- if (isTRUE(stats::sd(df$age_z) > 0)) "age_z" else character(0)
     if (nlevels(df$sex)      > 1L) fixed_terms <- c(fixed_terms, "sex")
     if (nlevels(df$cap_size) > 1L) fixed_terms <- c(fixed_terms, "cap_size")
+    # Filled-in ages: the indicator lets those subjects differ from the
+    # median age they were given. Left out when it duplicates another term
+    # (e.g. age missing for one whole experiment = its cap size).
+    if ("age_missing" %in% names(df) && any(df$age_missing == 1) &&
+        adds_rank(fixed_terms, "age_missing", df)) fixed_terms <- c(fixed_terms, "age_missing")
 
     re_terms <- character(0)
     if (n_distinct(df$global_subjid) > 1L) re_terms <- c(re_terms, "s(global_subjid, bs = 're')")
@@ -310,7 +328,8 @@ run_gamm_screen <- function(level = c("source", "channel"), cfg = gamm_cfg) {
         discrete     = discrete,
         zscale       = zscale,
         decomposition = decomposition,
-        primary_part = primary_part
+        primary_part = primary_part,
+        covariate_fill = imp$fill
       )
       if (is.null(fit)) next
 

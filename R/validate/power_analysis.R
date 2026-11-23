@@ -256,8 +256,9 @@ training_frame <- function(mod_bam) {
 # Covariates mirror the screen's base model; a factor with one level in this
 # subset is left out (contrasts would fail).
 fit_lmer_for_simr <- function(df, metric_vars) {
-  fixed <- c("laser_power_z", "trial_index_z", "age_z")
+  fixed <- c("laser_power_z", "trial_index_z", "age_z", "age_missing")
   fixed <- fixed[fixed %in% names(df)]
+  fixed <- fixed[vapply(fixed, function(v) isTRUE(stats::sd(df[[v]]) > 0), logical(1))]
   for (v in c("sex", "cap_size"))
     if (v %in% names(df) && nlevels(droplevels(df[[v]])) > 1) fixed <- c(fixed, v)
   re_terms <- "(1 | global_subjid)"

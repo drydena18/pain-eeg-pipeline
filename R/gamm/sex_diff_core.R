@@ -5,9 +5,9 @@
 # males and females? Run from R/gamm/ after source_core.R / channel_core.R.
 #
 # For every significant single-metric model (p < gamm_cfg$hits_p_sig, current
-# feature_set and decomposition, both levels), the screen model is refitted
-# on EXACTLY the same rows (its own model frame) with sex as an ordered
-# factor:
+# feature_set and decomposition, levels / units as in gamm_defaults.R), the
+# screen model is refitted on the same rows (its own model frame) with sex
+# as an ordered factor:
 #
 #   screen : ... + sex      + s(metric_z)
 #   here   : ... + sex_o    + s(metric_z) + s(metric_z, by = sex_o)
@@ -25,6 +25,12 @@
 # subject-mean term, i.e. "does the metric -> pain-sensitivity curve differ
 # by sex?"); the term is recorded in term_var.
 #
+# Unknown sex (V4): with missing_covariates = "impute" the screen keeps
+# subjects of unknown sex as level "U". They cannot inform a female vs male
+# comparison, so this refit drops them; the screen model is then refitted on
+# the same reduced rows so aic_screen / delta_aic still compare like with
+# like.
+#
 # Reads:  results.duckdb  gamm_fitted; the screen .rds files
 # Writes: results.duckdb  gamm_sex_diff (one row per hit)
 #         <out_dir>/<level>/<unit>/[pooled/]sexdiff_<metric>.rds
@@ -32,6 +38,7 @@
 # Multiple comparisons: diff_p is uncorrected; diff_p_fdr is
 # Benjamini-Hochberg across all hits of this run (both levels together).
 #
+# V4 (Nov 2026): subjects of unknown sex ("U") left out of the refit.
 # V3 (Oct 2026): keyed on decomposition; bam_discrete defaults to FALSE
 # (discrete p-values for the subject-level difference curve are invalid).
 # =============================================================================
@@ -88,6 +95,11 @@ if (nrow(hits) == 0) stop("No significant single-metric models in gamm_fitted (f
 message("Sex-difference follow-up: ", nrow(hits), " significant model(s) (p < ",
         gamm_cfg$hits_p_sig, "); reference sex = ", ref_sex)
 
+fit_like_screen <- function(f, d) {
+  bam(f, data = d, method = "fREML", select = TRUE,
+      discrete = isTRUE(gamm_cfg$bam_discrete), nthreads = gamm_cfg$nthreads)
+}
+
 # -----------------------------------------------------------------------------
 # One refit
 # -----------------------------------------------------------------------------
@@ -111,6 +123,15 @@ refit_by_sex <- function(hit) {
   row$term_var <- m
 
   if (!"sex" %in% names(d)) { row$status <- "no_sex_term"; return(row) }
+
+  # Unknown sex cannot inform a female vs male comparison
+  n_unknown <- 0L
+  if ("U" %in% as.character(d$sex)) {
+    n_unknown <- n_distinct(d$global_subjid[as.character(d$sex) == "U"])
+    d <- droplevels(d[as.character(d$sex) != "U", , drop = FALSE])
+    message("    ", n_unknown, " subject(s) of unknown sex left out of this refit")
+  }
+
   lv <- levels(droplevels(d$sex))
   if (length(lv) != 2 || !ref_sex %in% lv) {
     row$status <- "not_two_sexes"; return(row)
@@ -141,10 +162,8 @@ refit_by_sex <- function(hit) {
   terms_new <- c(replace(terms_screen, terms_screen == "sex", "sex_o"), diff_term)
   f_sex <- stats::reformulate(terms_new, response = "pain_rating")
 
-  fit <- tryCatch(
-    bam(f_sex, data = d, method = "fREML", select = TRUE,
-        discrete = isTRUE(gamm_cfg$bam_discrete), nthreads = gamm_cfg$nthreads),
-    error = function(e) { message("  [WARN] ", conditionMessage(e)); NULL })
+  fit <- tryCatch(fit_like_screen(f_sex, d),
+                  error = function(e) { message("  [WARN] ", conditionMessage(e)); NULL })
   if (is.null(fit)) { row$status <- "fit_failed"; return(row) }
 
   s_sum <- summary(fit)
@@ -168,13 +187,19 @@ refit_by_sex <- function(hit) {
       row$diff_p   <- s_sum$p.table[lab, 4]
     }
   }
-  row$aic_screen <- AIC(mod)
+  # AIC comparison on identical rows: the screen model as fitted, or refitted
+  # on the reduced rows when unknown-sex subjects were left out.
+  aic_ref <- if (n_unknown == 0) AIC(mod) else
+    tryCatch(AIC(fit_like_screen(mod$formula, d)), error = function(e) NA_real_)
+  row$aic_screen <- aic_ref
   row$aic_sex    <- AIC(fit)
   row$delta_aic  <- row$aic_sex - row$aic_screen
+  if (n_unknown > 0) row$status <- "ok_unknown_sex_excluded"
 
   fit$zscale <- mod$zscale
+  fit$covariate_fill <- mod$covariate_fill
   fit$gamm_meta <- c(mod$gamm_meta, list(sex_reference = ref_sex, sex_other = other,
-                                         screen_rds = hit$rds_path))
+                                         screen_rds = hit$rds_path, n_unknown_sex_excluded = n_unknown))
   out_dir <- dirname(hit$rds_path)
   row$rds_path <- file.path(out_dir, paste0("sexdiff_", sub("_z$", "", m), ".rds"))
   saveRDS(fit, row$rds_path)

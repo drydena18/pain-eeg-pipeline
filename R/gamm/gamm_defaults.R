@@ -38,6 +38,8 @@
 #     follow-up script work on electrode clusters, single electrodes, or
 #     both (mirrors spectral.units in the experiment JSON). Primary analysis
 #     = "clusters" (S1 clusters; see docs/s1_clusters.md).
+#   - missing_covariates = "impute": subjects with missing age / sex kept
+#     (sex "U", age median + age_missing); "drop" = complete cases.
 #   - analysis_levels: master switch for the levels the screen and every
 #     follow-up use (primary = "channel"); classical$level / classical$units
 #     run the classical tests on the clusters.
@@ -139,6 +141,17 @@ gamm_cfg <- list(
     # channel_include = c("S1_contra", "S1_ipsi")   (after channel_units)
     roi_include     = NULL,
     channel_include = NULL,
+
+    # -- Missing age / sex ----
+    # "impute": keep subjects with missing age or sex. Sex -> its own level
+    #           "U" (unknown); age -> the median age + an age_missing (0/1)
+    #           indicator, so filled-in ages are not treated as real ones.
+    #           Held-out subjects are filled with the TRAINING values (stored
+    #           on each model). sex_diff_core.R leaves unknown-sex subjects
+    #           out of its female vs male refit.
+    # "drop":   complete cases only (the pre-Nov 2026 behaviour) - use as a
+    #           sensitivity analysis for anything reported from "impute".
+    missing_covariates = "impute",
 
     # -- QC ----
     # p5_flag = 1 marks trials whose pre-stimulus slow or fast alpha power is
