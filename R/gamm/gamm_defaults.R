@@ -38,6 +38,9 @@
 #     follow-up script work on electrode clusters, single electrodes, or
 #     both (mirrors spectral.units in the experiment JSON). Primary analysis
 #     = "clusters" (S1 clusters; see docs/s1_clusters.md).
+#   - analysis_levels: master switch for the levels the screen and every
+#     follow-up use (primary = "channel"); classical$level / classical$units
+#     run the classical tests on the clusters.
 # =============================================================================
 
 gamm_cfg <- list(
@@ -95,6 +98,19 @@ gamm_cfg <- list(
     # sensitivity?"; "within" answers "does a trial's deviation predict
     # that trial's pain?". The other part is stored in *_other columns.
     primary_part = "between",
+
+    # -- Analysis Levels (master switch) ----
+    # Which levels are analysed: "channel", "source", or c("channel", "source").
+    #   - the screen at a level not listed here stops (source_core.R /
+    #     channel_core.R)
+    #   - every follow-up script (holdout_replicate.R, sex_diff_core.R,
+    #     plot_gamm_hits.R, robustness, power_analysis.R, classical_tests.R)
+    #     only reads hits / units at the listed levels
+    #   - compare_levels.R needs both
+    # Primary analysis: "channel" + channel_units = "clusters" -> the S1
+    # electrode clusters only, everywhere. Add "source" for the secondary /
+    # exploratory source analysis.
+    analysis_levels = "channel",
 
     # -- Channel Units: electrodes vs clusters ----
     # Channel-level units are single electrodes (C3, Cz, ...) and electrode
@@ -216,6 +232,7 @@ gamm_cfg <- list(
     #                fooof_r2 at that unit is below each threshold
     robustness = list(
         tests            = c("loeo", "kfold", "permutation", "split_half", "fooof_sensitivity"),
+        # Only levels that are also in analysis_levels are used.
         levels           = c("source", "channel"),
         # TRUE: only hits that replicated in holdout_replication (run
         # holdout_replicate.R first). Each hit costs ~2 refits per fold /
@@ -244,6 +261,15 @@ gamm_cfg <- list(
     # -- Classical tests (classical_tests.R) ----
     classical = list(
         split          = "all",        # "all" | "train" | "holdout"
+        # "channel" | "source"; NULL = channel if it is in analysis_levels.
+        # Outputs go to <out_dir>/<level>/.
+        level          = "channel",
+        # Channel level: units to test, within channel_units / channel_include
+        # (NULL = all of them). SM_furman shares C3 and C4 with the two S1
+        # clusters, so it is left out here: test 2 is then the paired
+        # contralateral vs ipsilateral comparison.
+        units          = c("S1_contra", "S1_ipsi"),
+        # Source level: ROIs to test
         rois           = c("S1", "S2", "ACC", "Insula", "dlPFC", "M1"),   # bilateral ROIs
         rmanova_metrics = c("pre_sf_balance", "pre_paf_cog_hz", "erd_asym"),
         phase_metrics  = c("slow_phase", "slow_phase_post"),

@@ -23,7 +23,9 @@
 # All predictions use the model's own frame (mod$model), so they describe
 # exactly the rows the model was fitted on.
 #
-# V4 (Nov 2026): load_hits() applies gamm_cfg$channel_units /
+# V4 (Nov 2026): load_hits() returns only levels in gamm_cfg$analysis_levels
+# (an explicit `levels` argument is intersected with it) and applies
+# gamm_cfg$channel_units /
 # cluster_names / channel_include to channel-level hits (apply_channel_units()
 # in db_helpers.R), so every follow-up script works on the same units as the
 # screen - an older all-electrode screen stored in gamm_fitted no longer
@@ -45,12 +47,26 @@ library(tibble)
 # =============================================================================
 # decomposition: "between_within" / "pooled"; NULL = both (not recommended:
 # the follow-up tables are keyed per decomposition).
-# cfg: the GAMM config whose channel_units / cluster_names / channel_include
-# select the channel-level units (defaults to the global gamm_cfg that every
-# follow-up script sources). Source-level hits are not filtered here.
+# cfg: the GAMM config (defaults to the global gamm_cfg that every follow-up
+# script sources). Its analysis_levels decides which levels are returned:
+# levels = NULL means "all of analysis_levels"; levels given explicitly
+# (robustness$levels, ...) are intersected with analysis_levels. Its
+# channel_units / cluster_names / channel_include select the channel-level
+# units. cfg = NULL: both levels, every unit.
 load_hits <- function(results_con, feature_set, p_sig = 0.05,
-                      levels = c("source", "channel"), decomposition = NULL,
+                      levels = NULL, decomposition = NULL,
                       cfg = get0("gamm_cfg", envir = globalenv(), ifnotfound = NULL)) {
+  scope <- if (is.null(cfg)) ANALYSIS_LEVELS else get_analysis_levels(cfg)
+  if (is.null(levels)) {
+    levels <- scope
+  } else {
+    off <- setdiff(levels, scope)
+    if (length(off) > 0)
+      message("  load_hits: level(s) ", paste(off, collapse = ", "),
+              " skipped (not in gamm_cfg$analysis_levels).")
+    levels <- intersect(levels, scope)
+  }
+  if (length(levels) == 0) levels <- "__none__"   # valid SQL, returns no rows
   dec_sql <- if (is.null(decomposition)) "" else
     sprintf("AND decomposition = %s", as.character(dbQuoteString(results_con, decomposition)))
   rows <- dbGetQuery(results_con, sprintf("

@@ -19,7 +19,8 @@
 #
 # V4 (Nov 2026): channel-level units are filtered by gamm_cfg$channel_units
 # ("clusters" | "electrodes" | "all", see apply_channel_units() in
-# db_helpers.R) before channel_include is applied.
+# db_helpers.R) before channel_include is applied; a screen at a level not in
+# gamm_cfg$analysis_levels stops (check_screen_level()).
 #
 # Per unit:
 #   1. Load the screened metrics (gamm_cfg$metric_include) for TRAIN
@@ -85,6 +86,17 @@ print_split_summary <- function(data_con) {
   }
 }
 
+# A screen runs only at a level listed in gamm_cfg$analysis_levels, so a
+# channel-only (clusters-only) analysis cannot accidentally add source rows.
+check_screen_level <- function(level, cfg) {
+  lv <- get_analysis_levels(cfg)
+  if (!level %in% lv)
+    stop("The ", level, " screen is switched off: gamm_cfg$analysis_levels = ",
+         paste0('"', lv, '"', collapse = ", "), ". Add \"", level,
+         "\" to analysis_levels to run it.", call. = FALSE)
+  invisible(TRUE)
+}
+
 # Units to screen at one level: every unit with training data, then (channel
 # level) the electrodes / clusters choice, then roi_include / channel_include.
 select_screen_units <- function(available, level, cfg) {
@@ -98,6 +110,7 @@ select_screen_units <- function(available, level, cfg) {
 
 run_gamm_screen <- function(level = c("source", "channel"), cfg = gamm_cfg) {
   level    <- match.arg(level)
+  check_screen_level(level, cfg)
   sp       <- level_spec(level)
   decomposition <- match.arg(cfg$metric_decomposition %||% "between_within",
                              c("between_within", "pooled"))

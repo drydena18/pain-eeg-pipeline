@@ -39,7 +39,8 @@
 #
 # V2 (Nov 2026): channel-level rows filtered by channel_units /
 # cluster_names / channel_include (filter_channel_units(), hit_helpers.R),
-# so stored results from a different unit selection are not mixed in.
+# so stored results from a different unit selection are not mixed in. Stops
+# with a clear message unless analysis_levels includes both levels.
 # V1 (Oct 2026).
 # =============================================================================
 
@@ -56,6 +57,10 @@ source("helpers/gamm_combo_core.R")
 source("helpers/hit_helpers.R")
 
 cfg    <- gamm_cfg
+if (!all(c("source", "channel") %in% get_analysis_levels(cfg)))
+  stop("compare_levels.R compares channel units with source ROIs, but gamm_cfg$analysis_levels = ",
+       paste0('"', get_analysis_levels(cfg), '"', collapse = ", "),
+       ". Set analysis_levels = c(\"channel\", \"source\") to run it.", call. = FALSE)
 cc     <- cfg$compare
 decomp <- cfg$metric_decomposition
 set.seed(cfg$holdout_seed)

@@ -1,9 +1,11 @@
 # =============================================================================
 # test_channel_units.R
 # -----------------------------------------------------------------------------
-# Checks gamm_cfg$channel_units / cluster_names (V4, Nov 2026):
+# Checks gamm_cfg$analysis_levels and channel_units / cluster_names (V4, Nov 2026):
 #   apply_channel_units(), select_screen_units() (the screen),
-#   filter_channel_units() and load_hits() (every follow-up script).
+#   filter_channel_units() and load_hits() (every follow-up script),
+#   get_analysis_levels() / check_screen_level(), and the classical-test
+#   level / unit selection.
 # No real data needed: builds a mock gamm_fitted in an in-memory SQLite DB
 # that holds an older all-electrode screen alongside a cluster screen.
 #
@@ -17,11 +19,13 @@ suppressPackageStartupMessages({ library(DBI); library(dplyr); library(tibble) }
 # this test does not need).
 load_funs <- function(file, names) {
   ex <- parse(file)
-  for (e in ex) if (is.call(e) && identical(e[[1]], as.name("<-")) &&
+  for (e in ex) if (is.call(e) && identical(e[[1]], as.name("<-")) && is.name(e[[2]]) &&
                     as.character(e[[2]]) %in% names) eval(e, globalenv())
 }
-load_funs("helpers/db_helpers.R", c("CHANNEL_UNITS", "apply_channel_units", "select_units"))
-load_funs("helpers/gamm_screen.R", c("select_screen_units"))
+load_funs("helpers/db_helpers.R", c("CHANNEL_UNITS", "ANALYSIS_LEVELS", "apply_channel_units", "select_units",
+                                    "get_analysis_levels"))
+load_funs("helpers/gamm_screen.R", c("select_screen_units", "check_screen_level"))
+load_funs("classical_tests.R", c("select_classical_units", "classical_level"))
 load_funs("helpers/hit_helpers.R", c("load_hits", "filter_channel_units"))
 
 n_pass <- 0; n_all <- 0
@@ -96,6 +100,43 @@ f2 <- suppressMessages(filter_channel_units(fits, gamm_cfg, "screened model"))
 check(setequal(f2$group_value, c("S1_contra", "S1", "ACC")), "filter_channel_units on screen rows (compare_levels)")
 check(nrow(filter_channel_units(fits[0, ], gamm_cfg)) == 0, "filter_channel_units on empty table")
 dbDisconnect(con)
+
+# -- analysis_levels: the master switch ----
+check(identical(get_analysis_levels(list()), c("channel", "source")), "analysis_levels missing = both (old configs keep working)")
+check(identical(get_analysis_levels(list(analysis_levels = "Channel")), "channel"), "analysis_levels case-insensitive")
+err <- tryCatch({ get_analysis_levels(list(analysis_levels = "clusters")); FALSE }, error = function(e) TRUE)
+check(err, "analysis_levels typo -> error")
+ch_only <- list(analysis_levels = "channel")
+check(isTRUE(check_screen_level("channel", ch_only)), "screen allowed at a listed level")
+err <- tryCatch({ check_screen_level("source", ch_only); FALSE }, error = function(e) grepl("switched off", conditionMessage(e)))
+check(err, "source screen refused when analysis_levels = channel")
+
+con <- dbConnect(RSQLite::SQLite(), ":memory:")
+dbWriteTable(con, "gamm_fitted", fitted)
+gamm_cfg <- list(analysis_levels = "channel", channel_units = "clusters", cluster_names = clusters)
+h <- suppressMessages(load_hits(con, "v3.1", decomposition = "between_within"))
+check(all(h$level == "channel") && setequal(h$group_value, c("S1_contra", "S1_ipsi")),
+      "load_hits default: clusters only, no source hits (holdout, sex diff, figures)")
+h <- suppressMessages(load_hits(con, "v3.1", decomposition = "between_within", levels = c("source", "channel")))
+check(all(h$level == "channel"), "load_hits explicit levels intersected (robustness$levels)")
+h <- suppressMessages(load_hits(con, "v3.1", decomposition = "between_within", levels = "source"))
+check(nrow(h) == 0, "load_hits(levels = 'source') with channel-only analysis -> no rows, no error")
+gamm_cfg$analysis_levels <- c("channel", "source")
+h <- suppressMessages(load_hits(con, "v3.1", decomposition = "between_within"))
+check(setequal(h$group_value, c("S1_contra", "S1_ipsi", "S1", "ACC")), "both levels: clusters + source ROIs")
+dbDisconnect(con)
+
+# -- classical tests: level and units ----
+cfg_c <- list(analysis_levels = "channel", channel_units = "clusters", cluster_names = clusters,
+              classical = list(level = NULL, units = c("S1_contra", "S1_ipsi"), rois = c("S1", "ACC")))
+check(classical_level(cfg_c) == "channel", "classical level defaults to channel when listed")
+check(identical(select_classical_units(avail, "channel", cfg_c), c("S1_contra", "S1_ipsi")), "classical units = S1 clusters")
+cfg_c$classical$units <- NULL
+check(identical(select_classical_units(avail, "channel", cfg_c), clusters), "classical units NULL = all selected clusters")
+cfg_c$classical$level <- "source"
+err <- tryCatch({ classical_level(cfg_c); FALSE }, error = function(e) TRUE)
+check(err, "classical level not in analysis_levels -> error")
+check(identical(select_classical_units(c("ACC", "S1", "M1"), "source", cfg_c), c("S1", "ACC")), "source level uses classical$rois")
 
 cat(sprintf("\n%d / %d checks passed\n", n_pass, n_all))
 if (n_pass != n_all) quit(status = 1)

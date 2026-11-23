@@ -27,6 +27,9 @@
 #     labels are clusters. Used by the screen (gamm_screen.R) and by
 #     load_hits() (hit_helpers.R), so every follow-up script sees the same
 #     units as the screen.
+#   - get_analysis_levels(): gamm_cfg$analysis_levels ("channel", "source"
+#     or both), the master switch for which levels are screened and followed
+#     up.
 #
 # V2 (Oct 2026):
 #   - One generic loader, load_metrics_wide(con, level, unit, metrics, split),
@@ -157,7 +160,19 @@ select_units <- function(available, include) {
 # and labels that look like clusters (contain "_") but are not listed, which
 # would otherwise be treated as electrodes.
 # =============================================================================
-CHANNEL_UNITS <- c("clusters", "electrodes", "all")
+CHANNEL_UNITS   <- c("clusters", "electrodes", "all")
+ANALYSIS_LEVELS <- c("channel", "source")
+
+# gamm_cfg$analysis_levels, validated: which levels (channel / source) the
+# screen may run at and every follow-up script reads. Missing = both.
+get_analysis_levels <- function(cfg) {
+  lv <- unique(tolower(as.character(cfg$analysis_levels %||% ANALYSIS_LEVELS)))
+  bad <- setdiff(lv, ANALYSIS_LEVELS)
+  if (length(lv) == 0 || length(bad) > 0)
+    stop("gamm_cfg$analysis_levels must be \"channel\", \"source\" or both (got ",
+         paste(cfg$analysis_levels, collapse = ", "), ").", call. = FALSE)
+  lv
+}
 
 apply_channel_units <- function(available, channel_units = "all",
                                 cluster_names = character(0), warn = TRUE) {

@@ -2,13 +2,18 @@
 # power_analysis.R
 # -----------------------------------------------------------------------------
 # Validates whether the 75/25 train/holdout split provides adequate power
-# across ALL significant source-space metric x ROI combinations in
-# gamm_fitted — not just the best-performing one. Sizing the split to the
-# hardest case (smallest effect size among significant hits) ensures you
-# have sufficient power for every metric you intend to report, not just
-# the most favourable one.
+# across ALL significant metric x unit combinations in gamm_fitted - not
+# just the best-performing one. Sizing the split to the hardest case
+# (smallest effect size among significant hits) ensures you have sufficient
+# power for every metric you intend to report, not just the most favourable
+# one.
 #
-# For each significant single-metric source model in gamm_fitted (current
+# Units: the levels in gamm_cfg$analysis_levels and, at channel level, the
+# units selected by channel_units / cluster_names / channel_include (all via
+# load_hits()). With analysis_levels = "channel" and channel_units =
+# "clusters" this is the S1 electrode clusters only.
+#
+# For each significant single-metric model in gamm_fitted (current
 # feature_set and decomposition):
 #
 #   PART 1 — Training-side power (simr::powerCurve)
@@ -24,7 +29,7 @@
 #     RMSE and Pearson r to quantify metric stability at current holdout N.
 #
 #   PART 3 — Binding constraint summary
-#     Reports which metric x ROI is the hardest case (highest total training
+#     Reports which metric x unit is the hardest case (highest total training
 #     N required to reach 0.80/0.90 power), at the most conservative effect
 #     scale, so the split fraction decision is sized to the most
 #     conservative requirement, not the most optimistic one.
@@ -37,16 +42,28 @@
 # verdict uses the smallest scale.
 #
 # Output:
-#   results.duckdb: power_analysis table (one row per metric x ROI x
+#   results.duckdb: power_analysis table (one row per metric x unit x
 #                   group x effect_scale x power_target, plus one
-#                   holdout_bootstrap row per metric x ROI)
-#   <fig_dir>/: one power curve figure per metric x ROI
+#                   holdout_bootstrap row per metric x unit). Columns
+#                   level + roi identify the unit (roi holds the ROI or the
+#                   channel / cluster label; the name is kept for older
+#                   tables).
+#   <fig_dir>/: one power curve figure per metric x unit
 #   Console: full summary + binding constraint callout
 #
 # Run from R/gamm/ working directory:
 #   setwd("R/gamm"); source("../validate/power_analysis.R")
 # (sources gamm_defaults.R and helpers/*.R from there). Requires
-# merge_core.R and source_core.R to have already run successfully.
+# merge_core.R and the screen (channel_core.R and/or source_core.R) to have
+# already run successfully.
+#
+# V4 (Nov 2026):
+#   - Hits come from gamm_cfg$analysis_levels / channel_units instead of
+#     source level only, so the analysis follows the primary (channel /
+#     cluster) analysis. The holdout bootstrap uses each hit's own level
+#     (it was hard-wired to "source").
+#   - power_analysis gains a `level` column (added to an existing table);
+#     rows are replaced per level x metric x unit.
 #
 # V2 (Oct 2026):
 #   - Only gamm_fitted rows of the current feature_set are used.
@@ -102,21 +119,21 @@
 #     renamed to power_analysis_pre_v3, not dropped.
 #
 # Methodological note on script frequency:
-#   Run ONCE after first real results from source_core.R on interim data,
+#   Run ONCE after first real results from the screen on interim data,
 #   make a split-fraction decision, lock the split. Run a second time near
 #   full N as a confirmatory check only. Do NOT run repeatedly and adjust
 #   the split based on results — that is optional stopping and inflates
 #   false positive rates.
 #
-# Reviewer-facing language:
+# Reviewer-facing language (edit N and units to match the run):
 #   "We conducted a simulation-based a priori power analysis (simr, R)
 #   using an internal pilot design (N=39). Power curves were generated for
-#   every significant metric x ROI combination identified in the screening
-#   GAMM (p < 0.05, source-space, single-metric models), separately for
-#   each EEG cap size group (32-, 62-, 64-channel) and pooled, at the
-#   observed effect and at half the observed effect to allow for
-#   selection-inflated estimates. The train/holdout split fraction was
-#   selected to achieve >= 80% power for the most conservative (smallest
+#   every significant metric identified in the screening GAMM (p < 0.05,
+#   single-metric models; contralateral and ipsilateral S1 electrode
+#   clusters), separately for each EEG cap size group (32-, 62-, 64-channel)
+#   and pooled, at the observed effect and at half the observed effect to
+#   allow for selection-inflated estimates. The train/holdout split fraction
+#   was selected to achieve >= 80% power for the most conservative (smallest
 #   effect size) significant metric at the reduced effect, with holdout
 #   stability verified via subject-level bootstrap (500 resamples, 95% CI
 #   width for Pearson r < 0.20)."
@@ -132,10 +149,10 @@ library(ggplot2)
 library(lme4)
 library(simr)
 
-source("/home/UWO/darsenea/Documents/GitHub/pain-alpha-dynamics/R/gamm/gamm_defaults.R")
-source("/home/UWO/darsenea/Documents/GitHub/pain-alpha-dynamics/R/gamm/helpers/db_helpers.R")
-source("/home/UWO/darsenea/Documents/GitHub/pain-alpha-dynamics/R/gamm/helpers/gamm_combo_core.R")
-source("/home/UWO/darsenea/Documents/GitHub/pain-alpha-dynamics/R/gamm/helpers/hit_helpers.R")
+source("gamm_defaults.R")
+source("helpers/db_helpers.R")
+source("helpers/gamm_combo_core.R")
+source("helpers/hit_helpers.R")
 
 # =============================================================================
 # CONFIG
@@ -165,28 +182,31 @@ data_con    <- connect_data_db(gamm_cfg$data_db_path, read_only = TRUE)
 results_con <- init_results_db(gamm_cfg$results_db_path)
 
 # =============================================================================
-# STEP 1: PULL ALL SIGNIFICANT SOURCE MODELS FROM gamm_fitted
+# STEP 1: PULL ALL SIGNIFICANT MODELS FROM gamm_fitted
 # =============================================================================
+scope_txt <- paste0("analysis_levels = ", paste(get_analysis_levels(gamm_cfg), collapse = "+"),
+                    ", channel_units = ", gamm_cfg$channel_units %||% "all")
 message("== Step 1: Identifying significant models (feature_set ",
-        gamm_cfg$feature_set, ", decomposition ", decomp, ") ==")
+        gamm_cfg$feature_set, ", decomposition ", decomp, "; ", scope_txt, ") ==")
 
 all_models <- load_hits(results_con, gamm_cfg$feature_set, p_sig = pa_cfg$p_sig,
-                        levels = "source", decomposition = decomp) %>%
+                        decomposition = decomp) %>%
   filter(rds_ok) %>%
   arrange(desc(p_num))   # weakest evidence first
 
 if (nrow(all_models) == 0) {
   stop(
-    "No significant single-metric source models found in gamm_fitted ",
-    "(p < ", pa_cfg$p_sig, ", level = 'source', feature_set = '",
-    gamm_cfg$feature_set, "', decomposition = '", decomp, "'). Run source_core.R first."
+    "No significant single-metric models found in gamm_fitted ",
+    "(p < ", pa_cfg$p_sig, ", feature_set = '", gamm_cfg$feature_set,
+    "', decomposition = '", decomp, "', ", scope_txt, "). Run the screen first."
   )
 }
 
 message("  Found ", nrow(all_models), " significant model(s) to analyse:")
 for (i in seq_len(nrow(all_models))) {
-  message(sprintf("    [%d] %-28s @ %-14s  p=%.4g",
-                  i, all_models$metrics[i], all_models$group_value[i], all_models$p_num[i]))
+  message(sprintf("    [%d] %-28s @ %-7s %-14s  p=%.4g",
+                  i, all_models$metrics[i], all_models$level[i], all_models$group_value[i],
+                  all_models$p_num[i]))
 }
 
 # =============================================================================
@@ -314,9 +334,10 @@ extract_n_required <- function(curve_df, label, power_targets, share, n_current)
 
 # --- Bootstrap holdout stability ---
 # Held-out rows prepared and predicted exactly as in holdout_replicate.R
-# (prepare_holdout / predict_population in helpers/hit_helpers.R).
-bootstrap_holdout <- function(data_con, roi, this_metric, mod_bam, n_boot, ci_flag) {
-  df_ho <- prepare_holdout(data_con, "source", roi, this_metric, mod_bam, gamm_cfg)
+# (prepare_holdout / predict_population in helpers/hit_helpers.R), at the
+# hit's own level (channel / source).
+bootstrap_holdout <- function(data_con, level, unit, this_metric, mod_bam, n_boot, ci_flag) {
+  df_ho <- prepare_holdout(data_con, level, unit, this_metric, mod_bam, gamm_cfg)
   if (is.null(df_ho) || nrow(df_ho) == 0) return(NULL)
 
   df_ho$predicted <- tryCatch(
@@ -368,11 +389,12 @@ all_power_rows  <- list()
 for (i in seq_len(nrow(all_models))) {
   row         <- all_models[i, ]
   this_metric <- row$metrics
-  this_roi    <- row$group_value
+  this_level  <- row$level
+  this_unit   <- row$group_value
   mod_bam     <- readRDS(row$rds_path)
 
-  message(sprintf("\n[%d/%d] %s @ %s  (p=%.4g)",
-                  i, nrow(all_models), this_metric, this_roi, row$p_num))
+  message(sprintf("\n[%d/%d] %s @ %s %s  (p=%.4g)",
+                  i, nrow(all_models), this_metric, this_level, this_unit, row$p_num))
 
   df_train    <- training_frame(mod_bam)
   metric_vars <- model_metric_vars(mod_bam, this_metric)
@@ -451,10 +473,11 @@ for (i in seq_len(nrow(all_models))) {
     }
   }
 
-  # Tag power rows with metric/ROI identity
+  # Tag power rows with metric / unit identity
   if (!is.null(power_rows) && nrow(power_rows) > 0) {
     power_rows <- power_rows %>%
-      mutate(metric = this_metric, roi = this_roi, fitted_at = as.character(Sys.time()))
+      mutate(metric = this_metric, level = this_level, roi = this_unit,
+             fitted_at = as.character(Sys.time()))
     all_power_rows[[length(all_power_rows) + 1]] <- power_rows
 
     message("  Power summary:")
@@ -471,7 +494,7 @@ for (i in seq_len(nrow(all_models))) {
 
   # --- Holdout stability ---
   message("  Running holdout bootstrap (", pa_cfg$n_boot, " resamples)...")
-  ho <- bootstrap_holdout(data_con, this_roi, this_metric, mod_bam,
+  ho <- bootstrap_holdout(data_con, this_level, this_unit, this_metric, mod_bam,
                           pa_cfg$n_boot, pa_cfg$ci_width_flag)
   if (!is.null(ho)) {
     message(sprintf("  Holdout: %d subjects  r=%.3f [%.3f, %.3f]  RMSE=%.3f [%.3f, %.3f]  stable=%s",
@@ -487,7 +510,8 @@ for (i in seq_len(nrow(all_models))) {
 
     ho_row <- tibble(
       metric        = this_metric,
-      roi           = this_roi,
+      level         = this_level,
+      roi           = this_unit,
       group         = "holdout_bootstrap",
       n_current     = as.integer(ho$n_holdout),
       holdout_r     = ho$r_mean,
@@ -514,7 +538,7 @@ for (i in seq_len(nrow(all_models))) {
       facet_wrap(~ effect, nrow = 1) +
       scale_y_continuous(limits = c(0, 1), labels = scales::percent_format()) +
       labs(
-        title    = paste0("Power curve: ", metric_label(this_metric), ", ", unit_label(this_roi)),
+        title    = paste0("Power curve: ", metric_label(this_metric), ", ", unit_label(this_unit)),
         subtitle = paste0("simr (nsim=", pa_cfg$n_sim, " per point) | lmer approximation of bam() | ",
                           "screen p ", fmt_p(row$p_num), " | power for ", test_var),
         x        = "N subjects in the group (training set)",
@@ -524,9 +548,9 @@ for (i in seq_len(nrow(all_models))) {
       theme_minimal(base_size = 12) +
       theme(legend.position = "bottom", plot.background = element_rect(fill = "white", colour = NA))
 
-    fig_name <- paste0("power_curve_",
+    fig_name <- paste0("power_curve_", this_level, "_",
                        str_replace_all(this_metric, "_z$", ""), "_",
-                       str_replace_all(this_roi, "-", "_"),
+                       str_replace_all(this_unit, "-", "_"),
                        if (decomp == "pooled") "_pooled" else "", ".png")
     fig_path <- file.path(pa_cfg$fig_dir, fig_name)
     ggsave(fig_path, p, width = 4 + 4 * length(pa_cfg$effect_scales), height = 5, dpi = 150)
@@ -580,7 +604,7 @@ if (nrow(all_power_df) > 0) {
   message(sprintf("\nVerdict (80%% power, effect x%.2f):", verdict_scale))
   v80 <- all_power_df %>% filter(power_target == 0.80, effect_scale == verdict_scale)
   if (any(!v80$achieved)) {
-    message("  [ACTION REQUIRED] ", sum(!v80$achieved), " metric x ROI x group curve(s) never reach ",
+    message("  [ACTION REQUIRED] ", sum(!v80$achieved), " metric x unit x group curve(s) never reach ",
             "80% power within the projected N, even with every subject in training.")
   }
   binding_80 <- v80 %>% filter(!is.na(n_required_total)) %>%
@@ -631,6 +655,7 @@ invisible(dbExecute(results_con, "
     fitted_at        VARCHAR,
     feature_set      VARCHAR,
     decomposition    VARCHAR,
+    level            VARCHAR,
     metric           VARCHAR,
     roi              VARCHAR,
     group_label      VARCHAR,
@@ -648,6 +673,12 @@ invisible(dbExecute(results_con, "
     holdout_stable   BOOLEAN
   )
 "))
+# V4: a V3 table (all rows source level) gains the level column.
+if (!"level" %in% dbListFields(results_con, "power_analysis")) {
+  invisible(dbExecute(results_con, "ALTER TABLE power_analysis ADD COLUMN level VARCHAR"))
+  invisible(dbExecute(results_con, "UPDATE power_analysis SET level = 'source' WHERE level IS NULL"))
+  message("  power_analysis: added column `level` (existing rows set to 'source').")
+}
 
 final_rows <- all_rows_df
 if (nrow(final_rows) > 0) {
@@ -658,14 +689,14 @@ if (nrow(final_rows) > 0) {
   for (cn in setdiff(cols, names(final_rows))) final_rows[[cn]] <- NA
   final_rows <- as.data.frame(final_rows[, cols])
 
-  # Upsert all rows for this run (delete this metric x ROI, then insert).
-  # No primary key: holdout_bootstrap rows have power_target = NULL, which a
-  # PRIMARY KEY column cannot hold.
-  keys <- distinct(final_rows, metric, roi)
+  # Upsert all rows for this run (delete this level x metric x unit, then
+  # insert). No primary key: holdout_bootstrap rows have power_target =
+  # NULL, which a PRIMARY KEY column cannot hold.
+  keys <- distinct(final_rows, level, metric, roi)
   for (k in seq_len(nrow(keys))) {
     invisible(dbExecute(results_con,
-      "DELETE FROM power_analysis WHERE feature_set = ? AND decomposition = ? AND metric = ? AND roi = ?",
-      params = list(gamm_cfg$feature_set, decomp, keys$metric[k], keys$roi[k])
+      "DELETE FROM power_analysis WHERE feature_set = ? AND decomposition = ? AND level = ? AND metric = ? AND roi = ?",
+      params = list(gamm_cfg$feature_set, decomp, keys$level[k], keys$metric[k], keys$roi[k])
     ))
   }
   dbAppendTable(results_con, "power_analysis", final_rows)

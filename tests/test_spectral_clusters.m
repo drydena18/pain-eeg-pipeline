@@ -85,6 +85,21 @@ bal = (ps - pf) ./ (ps + pf + 1e-12);
 [pass, nChecks] = tally(pass, nChecks, abs(mean(featC.n2_lat_ms(1,:)) - 250) < 15 && abs(mean(featC.p2_lat_ms(1,:)) - 400) < 20, 'LEP N2/P2 latencies from virtual electrode');
 [pass, nChecks] = tally(pass, nChecks, all(size(auxC.wholePsdTrialMean) == [4, numel(aux.f)]), 'FOOOF input rows = clusters');
 
+% spectral.units = "clusters": only member electrodes are processed
+[members, Csub] = spec_cluster_subset(C, nCh);
+expMembers = unique([iL(:); iR(:); find(strcmp(labs64, 'CZ'))]);
+[pass, nChecks] = tally(pass, nChecks, isequal(members(:), expMembers(:)), sprintf('clusters-only processes %d of %d electrodes', numel(members), nCh));
+tFull = tic; [~, ~, ~, auxF] = spec_compute_subject_features(X, t, fs, F); tFull = toc(tFull);
+tSub  = tic; [~, ~, ~, auxS] = spec_compute_subject_features(X(members, :, :), t, fs, F);
+[fcS, scS] = spec_cluster_features(X(members, :, :), t, fs, F, auxS, Csub); tSub = toc(tSub);
+fn = fieldnames(featC); mx = 0;
+for i = 1:numel(fn), d = abs(fcS.(fn{i}) - featC.(fn{i})); mx = max([mx; d(~isnan(d))]); end
+[pass, nChecks] = tally(pass, nChecks, mx < 1e-10, sprintf('clusters-only == all-electrode run, trial level (max diff %.1e)', mx));
+fn = fieldnames(summC); mx = 0;
+for i = 1:numel(fn), d = abs(scS.(fn{i}) - summC.(fn{i})); mx = max([mx; d(~isnan(d))]); end
+[pass, nChecks] = tally(pass, nChecks, mx < 1e-10, sprintf('clusters-only == all-electrode run, subject level (max diff %.1e)', mx));
+fprintf('      feature extraction: all %d electrodes %.2f s | clusters only %.2f s (%.1fx faster)\n', nCh, tFull, tSub, tFull / tSub);
+
 % Append to channel tables
 [S, L] = spec_append_units(featChan, labs64, featC, names);
 [pass, nChecks] = tally(pass, nChecks, numel(L) == nCh + 4 && strcmp(L{end-3}, 'S1_contra'), 'labels appended');
