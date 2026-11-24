@@ -212,6 +212,10 @@ gamm_cfg <- list(
     holdout_primary      = "subject",
     holdout_alpha        = 0.05,   # BH-adjusted, across all hits
     holdout_min_pct      = 1.0,    # and at least this % lower error than baseline
+    holdout_part         = "within",
+    holdout_min_pct_within = 0,
+    holdout_within_criterion = "refit",
+    holdout_targets      = list(c(level = "channel", unit = "S1_contra", metric = "pre_sf_logratio_z")),
     holdout_n_boot       = 2000L,  # subject-resampling bootstrap draws
     holdout_seed         = 42L,
     holdout_min_subjects = 5L,

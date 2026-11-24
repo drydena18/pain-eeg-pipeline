@@ -62,6 +62,9 @@ merge_cfg <- list(
     # Status per subject is written to alignment_qc either way.
     exclude_misaligned = TRUE,
 
+    bilateral_experiments = c("95ByBP", "29ByBP"),
+    lateral_unit_pattern = "_(contra|ipsi)&",
+
     # -- Rating range ----
     # Subjects with ANY rating outside this range (data-entry errors, e.g. a
     # 34 on a 0-10 scale) get no EEG rows; listed in alignment_qc with
