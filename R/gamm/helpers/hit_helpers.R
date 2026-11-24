@@ -23,6 +23,17 @@
 # All predictions use the model's own frame (mod$model), so they describe
 # exactly the rows the model was fitted on.
 #
+# V5 (Nov 2026): within-person held-out testing.
+#   - load_hits(part = "within") selects hits on the WITHIN part (p_other);
+#     `targets` (as_targets()) restricts to pre-registered level x unit x
+#     metric rows, whatever their screen p. p_test = the p of the tested part.
+#   - refit_baseline(drop = ...) removes only the named model variables
+#     (within-person test: drop x_within_z, keep x_between_z).
+#   - within_person_errors(): subject-centred trial errors (does the model
+#     rank a NEW person's trials correctly, ignoring their overall level?).
+#   - refit_holdout(): the same model refit on the held-out subjects alone
+#     (independent-sample p and direction of one term); term_direction().
+#
 # V4 (Nov 2026): prepare_holdout() fills missing age / sex with the model's
 # own $covariate_fill (training median age, sex "U") when the screen used
 # missing_covariates = "impute".
@@ -56,9 +67,15 @@ library(tibble)
 # (robustness$levels, ...) are intersected with analysis_levels. Its
 # channel_units / cluster_names / channel_include select the channel-level
 # units. cfg = NULL: both levels, every unit.
+# part   : "between" (default; p_value = the primary part) or "within"
+#          (p_other, between/within models only).
+# targets: NULL, or pre-registered tests (see as_targets()); only those rows
+#          are returned, whatever their screen p.
 load_hits <- function(results_con, feature_set, p_sig = 0.05,
                       levels = NULL, decomposition = NULL,
-                      cfg = get0("gamm_cfg", envir = globalenv(), ifnotfound = NULL)) {
+                      cfg = get0("gamm_cfg", envir = globalenv(), ifnotfound = NULL),
+                      part = c("between", "within"), targets = NULL) {
+  part <- match.arg(part)
   scope <- if (is.null(cfg)) ANALYSIS_LEVELS else get_analysis_levels(cfg)
   if (is.null(levels)) {
     levels <- scope
@@ -96,17 +113,28 @@ load_hits <- function(results_con, feature_set, p_sig = 0.05,
            f_num = suppressWarnings(as.numeric(f_stat)),
            p_other_num = suppressWarnings(as.numeric(p_other)),
            edf_other_num = suppressWarnings(as.numeric(edf_other)),
-           f_other_num = suppressWarnings(as.numeric(f_other))) %>%
-    filter(!is.na(p_num), p_num < p_sig) %>%
+           f_other_num = suppressWarnings(as.numeric(f_other)),
+           p_test = if (part == "within") p_other_num else p_num,
+           tested_part = part) %>%
+    { if (is.null(targets)) filter(., !is.na(p_test), p_test < p_sig)
+      else semi_join(., as_targets(targets), by = c("level", "group_value", "metrics")) } %>%
     left_join(base, by = c("level", "group_value", "decomposition")) %>%
     # dAIC is only meaningful when both models saw the same rows
     mutate(delta_aic = if_else(!is.na(n_obs_baseline) & n_obs == n_obs_baseline,
                                aic - aic_baseline, NA_real_),
            rds_ok = !is.na(rds_path) & file.exists(rds_path)) %>%
-    arrange(level, group_value, p_num)
+    arrange(level, group_value, p_test)
+  if (part == "within") out <- out %>% filter(decomposition == "between_within")
 
   # -- Channel-level units: same selection as the screen ----
   out <- filter_channel_units(out, cfg, what = "hit")
+  if (!is.null(targets)) {
+    miss <- anti_join(as_targets(targets), out, by = c("level", "group_value", "metrics"))
+    if (nrow(miss) > 0)
+      warning("Pre-registered target(s) not found in gamm_fitted (or outside channel_units): ",
+              paste(sprintf("%s/%s/%s", miss$level, miss$group_value, miss$metrics), collapse = ", "),
+              call. = FALSE, immediate. = TRUE)
+  }
 
   n_bad <- sum(out$bam_discrete %in% TRUE & out$decomposition == "between_within")
   if (n_bad > 0)
@@ -114,6 +142,23 @@ load_hits <- function(results_con, feature_set, p_sig = 0.05,
             "their between-subject p-values are invalid. Re-run the screen with bam_discrete = FALSE.",
             call. = FALSE, immediate. = TRUE)
   out
+}
+
+# Pre-registered tests -> tibble(level, group_value, metrics).
+# Accepts a data.frame with level / unit (or group_value) / metric (or
+# metrics) columns, or a list of named vectors:
+#   list(c(level = "channel", unit = "S1_contra", metric = "pre_sf_logratio_z"))
+as_targets <- function(targets) {
+  if (is.null(targets) || length(targets) == 0)
+    return(tibble(level = character(), group_value = character(), metrics = character()))
+  if (!is.data.frame(targets))
+    targets <- dplyr::bind_rows(lapply(targets, function(x) as.list(x)))
+  nm <- names(targets)
+  pick <- function(a, b) if (a %in% nm) targets[[a]] else if (b %in% nm) targets[[b]] else
+    stop("holdout_targets needs a '", a, "' column/field")
+  tibble(level = as.character(pick("level", "level")),
+         group_value = as.character(pick("unit", "group_value")),
+         metrics = as.character(pick("metric", "metrics")))
 }
 
 # Keep only the channel-level rows the screen would select under cfg
@@ -440,9 +485,10 @@ prepare_holdout <- function(data_con, level, unit, metric_z, mod, cfg) {
 
 # Refit the screen model without the metric on the SAME training rows, so
 # metric and baseline models differ only by the metric term.
-refit_baseline <- function(mod, metric_z, cfg) {
+# drop: model variables to remove (default: every part of the metric).
+refit_baseline <- function(mod, metric_z, cfg, drop = NULL) {
   labs <- attr(stats::terms(mod$formula), "term.labels")
-  mv <- model_metric_vars(mod, metric_z)
+  mv <- if (is.null(drop)) model_metric_vars(mod, metric_z) else drop
   keep <- labs[!vapply(labs, function(l) any(mv %in% all.vars(str2lang(l))), logical(1))]
   f0 <- stats::reformulate(keep, response = "pain_rating")
   bam(f0, data = mod$model, method = "fREML", select = TRUE,
@@ -461,4 +507,65 @@ boot_subjects <- function(num, den, B = 2000) {
   bs <- rowSums(matrix(num[idx], nrow = B)) / rowSums(matrix(den[idx], nrow = B))
   c(est = est, lo = unname(stats::quantile(bs, 0.025)), hi = unname(stats::quantile(bs, 0.975)),
     p = (1 + sum(bs >= 0)) / (B + 1))
+}
+
+# =============================================================================
+# Within-person held-out testing (V5)
+# =============================================================================
+# Label of the smooth whose (single) variable is `var`; NA if none.
+smooth_label_for <- function(mod, var) {
+  hit <- vapply(mod$smooth, function(s) identical(s$term, var), logical(1))
+  if (any(hit)) mod$smooth[[which(hit)[1]]]$label else NA_character_
+}
+
+# Overall direction of one smooth on the model's own rows: correlation of the
+# variable with its partial effect (+1 = increasing, -1 = decreasing).
+term_direction <- function(mod, var) {
+  lab <- smooth_label_for(mod, var)
+  if (is.na(lab) || !var %in% names(mod$model)) return(NA_real_)
+  f <- predict(mod, type = "terms")[, lab]
+  if (stats::sd(f) == 0) return(0)
+  suppressWarnings(stats::cor(mod$model[[var]], f))
+}
+
+# Subject-centred trial errors. Each held-out subject's own mean is removed
+# from the observed ratings AND from each model's predictions, so only the
+# ORDERING of trials within a person is scored (a new person's overall pain
+# level, which the within part cannot know, cancels). Both models get the
+# same treatment. Returns per-subject sums for boot_subjects().
+within_person_errors <- function(ho) {
+  ho %>%
+    group_by(global_subjid) %>%
+    mutate(yc = pain_rating - mean(pain_rating),
+           mc = pred_metric - mean(pred_metric),
+           bc = pred_base - mean(pred_base)) %>%
+    summarise(num = sum((yc - mc)^2 - (yc - bc)^2), den = n(),
+              sse_m = sum((yc - mc)^2), sse_b = sum((yc - bc)^2), .groups = "drop")
+}
+
+# The screen model refit on the held-out subjects alone: an independent-
+# sample test of one term. Terms whose variables do not vary in the held-out
+# data (one sex level, one cap size, a single experiment, ...) are dropped.
+refit_holdout <- function(mod, ho, var, cfg) {
+  dat <- as.data.frame(ho)
+  for (v in c("global_subjid", "experiment_id", "sex", "cap_size"))
+    if (v %in% names(dat)) dat[[v]] <- factor(dat[[v]])
+  varies <- function(v) {
+    x <- dat[[v]]
+    if (is.null(x)) return(FALSE)
+    if (is.factor(x) || is.character(x)) return(length(unique(x[!is.na(x)])) > 1)
+    isTRUE(stats::sd(x, na.rm = TRUE) > 0)
+  }
+  labs <- attr(stats::terms(mod$formula), "term.labels")
+  keep <- labs[vapply(labs, function(l) all(vapply(all.vars(str2lang(l)), varies, logical(1))),
+                      logical(1))]
+  if (!any(vapply(keep, function(l) var %in% all.vars(str2lang(l)), logical(1))))
+    stop("tested term not estimable in the held-out data")
+  fit <- bam(stats::reformulate(keep, response = "pain_rating"), data = dat, method = "fREML",
+             select = TRUE, discrete = FALSE, nthreads = if (is.null(cfg$nthreads)) 1 else cfg$nthreads)
+  st <- summary(fit)$s.table
+  lab <- smooth_label_for(fit, var)
+  list(p = unname(st[lab, "p-value"]), edf = unname(st[lab, "edf"]),
+       direction = term_direction(fit, var), n_subj = dplyr::n_distinct(dat$global_subjid),
+       dropped = paste(setdiff(labs, keep), collapse = "; "))
 }

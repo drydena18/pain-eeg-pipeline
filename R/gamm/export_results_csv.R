@@ -17,6 +17,8 @@
 # holdout_pct_change (primary level, negative = better), holdout_p_fdr,
 # replicated, rds_path.
 #
+# V2 (Nov 2026): between-part held-out columns read only tested_part =
+# 'between' rows; within_* columns added when holdout_part = 'within' has run.
 # V1 (Nov 2026).
 # =============================================================================
 
@@ -59,13 +61,26 @@ build_results_table <- function(con, cfg) {
   # Held-out replication, if it has been run for this version
   if (dbExistsTable(con, "holdout_replication") &&
       "decomposition" %in% dbListFields(con, "holdout_replication")) {
+    has_part <- "tested_part" %in% dbListFields(con, "holdout_replication")
     pct <- if (identical(cfg$holdout_primary, "trial")) "trial_pct" else "subj_pct"
     ho <- dbGetQuery(con, sprintf("
       SELECT level, group_value AS unit, metric AS metrics, status AS holdout_status,
              %s AS holdout_pct_change, primary_p_fdr AS holdout_p_fdr, replicated
-      FROM holdout_replication WHERE feature_set = ? AND decomposition = ?", pct),
+      FROM holdout_replication WHERE feature_set = ? AND decomposition = ? %s", pct,
+      if (has_part) "AND tested_part = 'between'" else ""),
       params = list(cfg$feature_set, decomp)) %>% as_tibble()
     out <- out %>% left_join(ho, by = c("level", "unit", "metrics"))
+    # Within-person held-out tests (holdout_part = "within"), V2
+    if (has_part) {
+      hw <- dbGetQuery(con, "
+        SELECT level, group_value AS unit, metric AS metrics, status AS within_holdout_status,
+               within_pct AS within_holdout_pct_change, primary_p_fdr AS within_holdout_p_fdr,
+               refit_p AS within_holdout_refit_p, refit_direction AS within_holdout_refit_direction,
+               train_direction AS within_train_direction, replicated AS within_replicated
+        FROM holdout_replication WHERE feature_set = ? AND decomposition = ? AND tested_part = 'within'",
+        params = list(cfg$feature_set, decomp)) %>% as_tibble()
+      if (nrow(hw) > 0) out <- out %>% left_join(hw, by = c("level", "unit", "metrics"))
+    }
   }
 
   out %>% select(-metrics) %>% relocate(rds_path, .after = last_col()) %>%

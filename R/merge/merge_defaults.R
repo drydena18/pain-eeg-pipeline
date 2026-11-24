@@ -4,6 +4,10 @@
 # Configuration for the merge stage (merge_core.R). Run merge_core.R from
 # R/merge/ (see R_README.md, Run Sequence).
 #
+# V3 (Nov 2026): bilateral_experiments / lateral_unit_pattern. 95ByBP and
+#   29ByBP stimulated both hands with no per-trial hand information, so their
+#   lateral cluster rows (S1_contra / S1_ipsi) are dropped at ingest.
+#
 # V2 (Oct 2026) — matches pipeline feature set v3.1 (spectral_core.m 3.1.0,
 # source_core.py 4.1.0):
 #   - experiment_lookup used `<-` inside list(), which made
@@ -21,9 +25,9 @@ merge_cfg <- list(
     data_root = "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis",
 
     # Behavioural CSVs (one per experiment: <experiment_name>_behaviour.csv)
-    behav_dir = "/home/UWO/darsenea/Documents/GitHub/pain-alpha-dynamics/R/data/behaviour",
+    behav_dir = "/home/UWO/darsenea/Documents/GitHub/pain-alpha-dynamics/R/analysis/experiment",
 
-    cap_size_file = "/home/UWO/darsenea/Documents/GitHub/pain-alpha-dynamics/R/data/cap_size.csv",
+    cap_size_file = "/home/UWO/darsenea/Documents/GitHub/pain-alpha-dynamics/R/analysis/behavioural_analysis/cap_size.csv",
 
     # -- Output database ----
     data_db_path = "/cifs/seminowicz/eegPainDatasets/CNED/da-analysis/db/data.duckdb",
@@ -62,8 +66,15 @@ merge_cfg <- list(
     # Status per subject is written to alignment_qc either way.
     exclude_misaligned = TRUE,
 
+    # -- Bilateral-stimulation experiments ----
+    # Both hands stimulated, hand per trial unknown. Spectral labels lateral
+    # clusters for a RIGHT-hand stimulus (S1_contra = left hemisphere), which
+    # is wrong for about half of these trials, so channel-level rows whose
+    # label matches lateral_unit_pattern are dropped at ingest for these
+    # experiments. Single electrodes and non-lateral clusters (SM_furman) are
+    # kept. character(0) = keep everything.
     bilateral_experiments = c("95ByBP", "29ByBP"),
-    lateral_unit_pattern = "_(contra|ipsi)&",
+    lateral_unit_pattern  = "_(contra|ipsi)$",
 
     # -- Rating range ----
     # Subjects with ANY rating outside this range (data-entry errors, e.g. a

@@ -14,6 +14,11 @@
 #   ingest_log                            file -> rows provenance
 #   subject_split                         train / holdout (persistent, never dropped)
 #
+# V3 (Nov 2026): experiments in merge_cfg$bilateral_experiments (both hands
+#   stimulated, hand per trial unknown) lose their lateral cluster rows
+#   (S1_contra / S1_ipsi) inside the same ingest transaction
+#   (helpers/lateral_helpers.R). Single electrodes and SM_furman are kept.
+#
 # V2 (Oct 2026), feature set v3.1:
 #   - Fixes: subejcts_df typo (crash), cap_size never joined (crash),
 #     `x.` / `messsage` typos in the error paths, per-file errors silently
@@ -39,6 +44,7 @@ source("helpers/read_helpers.R")
 source("helpers/db_write_helpers.R")
 source("helpers/alignment_helpers.R")
 source("helpers/split_helpers.R")
+source("helpers/lateral_helpers.R")
 
 # =============================================================================
 # CONNECT + SCHEMA
@@ -176,6 +182,17 @@ ingest_spec <- list(
   source_subject   = list(table = "source_subject_metrics",   key = c(roi = "roi"))
 )
 
+# Bilateral-stimulation experiments: lateral cluster rows are dropped at ingest
+bilateral_exps <- merge_cfg$bilateral_experiments
+if (is.null(bilateral_exps)) bilateral_exps <- character(0)
+lateral_pattern <- merge_cfg$lateral_unit_pattern
+if (is.null(lateral_pattern)) lateral_pattern <- "_(contra|ipsi)$"
+if (length(bilateral_exps) > 0)
+  message("  Bilateral experiments (lateral units '", lateral_pattern, "' dropped): ",
+          paste(bilateral_exps, collapse = ", "))
+n_lateral_dropped <- 0
+lateral_subjects  <- character(0)
+
 qc_rows <- vector("list", nrow(all_subjects))
 n_ingested_rows <- 0
 
@@ -226,8 +243,11 @@ for (i in seq_len(nrow(all_subjects))) {
         log_ingest(con, gsid, kind, p, n, merge_cfg$feature_set)
         n_sub <- n_sub + n
       }
+      n_lat <- 0
+      if (all_subjects$experiment_name[i] %in% bilateral_exps)
+        n_lat <- drop_lateral_units(con, gsid, pattern = lateral_pattern)
       dbCommit(con)
-      n_sub
+      list(n = n_sub - n_lat, n_lat = n_lat)
     }, error = function(e) {
       try(dbRollback(con), silent = TRUE)
       structure(conditionMessage(e), class = "ingest_error")
@@ -238,7 +258,11 @@ for (i in seq_len(nrow(all_subjects))) {
       a$reason <- as.character(res)
     } else {
       ingested <- TRUE
-      n_ingested_rows <- n_ingested_rows + res
+      n_ingested_rows <- n_ingested_rows + res$n
+      if (res$n_lat > 0) {
+        n_lateral_dropped <- n_lateral_dropped + res$n_lat
+        lateral_subjects  <- c(lateral_subjects, gsid)
+      }
     }
   }
 
@@ -268,6 +292,9 @@ if (nrow(problems) > 0) {
   }
 }
 message("  Feature rows written: ", format(n_ingested_rows, big.mark = ","))
+if (length(bilateral_exps) > 0)
+  message("  Lateral cluster rows dropped (bilateral experiments): ",
+          format(n_lateral_dropped, big.mark = ","), " rows from ", length(lateral_subjects), " subject(s)")
 
 has_eeg_files <- nrow(files_df) > 0
 if (has_eeg_files && sum(qc_df$ingested) == 0) {

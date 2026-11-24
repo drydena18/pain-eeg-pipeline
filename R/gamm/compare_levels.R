@@ -90,9 +90,12 @@ if (n_distinct(fits$level) < 2) message("[WARN] Only one level in gamm_fitted ("
 
 ho <- if (dbExistsTable(results_con, "holdout_replication") &&
           "decomposition" %in% dbListFields(results_con, "holdout_replication")) {
-  as_tibble(dbGetQuery(results_con, "
+  # Between-part tests only (holdout_replicate.R V4 also stores within-part rows)
+  part_sql <- if ("tested_part" %in% dbListFields(results_con, "holdout_replication"))
+    " AND tested_part = 'between'" else ""
+  as_tibble(dbGetQuery(results_con, paste0("
     SELECT level, group_value, metric AS metrics, status, subj_pct, trial_pct, replicated
-    FROM holdout_replication WHERE feature_set = ? AND decomposition = ?",
+    FROM holdout_replication WHERE feature_set = ? AND decomposition = ?", part_sql),
     params = list(cfg$feature_set, decomp))) %>%
     filter_channel_units(cfg, what = "held-out result")
 } else tibble(level = character(), group_value = character(), metrics = character(),

@@ -43,6 +43,9 @@
 #   - analysis_levels: master switch for the levels the screen and every
 #     follow-up use (primary = "channel"); classical$level / classical$units
 #     run the classical tests on the clusters.
+#   - holdout_part / holdout_min_pct_within / holdout_targets: held-out
+#     testing of the WITHIN-person part, optionally limited to pre-registered
+#     unit x metric tests (holdout_replicate.R V4).
 # =============================================================================
 
 gamm_cfg <- list(
@@ -212,10 +215,34 @@ gamm_cfg <- list(
     holdout_primary      = "subject",
     holdout_alpha        = 0.05,   # BH-adjusted, across all hits
     holdout_min_pct      = 1.0,    # and at least this % lower error than baseline
-    holdout_part         = "within",
+
+    # Which part of a between/within-split metric is tested:
+    #   "between": hits = screen p of the subject-mean part; criterion =
+    #              holdout_primary (above). The original behaviour.
+    #   "within" : hits = screen p of the trial-deviation part; criterion =
+    #              subject-centred trial error (does the metric order a NEW
+    #              person's trials correctly?) vs a baseline refit WITHOUT the
+    #              within term (between term kept). Also reports the same
+    #              model refit on the held-out subjects alone (p, direction).
+    holdout_part = "between",
+    # Size floor for within-person replication (% lower subject-centred
+    # error). Within effects are small (a 0.2-point effect on a 0-10 scale is
+    # ~0.1-0.5 % of trial error), so 0 = "any improvement that survives BH".
     holdout_min_pct_within = 0,
+    # Within-person criterion:
+    #   "refit"      : within term significant (BH) in the model refit on the
+    #                  held-out subjects alone, same direction as training.
+    #   "prediction" : subject-centred trial error lower than baseline.
+    # Simulated power for a ~0.2-point within effect (53 trials/subject):
+    #   40 held-out subjects : refit ~38 %, prediction ~25 %
+    #   128 held-out subjects: refit ~90 %, prediction ~45 %
+    # Fix before running.
     holdout_within_criterion = "refit",
-    holdout_targets      = list(c(level = "channel", unit = "S1_contra", metric = "pre_sf_logratio_z")),
+    # Pre-registered tests. NULL = every hit of the tested part. Otherwise
+    # ONLY these are tested, whatever their screen p (fix before running):
+    #   holdout_targets = list(c(level = "channel", unit = "S1_contra",
+    #                            metric = "pre_sf_logratio_z")),
+    holdout_targets = NULL,
     holdout_n_boot       = 2000L,  # subject-resampling bootstrap draws
     holdout_seed         = 42L,
     holdout_min_subjects = 5L,
