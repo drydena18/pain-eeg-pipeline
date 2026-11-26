@@ -1,5 +1,5 @@
 # =============================================================================
-# report_within_effect.R                                              V1.0.0
+# report_within_effect.R                                              V1.0.1
 # -----------------------------------------------------------------------------
 # One-shot report of the within-person (trial-to-trial) results, replacing
 # the line-by-line queries: screen summary, within-person hits by window and
@@ -7,6 +7,9 @@
 # unit x metric - positive control, direction, shape, effect size in rating
 # points, a figure of the within-person smooth, and the held-out result if
 # holdout_replicate.R (holdout_part = "within") has run.
+#
+# V1.0.1: the text report is now always written (V1.0.0 left it empty when
+# sourced, because the log was never closed).
 #
 # Run from R/gamm/:
 #   Rscript report_within_effect.R                       # S1_contra / pre_sf_logratio_z
@@ -49,8 +52,13 @@ out_dir <- file.path(cfg$out_dir, "within_report")
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 stem <- sprintf("within_%s_%s", report_unit, sub("_z$", "", report_metric))
 log_file <- file.path(out_dir, paste0(stem, ".txt"))
+while (sink.number() > 0) sink()          # clear a sink left open by an earlier failed run
 sink(log_file, split = TRUE)
-on.exit(sink(), add = TRUE)
+
+# The report body runs inside a function so the log is always closed (and
+# written to disk), even if a step stops with an error. on.exit() at the top
+# level of a sourced script does nothing - V1.0.0 left the file empty.
+report_body <- function() {
 
 num <- function(x) suppressWarnings(as.numeric(x))
 say <- function(...) cat(sprintf(...), "\n", sep = "")
@@ -227,3 +235,6 @@ say("Within-person %s %s: p %s, %s, ~%.2f rating points across trials (5th-95th 
 if (length(pw_pow)) say("Absolute pre-stimulus power in %s: within p %s.", report_unit,
                         paste(sprintf("%.2f", sort(pw_pow)), collapse = ", "))
 say("Fitted on %s subjects.", n_s)
+}
+tryCatch(report_body(), finally = { while (sink.number() > 0) sink() })
+message("Report written: ", log_file)

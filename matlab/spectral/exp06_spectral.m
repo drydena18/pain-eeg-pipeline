@@ -1,5 +1,5 @@
 function exp06_spectral(subjects_override)
-% exp06_SPECTRAL Entrypoint for spectral feature extraction (Experiment 3).
+% exp06_SPECTRAL Entrypoint for spectral feature extraction (Experiment 6).
 % V 1.0.1
 %
 % Call chain:

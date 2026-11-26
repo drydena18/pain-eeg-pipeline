@@ -224,7 +224,7 @@ gamm_cfg <- list(
     #              person's trials correctly?) vs a baseline refit WITHOUT the
     #              within term (between term kept). Also reports the same
     #              model refit on the held-out subjects alone (p, direction).
-    holdout_part = "between",
+    holdout_part = "within",
     # Size floor for within-person replication (% lower subject-centred
     # error). Within effects are small (a 0.2-point effect on a 0-10 scale is
     # ~0.1-0.5 % of trial error), so 0 = "any improvement that survives BH".

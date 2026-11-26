@@ -341,12 +341,12 @@
       "enabled": true,
       "events": [
         {
-          "code": "32",
+          "code": "S 32",
           "condition": "pain",
           "intensity": "low"
         },
         {
-          "code": "33",
+          "code": "S 33",
           "condition": "pain",
           "intensity": "high"
         }

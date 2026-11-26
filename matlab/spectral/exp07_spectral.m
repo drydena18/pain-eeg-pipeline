@@ -1,5 +1,5 @@
-function exp01_spectral(subjects_override)
-% EXP01_SPECTRAL Entrypoint for spectral feature extraction (Experiment 1).
+function exp07_spectral(subjects_override)
+% EXP07_SPECTRAL Entrypoint for spectral feature extraction (Experiment 7).
 % V 1.0.0
 %
 % Call chain:
